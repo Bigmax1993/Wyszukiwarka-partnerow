@@ -8,9 +8,10 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-_ost_kw_path = (
-    Path(__file__).resolve().parent.parent / "Niemcy wschodnie sklepy" / "de_ost_keywords.py"
-)
+_here = Path(__file__).resolve().parent
+_ost_kw_path = _here / "de_ost_keywords.py"
+if not _ost_kw_path.is_file():
+    _ost_kw_path = _here.parent / "Niemcy wschodnie sklepy" / "de_ost_keywords.py"
 _spec = importlib.util.spec_from_file_location("_de_ost_keywords", _ost_kw_path)
 _ost = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
