@@ -46,7 +46,22 @@ def _load_credentials():
     raw = (os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON") or "").strip()
     path = (os.environ.get("GDRIVE_SERVICE_ACCOUNT_FILE") or "").strip()
     if raw:
-        info = json.loads(raw)
+        if raw.startswith("AIza"):
+            raise SystemExit(
+                "GDRIVE_SERVICE_ACCOUNT_JSON wyglada na klucz API (AIza...). "
+                "Wklej caly plik JSON z Konta uslugi -> Klucze (type=service_account)."
+            )
+        try:
+            info = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise SystemExit(
+                f"GDRIVE_SERVICE_ACCOUNT_JSON nie jest poprawnym JSON: {e}. "
+                "W GitHub Secrets wklej cala tresc pobranego pliku .json."
+            ) from e
+        if info.get("type") != "service_account" or not info.get("client_email"):
+            raise SystemExit(
+                "JSON musi byc kluczem konta uslugowego (type=service_account, client_email)."
+            )
         return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
     if path and Path(path).is_file():
         return service_account.Credentials.from_service_account_file(path, scopes=SCOPES)
