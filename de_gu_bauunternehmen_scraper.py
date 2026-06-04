@@ -619,12 +619,17 @@ def _send_de_gu_via_smtp(
     host = _ost_gu_smtp_host()
     port = _ost_gu_smtp_port()
     use_ssl = _ost_gu_smtp_use_ssl()
+    try:
+        smtp_timeout = int((os.environ.get("SMTP_TIMEOUT") or "300").strip())
+    except (TypeError, ValueError):
+        smtp_timeout = 300
+    smtp_timeout = max(60, min(smtp_timeout, 600))
     if use_ssl:
-        with smtplib.SMTP_SSL(host, port, timeout=60) as smtp:
+        with smtplib.SMTP_SSL(host, port, timeout=smtp_timeout) as smtp:
             smtp.login(username, password)
             smtp.send_message(msg, from_addr=username, to_addrs=recipients)
     else:
-        with smtplib.SMTP(host, port, timeout=60) as smtp:
+        with smtplib.SMTP(host, port, timeout=smtp_timeout) as smtp:
             smtp.ehlo()
             smtp.starttls()
             smtp.ehlo()
