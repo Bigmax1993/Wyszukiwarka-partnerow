@@ -23,6 +23,18 @@ Folder może być **pusty** przed pierwszym uruchomieniem scrapera — pliki pow
 | **Lokalnie** | `python scripts/gdrive_upload_wyniki.py --campaign-dir .` |
 | **PC + Drive for desktop** | Zmienna `KANBUD_GOOGLE_DRIVE_GU_PATH` → zapis na bieżąco |
 
+### Upload z GitHub Actions (OAuth — zalecane przy folderze na „Moim dysku”)
+
+Konto usługowe **nie może** zapisywać plików do zwykłego udostępnionego folderu. Jednorazowo na PC:
+
+```powershell
+pip install -r requirements-drive.txt
+# OAuth Desktop client JSON → secrets\gdrive-oauth-client.json
+python scripts/gdrive_oauth_setup.py
+```
+
+Skrypt ustawi secrets `GDRIVE_OAUTH_*` i uruchomi sync. Kolejne runy CI uploadują na Twój folder `1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf`.
+
 ## Konto usługi Google (jednorazowo)
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → projekt → włącz **Google Drive API**.
