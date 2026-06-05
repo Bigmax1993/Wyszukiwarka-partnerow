@@ -143,6 +143,7 @@ from retail_store_builder_filter import (
     portfolio_negates_market_projects,
     is_cache_contact_not_store_builder,
     is_loose_serper_discovery_candidate,
+    is_serper_only_pending_candidate,
     is_media_publisher_contact,
     is_retail_store_operator_contact,
     is_valid_retail_store_builder_contact,
@@ -179,9 +180,11 @@ LOG_FILE = _paths["log_file"]
 # Serper – frazy i słowniki: de_gu_keywords.py (GU Hochbau Einzelhandel)
 MIN_CONTACTS_TARGET = 150
 MIN_VERIFIED_CONTACTS_ROTATION = 20
+DISCOVERY_MIN_PENDING_GHA_FAIL = 5
 SERPER_CANDIDATES_TARGET = 80
 SERPER_DISCOVERY_EMPTY_CACHE_DAYS = 7
 PENDING_WWW_VERIFY_REASON = "pending_www_verify"
+CAMPAIGN_TIMEZONE = os.environ.get("SCRAPER_TIMEZONE", "Europe/Warsaw")
 
 # Geo: bundesweit (Filter PLZ/Distanz aus; center nur für Hilfsfunktionen)
 REGION_CENTER_LAT = 51.1657
@@ -454,6 +457,16 @@ LARGE_COMPANY_PAGE_MARKERS = (
     "tausend mitarbeiter",
     "global player",
     "tochtergesellschaft der",
+)
+_STRONG_LARGE_PAGE_MARKERS = (
+    "konzern",
+    "börsennotiert",
+    "weltweit tätig",
+    "global player",
+    "tochtergesellschaft der",
+    "mitarbeiter weltweit",
+    "über 1.000 mitarbeiter",
+    "über 1000 mitarbeiter",
 )
 SMALL_COMPANY_PAGE_MARKERS = (
     "familienunternehmen",
@@ -1241,7 +1254,7 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
     if row.get("retail_verified"):
         return True
     if (row.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
-        return is_loose_serper_discovery_candidate(
+        return is_serper_only_pending_candidate(
             email=email, url=url, name=name, text=text
         )
     return is_valid_retail_store_builder_contact(
@@ -1922,7 +1935,7 @@ def mark_email_target_sent_today(cache: dict, email_target: str) -> None:
 
 
 def get_remaining_daily_serper_limit(cache: dict):
-    today = date.today().isoformat()
+    today = campaign_today()
     daily = cache.setdefault("serper_daily", {})
     used_today = int(daily.get(today, 0))
     remaining = max(0, SERPER_DAILY_LIMIT - used_today)
@@ -1933,13 +1946,113 @@ def get_remaining_daily_serper_limit(cache: dict):
 
 
 def increase_daily_serper_counter(cache: dict, increment: int = 1) -> None:
-    today = date.today().isoformat()
+    today = campaign_today()
     daily = cache.setdefault("serper_daily", {})
     daily[today] = int(daily.get(today, 0)) + int(increment)
 
 
+def campaign_today() -> str:
+    """Dzień kampanii wg SCRAPER_TIMEZONE (domyślnie Europe/Warsaw)."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo(CAMPAIGN_TIMEZONE)).date().isoformat()
+    except Exception:
+        return date.today().isoformat()
+
+
+def reset_serper_daily_for_discovery(cache: dict) -> None:
+    """Sobota discovery — pełny budżet Serper na dzień kampanii."""
+    today = campaign_today()
+    daily = cache.setdefault("serper_daily", {})
+    old = int(daily.get(today, 0) or 0)
+    daily[today] = 0
+    flags = cache.setdefault("serper_limit_reached", {})
+    flags.pop(today, None)
+    if old:
+        console_step(
+            f"Serper-Limit Reset ({today}): było {old}, start discovery "
+            f"z {SERPER_DAILY_LIMIT} zapytań"
+        )
+
+
+def ensure_serper_budget_or_fail(cache: dict) -> None:
+    _, used_today, remaining = get_remaining_daily_serper_limit(cache)
+    if remaining <= 0:
+        raise RuntimeError(
+            f"Serper Tageslimit erreicht ({campaign_today()}: "
+            f"{used_today}/{SERPER_DAILY_LIMIT}). Discovery abgebrochen."
+        )
+
+
+def new_discovery_funnel() -> dict:
+    return {
+        "serper_queries": 0,
+        "api_zero_terms": 0,
+        "raw_hits": 0,
+        "filtered_serper": 0,
+        "filtered_large_serper": 0,
+        "pending_saved": 0,
+        "rejected_excel": 0,
+    }
+
+
+def log_discovery_funnel(funnel: dict, logger: logging.Logger) -> None:
+    msg = (
+        "[LEjek] serper_queries={serper_queries} | api_zero={api_zero_terms} | "
+        "raw_hits={raw_hits} | filtered_serper={filtered_serper} | "
+        "filtered_large={filtered_large_serper} | pending_saved={pending_saved} | "
+        "rejected_excel={rejected_excel}"
+    ).format(**funnel)
+    console_step(msg)
+    logger.info(msg)
+
+
+def count_pending_for_bundesland(
+    rows: list, cache: dict, land: str
+) -> int:
+    land_norm = (land or "").strip()
+    if not land_norm:
+        return 0
+    seen: set[str] = set()
+    count = 0
+    for row in rows or []:
+        if (row.get("verification_reason") or "").strip() != PENDING_WWW_VERIFY_REASON:
+            continue
+        if row.get("retail_verified"):
+            continue
+        tagged = (row.get("discovery_bundesland") or "").strip()
+        bl = (row.get("bundesland") or extract_bundesland(row) or "").strip()
+        if tagged != land_norm and bl != land_norm:
+            continue
+        url = (row.get("url") or row.get("www") or "").strip()
+        if url and url in seen:
+            continue
+        if url:
+            seen.add(url)
+        count += 1
+    for url, info in (cache.get("contacts") or {}).items():
+        if not isinstance(info, dict):
+            continue
+        if (info.get("verification_reason") or "").strip() != PENDING_WWW_VERIFY_REASON:
+            continue
+        if info.get("retail_verified"):
+            continue
+        tagged = (info.get("discovery_bundesland") or "").strip()
+        if tagged and tagged != land_norm:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        count += 1
+    return count
+
+
 def is_serper_limit_reached_today(cache: dict) -> bool:
-    today, _, remaining = get_remaining_daily_serper_limit(cache)
+    today = campaign_today()
+    daily = cache.setdefault("serper_daily", {})
+    used_today = int(daily.get(today, 0))
+    remaining = max(0, SERPER_DAILY_LIMIT - used_today)
     flags = cache.setdefault("serper_limit_reached", {})
     if flags.get(today):
         return True
@@ -1950,7 +2063,7 @@ def is_serper_limit_reached_today(cache: dict) -> bool:
 
 
 def mark_serper_limit_reached_today(cache: dict) -> None:
-    today = date.today().isoformat()
+    today = campaign_today()
     flags = cache.setdefault("serper_limit_reached", {})
     flags[today] = True
 
@@ -2117,27 +2230,73 @@ def is_likely_large_company(
     blob = " ".join(
         [company_name or "", website or "", page_text or "", serper_blob or ""]
     ).lower()
+    small_hits = sum(1 for m in SMALL_COMPANY_PAGE_MARKERS if m in blob)
+    if small_hits >= 1:
+        return False, ""
     domain = _domain_from_url(website)
     for blocked in LARGE_COMPANY_DOMAINS:
         if blocked in domain or blocked in blob:
             return True, f"grosses_unternehmen_domain:{blocked}"
     for marker in LARGE_COMPANY_NAME_MARKERS:
-        if marker in blob:
-            if marker.strip() in (" se ", " gmbh & co. kg"):
-                if any(
+        if marker not in blob:
+            continue
+        if marker.strip() in ("se", "gmbh & co. kg"):
+            if marker.strip() == "se":
+                if not re.search(r"\bse\b", blob):
+                    continue
+                if not any(
                     x in blob
-                    for x in ("konzern", "weltweit", "börsennotiert", "holding")
+                    for x in ("societas europaea", " societas ", " se,", " se.")
+                ) and not re.search(
+                    r"\b[\w&.-]+\s+se\b", blob
                 ):
-                    return True, f"grosses_unternehmen_name:{marker.strip()}"
-            else:
-                return True, f"grosses_unternehmen_name:{marker}"
+                    continue
+            if not any(
+                x in blob
+                for x in ("konzern", "weltweit", "börsennotiert", "holding", "global player")
+            ):
+                continue
+            return True, f"grosses_unternehmen_name:{marker.strip()}"
+        return True, f"grosses_unternehmen_name:{marker}"
     large_page_hits = sum(1 for m in LARGE_COMPANY_PAGE_MARKERS if m in blob)
-    small_hits = sum(1 for m in SMALL_COMPANY_PAGE_MARKERS if m in blob)
-    if large_page_hits >= 2 and small_hits == 0:
+    strong_hits = sum(1 for m in _STRONG_LARGE_PAGE_MARKERS if m in blob)
+    if large_page_hits >= 2 and strong_hits >= 1:
         return True, "grosses_unternehmen_seite"
-    if large_page_hits >= 3:
+    if strong_hits >= 2:
         return True, "grosses_unternehmen_seite_stark"
     return False, ""
+
+
+def _is_small_ladenbau_specialist(
+    company_name: str,
+    website: str,
+    page_text: str,
+) -> bool:
+    """Mały GU Ladenbau/Filialbau — bez sygnałów koncernu."""
+    name_domain = f"{company_name or ''} {website or ''}".lower()
+    if not any(
+        m in name_domain
+        for m in ("ladenbau", "filialbau", "laden-und", "storebau", "filial-")
+    ):
+        return False
+    if is_likely_large_company(company_name, website, page_text)[0]:
+        return False
+    blob = (page_text or "").lower()
+    build_markers = (
+        "bau",
+        "generalunternehmer",
+        "neubau",
+        "umbau",
+        "gewerbe",
+        "handwerk",
+        "realis",
+        "erricht",
+        "ladenbau",
+        "filialbau",
+        "einzelhandel",
+        "supermarkt",
+    )
+    return any(m in blob for m in build_markers)
 
 
 def detect_retail_chains_in_text(text: str) -> list[str]:
@@ -2328,6 +2487,18 @@ def verify_company_on_website(
             "retail_chains": [],
             "verification_reason": large_reason,
             "verification_method": "rules",
+            "pages_checked": pages_checked,
+            "page_snippet": _truncate_page_snippet(page_text),
+        }
+
+    if _is_small_ladenbau_specialist(company_name, website, page_text):
+        chains = detect_retail_chains_in_text(page_text)
+        return {
+            "verified": True,
+            "is_small_firm": True,
+            "retail_chains": chains,
+            "verification_reason": "kleiner_ladenbau_gu",
+            "verification_method": "bs4_rules",
             "pages_checked": pages_checked,
             "page_snippet": _truncate_page_snippet(page_text),
         }
@@ -3411,6 +3582,8 @@ def discover_places_with_serper(
     *,
     apply_location_filter: bool = True,
     use_places_endpoint: bool = False,
+    serper_only: bool = False,
+    funnel: dict | None = None,
 ) -> list[dict]:
     query = term.strip()
     if not use_places_endpoint:
@@ -3444,6 +3617,8 @@ def discover_places_with_serper(
         label = "Places" if use_places_endpoint else "Discovery"
         console_step(f"Serper {label}: {query}")
         increase_daily_serper_counter(cache, 1)
+        if funnel is not None:
+            funnel["serper_queries"] = funnel.get("serper_queries", 0) + 1
         resp = request_with_retry(
             requests.post,
             api_url,
@@ -3459,32 +3634,49 @@ def discover_places_with_serper(
 
     rows = []
     seen = set()
+    candidate_filter = (
+        is_serper_only_pending_candidate if serper_only else is_loose_serper_discovery_candidate
+    )
     buckets: tuple[str, ...] = ("places",) if use_places_endpoint else ("organic", "places")
     for bucket in buckets:
         for item in data.get(bucket, []) or []:
+            if funnel is not None:
+                funnel["raw_hits"] = funnel.get("raw_hits", 0) + 1
             link = normalize_website(item.get("link") or item.get("website") or "")
             if not link or link in seen:
                 continue
             if not is_germany_de_candidate(
                 link, item.get("title", ""), item.get("snippet", "")
             ):
+                if funnel is not None:
+                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
                 continue
             title = (item.get("title") or "").strip()
             snippet = (item.get("snippet") or item.get("address") or "").strip()
-            if not is_loose_serper_discovery_candidate(
+            if not candidate_filter(
                 url=link, name=title, text=f"{title} {snippet}"
             ):
+                if funnel is not None:
+                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
                 continue
             blob = " ".join([link, title, snippet])
             if apply_location_filter and (
                 ENABLE_REGION_PLZ_FILTER or ENABLE_DISTANCE_FROM_REGION_KM
             ):
                 if not location_within_region_km(blob):
+                    if funnel is not None:
+                        funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
                     continue
             company_clean = clean_company_name(item.get("title", ""), link)
             if is_excluded_kontrahent(name=company_clean, url=link, email="")[0]:
+                if funnel is not None:
+                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
                 continue
             if is_likely_large_company(company_clean, link, blob)[0]:
+                if funnel is not None:
+                    funnel["filtered_large_serper"] = funnel.get(
+                        "filtered_large_serper", 0
+                    ) + 1
                 continue
             seen.add(link)
             rows.append(
@@ -3509,6 +3701,8 @@ def discover_places_with_serper(
     store_serper_discovery_rows(
         cache, query, rows, use_places_endpoint=use_places_endpoint
     )
+    if funnel is not None and not rows:
+        funnel["api_zero_terms"] = funnel.get("api_zero_terms", 0) + 1
     console_step(f"Serper Discovery Ergebnisse '{term}': {len(rows)}")
     return rows
 
@@ -4662,6 +4856,7 @@ def _process_serper_terms(
     serper_only: bool = False,
     discovery_bundesland: str | None = None,
     use_places_endpoint: bool = False,
+    funnel: dict | None = None,
 ) -> tuple[int, bool]:
     """Zwraca (total_new_rows, stop_requested) po przetworzeniu listy fraz Serper."""
     by_url = index_all_rows_by_url(all_rows)
@@ -4677,6 +4872,8 @@ def _process_serper_terms(
             cache,
             apply_location_filter=apply_distance_filter,
             use_places_endpoint=use_places_endpoint,
+            serper_only=serper_only,
+            funnel=funnel,
         )
         added = 0
         refreshed = 0
@@ -4738,6 +4935,8 @@ def _process_serper_terms(
                 console_step(
                     f"Übersprungen (nie do Excela): {r.get('nazwa', '')}"
                 )
+                if funnel is not None:
+                    funnel["rejected_excel"] = funnel.get("rejected_excel", 0) + 1
                 continue
             if (
                 apply_distance_filter
@@ -4772,6 +4971,8 @@ def _process_serper_terms(
                     by_domain[dom] = r
                 added += 1
                 total_new_rows += 1
+                if serper_only and funnel is not None:
+                    funnel["pending_saved"] = funnel.get("pending_saved", 0) + 1
             if max_new_rows is not None and total_new_rows >= max_new_rows:
                 stop_requested = True
             persist_progress(all_rows, cache, logger, reason=f"serper +{total_new_rows}")
@@ -4879,6 +5080,9 @@ def run_scraper(
         print(f"[TARGET] min. kontaktów: {MIN_CONTACTS_TARGET}")
 
     cache = load_cache(logger)
+    if serper_only and discovery_mode != "emails_only" and not rebuild_from_cache:
+        reset_serper_daily_for_discovery(cache)
+        ensure_serper_budget_or_fail(cache)
     if rebuild_from_cache:
         all_rows = build_all_rows_from_cache(cache)
         seen_global = build_discovery_seen_urls(all_rows, cache)
@@ -4907,6 +5111,7 @@ def run_scraper(
         seen_global = build_discovery_seen_urls(all_rows, cache)
     total_new_rows = 0
     stop_requested = False
+    funnel = new_discovery_funnel()
 
     try:
         if discovery_mode == "emails_only":
@@ -4924,6 +5129,7 @@ def run_scraper(
                 rotate_mode=rotate_mode,
                 serper_only=serper_only,
                 discovery_bundesland=rotation_land,
+                funnel=funnel,
             )
             total_new_rows, stop_requested = _process_serper_terms(
                 SERPER_DISCOVERY_TERMS,
@@ -4996,10 +5202,23 @@ def run_scraper(
                     f"(cel {MIN_CONTACTS_TARGET}). Land zostaje do kolejnego tygodnia."
                 )
             elif rotate_mode and serper_only:
-                console_step(
-                    f"Serper-only: {total_new_rows} kandydatów zapisanych jako "
-                    f"{PENDING_WWW_VERIFY_REASON}."
+                pending_land = count_pending_for_bundesland(
+                    all_rows, cache, rotation_land or ""
                 )
+                log_discovery_funnel(funnel, logger)
+                console_step(
+                    f"Serper-only: {total_new_rows} nowych, "
+                    f"{pending_land} pending dla {rotation_land} "
+                    f"({PENDING_WWW_VERIFY_REASON})."
+                )
+                if pending_land < DISCOVERY_MIN_PENDING_GHA_FAIL:
+                    raise RuntimeError(
+                        f"Za mało kandydatów pending ({pending_land} < "
+                        f"{DISCOVERY_MIN_PENDING_GHA_FAIL}) dla {rotation_land}. "
+                        "Sprawdź [LEjek] w logu."
+                    )
+            elif serper_only:
+                log_discovery_funnel(funnel, logger)
 
         if enable_auto_email:
             reenrich_contacts_for_mailing(
@@ -5234,7 +5453,26 @@ def _run_smoke_tests() -> None:
     assert len(SERPER_DISCOVERY_PLACES_TERMS) >= 5
     assert PENDING_WWW_VERIFY_REASON == "pending_www_verify"
     assert MIN_VERIFIED_CONTACTS_ROTATION == 20
+    assert DISCOVERY_MIN_PENDING_GHA_FAIL == 5
     assert MAX_PAGES_FOR_RETAIL_VERIFICATION >= 8
+    from retail_store_builder_filter import is_serper_only_pending_candidate
+
+    assert is_serper_only_pending_candidate(
+        name="HELIA Ladenbau GmbH", url="https://helia-ladenbau.de", text="Ladenbau Ulm"
+    )
+    assert not is_serper_only_pending_candidate(
+        url="https://www.hi-heute.de/supermarkte", name="hi-heute.de", text="Nachrichten"
+    )
+    assert _is_small_ladenbau_specialist(
+        "Müller-Ladenbau GmbH",
+        "https://mueller-ladenbau.de",
+        "Wir realisieren Neubau und Umbau von Gewerbeobjekten.",
+    )
+    assert not is_likely_large_company(
+        "Familienunternehmen Ladenbau",
+        "https://helia-ladenbau.de",
+        "Familienbetrieb regional tätig Bauunternehmen",
+    )[0]
     assert is_unsuitable_inquiry_email("privacy@firma.de")
     best, sc = pick_best_email_for_inquiry(
         ["datenschutz@obi.de", "info@logmar.net"],
@@ -5408,11 +5646,15 @@ if __name__ == "__main__":
             rot_state = load_rotation_state(rot_path)
             current_land = peek_next_bundesland(rot_state)
             verified_n = count_retail_verified_for_bundesland(all_rows, current_land)
+            pending_n = count_pending_for_bundesland(all_rows, cache, current_land)
             rot_msg = (
-                f"[ROTACJA] {verified_n}/{MIN_VERIFIED_CONTACTS_ROTATION} "
-                f"retail_verified dla {current_land}"
+                f"[ROTACJA] verified={verified_n}, pending={pending_n} "
+                f"(cel {MIN_VERIFIED_CONTACTS_ROTATION}) dla {current_land}"
             )
-            if verified_n >= MIN_VERIFIED_CONTACTS_ROTATION:
+            if (
+                verified_n >= MIN_VERIFIED_CONTACTS_ROTATION
+                or pending_n >= MIN_VERIFIED_CONTACTS_ROTATION
+            ):
                 nxt = commit_rotation_after_run(rot_path, rot_state, current_land)
                 rot_msg += f" — przesunięto rotację, następny land: {nxt}"
             else:

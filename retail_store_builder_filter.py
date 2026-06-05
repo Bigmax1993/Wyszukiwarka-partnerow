@@ -486,6 +486,57 @@ def mentions_retail_store_build_activity(text: str) -> bool:
     return mentions_retail_store_build_activity_core(low)
 
 
+_SERPER_ONLY_ROLE_MARKERS = (
+    "ladenbau",
+    "filialbau",
+    "generalunternehmer",
+    "bauunternehmen",
+    "laden-und",
+    "storebau",
+    "filialumbau",
+    "einzelhandelsbau",
+)
+_SERPER_ONLY_TRADE_MARKERS = (
+    "laden",
+    "filial",
+    "einzelhandel",
+    "supermarkt",
+    "gewerbe",
+    "markt",
+    "discounter",
+    "filiale",
+    "handelsimmobilie",
+)
+
+
+def is_serper_only_pending_candidate(
+    *,
+    email: str = "",
+    url: str = "",
+    name: str = "",
+    text: str = "",
+) -> bool:
+    """
+    Sobota (serper-only): luźny filtr na tytule/snippetcie.
+    Bez wymogu Neubau/Umbau — weryfikacja małej firmy w niedzielę.
+    """
+    combined = _blob(name, url, email, text)
+    if is_non_commercial_contact(email=email, url=url, name=name):
+        return False
+    if is_media_publisher_contact(email=email, url=url, name=name, text=combined):
+        return False
+    if is_retail_store_operator_contact(url=url, email=email, text=combined):
+        return False
+    if not is_valid_commercial_company_contact(email=email, url=url, name=name):
+        return False
+    low = combined.lower()
+    if "ladenbau" in low or "filialbau" in low:
+        return True
+    has_role = any(m in low for m in _SERPER_ONLY_ROLE_MARKERS)
+    has_trade = any(m in low for m in _SERPER_ONLY_TRADE_MARKERS)
+    return has_role and has_trade
+
+
 def is_loose_serper_discovery_candidate(
     *,
     email: str = "",
