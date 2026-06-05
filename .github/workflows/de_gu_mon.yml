@@ -1,0 +1,65 @@
+name: GU poniedzialek prep
+
+on:
+  schedule:
+    # 06:00 UTC = 08:00 PL (CEST); zimą (CET) 07:00 PL
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  SCRAPER_TIMEZONE: Europe/Warsaw
+  KANBUD_PROJECT_ROOT: ${{ github.workspace }}/libs
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: |
+          pip install -r requirements.txt
+          python -m playwright install chromium --with-deps
+
+      - name: Resolve artifact run (niedziela)
+        id: artifact_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+            --paginate --jq '.artifacts[] | select(.name=="de-gu-wyniki-thu" and .expired==false) | .workflow_run.id' | head -1)
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Brak artefaktu de-gu-wyniki-thu (uruchom najpierw GU niedziela backfill)"
+            exit 1
+          fi
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Pobieram de-gu-wyniki-thu z run $RUN_ID"
+
+      - name: Download cache from niedziela
+        uses: actions/download-artifact@v4
+        with:
+          name: de-gu-wyniki-thu
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.artifact_run.outputs.run-id }}
+          path: .
+
+      - name: Prep (rebuild Excel, bez wysylki)
+        run: |
+          python de_gu_bauunternehmen_scraper.py --rebuild-from-cache
+
+      - name: Upload Wyniki artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: de-gu-wyniki-mon
+          path: |
+            Wyniki/
+            wyslane/

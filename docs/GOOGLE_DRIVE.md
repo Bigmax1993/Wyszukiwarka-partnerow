@@ -19,7 +19,7 @@ Folder może być **pusty** przed pierwszym uruchomieniem scrapera — pliki pow
 
 | Sposób | Kiedy |
 |--------|--------|
-| **GitHub Actions** | Workflow `Sync wyniki Google Drive` (po piątku / ręcznie) |
+| **GitHub Actions** | Workflow `Sync wyniki Google Drive` (po wtorku / ręcznie) |
 | **Lokalnie** | `python scripts/gdrive_upload_wyniki.py --campaign-dir .` |
 | **PC + Drive for desktop** | Zmienna `KANBUD_GOOGLE_DRIVE_GU_PATH` → zapis na bieżąco |
 
@@ -57,7 +57,7 @@ cd Wyszukiwarka-partnerow
 .\scripts\setup_gdrive_github_secret.ps1
 ```
 
-## Załącznik PPTX (piątek, GitHub Actions)
+## Załącznik PPTX (poniedziałek/wtorek, GitHub Actions)
 
 Prezentacja: [Google Slides MFG](https://docs.google.com/presentation/d/12h0_knRQVTU9sRg9kqh8dxjSiuuKx0TA/edit)
 

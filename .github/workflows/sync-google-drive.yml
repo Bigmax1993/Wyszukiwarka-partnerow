@@ -3,9 +3,9 @@ name: Sync wyniki Google Drive
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 12 * * 5"
+    - cron: "0 12 * * 2"
   workflow_run:
-    workflows: ["GU piatek send"]
+    workflows: ["GU wtorek send"]
     types: [completed]
 
 permissions:
@@ -37,7 +37,7 @@ jobs:
             ARTIFACT="de-gu-wyniki-fri"
             RUN_ID="${{ github.event.workflow_run.id }}"
           else
-            for ARTIFACT in de-gu-wyniki-fri de-gu-wyniki-thu de-gu-wyniki-wed; do
+            for ARTIFACT in de-gu-wyniki-fri de-gu-wyniki-tue de-gu-wyniki-mon de-gu-wyniki-thu de-gu-wyniki-wed; do
               RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
                 --paginate --jq ".artifacts[] | select(.name==\"$ARTIFACT\" and .expired==false) | .workflow_run.id" | head -1)
               if [ -n "$RUN_ID" ]; then

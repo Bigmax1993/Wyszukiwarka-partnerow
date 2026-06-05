@@ -1015,11 +1015,18 @@ def finalize_company_name_for_export(
     email: str = "",
 ) -> str:
     """Nach Gemini: nur Name+Rechtsform, sonst Impressum/Domain-Fallback."""
-    for candidate in (
-        sanitize_special_text(gemini_name or ""),
-        clean_company_name(fallback_raw, website),
-        derive_name_from_website(website),
-    ):
+    website = website_base_url(website) if website else ""
+    candidates: list[str] = []
+    if should_prefer_domain_company_name(fallback_raw, website):
+        candidates.append(derive_name_from_website(website))
+    candidates.extend(
+        (
+            sanitize_special_text(gemini_name or ""),
+            clean_company_name(fallback_raw, website),
+            derive_name_from_website(website),
+        )
+    )
+    for candidate in candidates:
         name = " ".join((candidate or "").split()).strip(" :|–—")
         if not name or is_rejected_company_name_for_export(name, website, email):
             continue
@@ -2364,7 +2371,70 @@ def derive_name_from_website(website: str) -> str:
     return " ".join(part.capitalize() for part in root.split())
 
 
+_RETAIL_CHAIN_IN_NAME = (
+    "edeka",
+    "rewe",
+    "netto",
+    "aldi",
+    "penny",
+    "lidl",
+    "kaufland",
+    "marktkauf",
+)
+_GENERIC_DOMAIN_ROOTS = frozenset(
+    {"google", "facebook", "linkedin", "xing", "wikipedia", "youtube"}
+)
+
+
+def website_base_url(url: str) -> str:
+    """Kanoniczna domena firmy: https://nazwa.de (bez ścieżki /referenz/…)."""
+    domain = _domain_from_url(url)
+    return f"https://{domain}" if domain else normalize_website(url)
+
+
+def _name_aligns_with_domain(name: str, website: str) -> bool:
+    domain_name = derive_name_from_website(website).lower()
+    if not domain_name:
+        return False
+    name_low = (name or "").lower()
+    for token in domain_name.split():
+        if len(token) >= 4 and token in name_low:
+            return True
+    domain_root = (_domain_from_url(website) or "").split(".")[0]
+    compact_name = re.sub(r"[^a-z0-9]", "", name_low)
+    compact_root = re.sub(r"[^a-z0-9]", "", domain_root.lower())
+    return len(compact_root) >= 4 and compact_root in compact_name
+
+
+def should_prefer_domain_company_name(raw_name: str, website: str) -> bool:
+    """True = nazwa z www.firma.de zamiast tytułu artykułu / nazwy marketu."""
+    raw = " ".join((raw_name or "").split()).strip()
+    domain_name = derive_name_from_website(website)
+    if not domain_name:
+        return False
+    domain_root = (_domain_from_url(website) or "").split(".")[0].lower()
+    if domain_root in _GENERIC_DOMAIN_ROOTS:
+        return False
+    if not raw:
+        return True
+    if _name_aligns_with_domain(raw, website):
+        return False
+    low = raw.lower()
+    if low.startswith(("by ", "von ")):
+        return True
+    if "," in raw and any(m in low for m in _RETAIL_CHAIN_IN_NAME):
+        return True
+    if any(m in low for m in _RETAIL_CHAIN_IN_NAME) and not any(
+        m in domain_root for m in _RETAIL_CHAIN_IN_NAME
+    ):
+        return True
+    if not _company_name_has_legal_form(raw) and len(raw.split()) >= 3:
+        return True
+    return False
+
+
 def clean_company_name(name: str, website: str = "") -> str:
+    website = website_base_url(website) if website else ""
     raw = " ".join((name or "").split()).strip(" -|–—")
     text = raw
     if text:
@@ -2375,6 +2445,10 @@ def clean_company_name(name: str, website: str = "") -> str:
             text,
             flags=re.IGNORECASE,
         ).strip()
+    if text and website and should_prefer_domain_company_name(text, website):
+        domain_name = derive_name_from_website(website)
+        if domain_name:
+            return domain_name
     if not text:
         text = derive_name_from_website(website)
     return text or "Unbekanntes Unternehmen"
@@ -2382,7 +2456,9 @@ def clean_company_name(name: str, website: str = "") -> str:
 
 def normalize_row_company_name(row: dict) -> dict:
     raw_name = (row.get("nazwa") or row.get("company_name_raw") or "").strip()
-    website_hint = row.get("official_website") or row.get("www") or row.get("url") or ""
+    website_hint = website_base_url(
+        row.get("official_website") or row.get("www") or row.get("url") or ""
+    )
     clean_name = clean_company_name(raw_name, website_hint)
     row["company_name_raw"] = raw_name
     row["company_name_clean"] = clean_name
@@ -2935,24 +3011,42 @@ def reconcile_contact_sources(row: dict, collected: dict) -> dict:
         row["telefon"] = website_phones[0]
     if not row.get("www") and website:
         row["www"] = website
-    www_company = (collected.get("company_name") or "").strip()
-    if www_company:
-        current = (row.get("company_name_clean") or row.get("nazwa") or "").strip()
-        weak = (
-            not current
-            or current.lower() in ("nieznana firma", "unbekanntes unternehmen")
-            or len(current) < 6
-            or any(x in current.lower() for x in ("http://", "https://", "pdf", "11880"))
-        )
-        if weak or (
-            re.search(_COMPANY_LEGAL_SUFFIX, www_company, re.IGNORECASE)
-            and not re.search(_COMPANY_LEGAL_SUFFIX, current, re.IGNORECASE)
-        ):
-            clean = clean_company_name(www_company, website or row.get("www") or "")
-            row["company_name_clean"] = clean
-            row["nazwa"] = clean
+    website_for_name = website_base_url(
+        website or row.get("official_website") or row.get("www") or ""
+    )
+    if website_for_name:
+        row["www"] = website_for_name
+        row["official_website"] = website_for_name
+    current = (row.get("company_name_clean") or row.get("nazwa") or "").strip()
+    if website_for_name and should_prefer_domain_company_name(current, website_for_name):
+        domain_clean = derive_name_from_website(website_for_name)
+        if domain_clean:
             if not row.get("company_name_raw"):
-                row["company_name_raw"] = current or www_company
+                row["company_name_raw"] = current
+            row["company_name_clean"] = domain_clean
+            row["nazwa"] = domain_clean
+    else:
+        www_company = (collected.get("company_name") or "").strip()
+        if www_company:
+            weak = (
+                not current
+                or current.lower() in ("nieznana firma", "unbekanntes unternehmen")
+                or len(current) < 6
+                or any(
+                    x in current.lower() for x in ("http://", "https://", "pdf", "11880")
+                )
+            )
+            if weak or (
+                re.search(_COMPANY_LEGAL_SUFFIX, www_company, re.IGNORECASE)
+                and not re.search(_COMPANY_LEGAL_SUFFIX, current, re.IGNORECASE)
+            ):
+                clean = clean_company_name(
+                    www_company, website_for_name or website or row.get("www") or ""
+                )
+                row["company_name_clean"] = clean
+                row["nazwa"] = clean
+                if not row.get("company_name_raw"):
+                    row["company_name_raw"] = current or www_company
     return row
 
 
@@ -4448,6 +4542,7 @@ def run_scraper(
     force_resend: bool = False,
     ignore_send_window: bool = False,
     rebuild_from_cache: bool = False,
+    rotate_bundesland: bool = False,
     **_deprecated_kwargs,
 ):
     if jupyter_mode is None:
@@ -4465,6 +4560,26 @@ def run_scraper(
     ensure_ssl_cert_env(logger)
     if discovery_mode != "emails_only" and not get_serper_api_key():
         raise RuntimeError("Brak SERPER_API_KEY – moduł wymaga Serper API.")
+
+    rotation_land: str | None = None
+    rotation_state: dict | None = None
+    rotation_state_path = None
+    if rotate_bundesland and discovery_mode != "emails_only" and not rebuild_from_cache:
+        from gu_bundesland_rotation import (
+            apply_rotation_to_module,
+            commit_rotation_after_run,
+            format_rotation_status,
+        )
+
+        mod = sys.modules[__name__]
+        rotation_land, rotation_state, rotation_state_path = apply_rotation_to_module(
+            mod, OUTPUT_DIR
+        )
+        print(
+            f"[ROTACJA] Discovery dla Bundesland: {rotation_land} "
+            f"(1 land / cykl, min. kontaktów={MIN_CONTACTS_TARGET})"
+        )
+        print(f"[ROTACJA] {format_rotation_status(OUTPUT_DIR)}")
 
     logger.info("=== START DE GU bundesweit – GU Einzelhandelsbau bundesweit (Serper API) ===")
     print(
@@ -4564,6 +4679,22 @@ def run_scraper(
     finally:
         persist_progress(all_rows, cache, logger, reason="Ende Lauf")
 
+    if (
+        rotation_land
+        and rotation_state is not None
+        and rotation_state_path is not None
+        and discovery_mode != "emails_only"
+    ):
+        from gu_bundesland_rotation import commit_rotation_after_run
+
+        nxt = commit_rotation_after_run(
+            rotation_state_path, rotation_state, rotation_land
+        )
+        print(
+            f"[ROTACJA] Zakończono falę {rotation_land}. "
+            f"Następny cykl: {nxt}"
+        )
+
     logger.info(f"Fertig. {len(all_rows)} Zeilen -> {OUTPUT_FILE}")
     print(f"\nFertig. {len(all_rows)} Zeilen -> {OUTPUT_FILE}")
 
@@ -4593,6 +4724,21 @@ def _run_smoke_tests() -> None:
     assert normalize_website("example.de") == "https://example.de"
     assert normalize_website("") == ""
     assert clean_company_name("  GU Ladenbau XY  | Start", "https://bau.de") == "GU Ladenbau XY"
+    assert (
+        clean_company_name(
+            "Edeka Fellenzer, Puderbach",
+            "https://heger-store.de/referenz/edeka-fellenzer-puderbach/",
+        )
+        == "Heger Store"
+    )
+    assert (
+        clean_company_name(
+            "by bioPress Verlag KG",
+            "https://www.biopress.de/de/inhalte/details/10651/",
+        )
+        == "Biopress"
+    )
+    assert website_base_url("https://heger-store.de/referenz/x") == "https://heger-store.de"
     assert extract_bundesland({"bundesland": "Sachsen"}) == "Sachsen"
     assert extract_bundesland({"full_address": "04109 Leipzig"}) == "Sachsen"
     assert haversine_km(REGION_CENTER_LAT, REGION_CENTER_LON, REGION_CENTER_LAT, REGION_CENTER_LON) < 0.01
@@ -4604,7 +4750,7 @@ def _run_smoke_tests() -> None:
     assert "Deutschland" in INQUIRY_REGION_DE
     assert "Aldi" in RETAIL_CHAINS_DE
     assert "MFG Moderner Fliesenboden GmbH" in FIXED_GU_INQUIRY_DE
-    assert "specjalistycznym przedsiębiorstwem posadzkarskim" in FIXED_GU_INQUIRY_DE
+    assert "spezialisiertes Bodenlegerunternehmen" in FIXED_GU_INQUIRY_DE
     assert "Rüttelboden" in FIXED_GU_INQUIRY_DE
     assert "Lebensmitteleinzelhandel" in FIXED_GU_INQUIRY_DE
     assert "ALDI, REWE, NETTO" in FIXED_GU_INQUIRY_DE
@@ -4637,6 +4783,13 @@ def _run_smoke_tests() -> None:
     assert ENABLE_GEMINI_CONTACT_TEXT_CLEANUP is False
     assert ENABLE_REGION_PLZ_FILTER is False
     assert len(SERPER_DISCOVERY_TERMS) >= 20
+    from gu_bundesland_rotation import (
+        BUNDESLAND_ROTATION_ORDER,
+        peek_next_bundesland,
+    )
+
+    assert len(BUNDESLAND_ROTATION_ORDER) == 16
+    assert peek_next_bundesland() in BUNDESLAND_ROTATION_ORDER
     assert is_rejected_company_name_for_export(
         "[PDF] X öffentlich nichtöffentlich", "", "shop@pdf-xchange.de"
     )
@@ -4885,6 +5038,15 @@ if __name__ == "__main__":
                 bl = sys.argv[i + 1].split(",")
                 configure_campaign_bundeslaender(sys.modules[__name__], bl)
                 print(f"[TRYB] Aktywne Bundesländer: {', '.join(CAMPAIGN_ACTIVE_BUNDESLAENDER)}")
+        if "--rotation-status" in sys.argv:
+            from gu_bundesland_rotation import format_rotation_status
+
+            print(format_rotation_status(OUTPUT_DIR))
+            raise SystemExit(0)
+        rotate_bl = "--rotate-bundesland" in sys.argv
+        if rotate_bl:
+            extra_kw["rotate_bundesland"] = True
+            print("[TRYB] Rotacja Bundesland: 1 land na cykl discovery.")
         if rc_path:
             from scraper_run_config import apply_run_config_file, run_scraper_launch_kwargs
 
@@ -4899,5 +5061,9 @@ if __name__ == "__main__":
             launch_kw.update(extra_kw)
             run_scraper(jupyter_mode=is_running_in_jupyter(), **launch_kw)
         else:
-            run_scraper(jupyter_mode=is_running_in_jupyter(), **extra_kw)
+            run_scraper(
+                jupyter_mode=is_running_in_jupyter(),
+                rotate_bundesland=rotate_bl,
+                **extra_kw,
+            )
 

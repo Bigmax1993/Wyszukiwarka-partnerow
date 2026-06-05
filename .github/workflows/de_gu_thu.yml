@@ -1,8 +1,8 @@
-name: GU czwartek backfill
+name: GU niedziela backfill
 
 on:
   schedule:
-    - cron: "30 3 * * 4"
+    - cron: "30 3 * * 0"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
 
-      - name: Resolve artifact run (sroda)
+      - name: Resolve artifact run (sobota)
         id: artifact_run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,13 +36,13 @@ jobs:
           RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
             --paginate --jq '.artifacts[] | select(.name=="de-gu-wyniki-wed" and .expired==false) | .workflow_run.id' | head -1)
           if [ -z "$RUN_ID" ]; then
-            echo "::error::Brak artefaktu de-gu-wyniki-wed (uruchom najpierw GU sroda discovery)"
+            echo "::error::Brak artefaktu de-gu-wyniki-wed (uruchom najpierw GU sobota discovery)"
             exit 1
           fi
           echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "Pobieram de-gu-wyniki-wed z run $RUN_ID"
 
-      - name: Download cache from sroda
+      - name: Download cache from sobota
         uses: actions/download-artifact@v4
         with:
           name: de-gu-wyniki-wed

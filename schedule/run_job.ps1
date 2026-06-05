@@ -1,4 +1,4 @@
-# [Legacy] Jednorazowy discovery — preferuj plan 3 dni: run_sroda / run_czwartek / run_piatek.
+# [Legacy] Jednorazowy discovery — preferuj plan 3 dni: run_sroda / run_czwartek / run_piatek (sob–nd–pon).
 # Uruchomienie kampanii GU o dowolnej godzinie (DISABLE_SEND_WINDOW=1).
 
 $ErrorActionPreference = "Stop"

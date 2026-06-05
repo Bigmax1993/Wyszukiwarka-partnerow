@@ -51,7 +51,16 @@ python de_gu_bauunternehmen_scraper.py --send-emails-only
 python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only
 ```
 
-### Fala po Bundesland
+### Rotacja Bundesland (domyślnie — 1 land / sobota)
+
+```powershell
+python de_gu_bauunternehmen_scraper.py --rotate-bundesland
+python de_gu_bauunternehmen_scraper.py --rotation-status
+```
+
+Kolejność: NRW → Bayern → BW → Niedersachsen → Hessen → Sachsen → … (16 landów, cykl w `gu_bundesland_rotation.py`).
+
+### Ręcznie wiele landów
 
 ```powershell
 python de_gu_bauunternehmen_scraper.py --bundesland NRW,BY,BW
@@ -64,32 +73,34 @@ python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.j
 - E-mail: **300** / dzień, **2** / domena / dzień  
 - Jedna fala (~96 fraz) ≈ **1–3 dni** Serpera
 
-## Harmonogram 3 dni
+## Harmonogram 5 dni
 
-Jeden obrót na **jedną falę** (np. NRW+BY+BW). Szczegóły: [`schedule/PLAN_3_DNI.md`](schedule/PLAN_3_DNI.md)
+Jeden obrót na **jedną falę** (1 Bundesland / tydzień). Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
 
 | Dzień | Godzina (PL) | PC (Task Scheduler) | GitHub Actions |
 |-------|--------------|---------------------|----------------|
-| **Środa** | **20:10** | `schedule/run_sroda.ps1` | `GU sroda discovery` |
-| **Czwartek** | 06:00 | `schedule/run_czwartek.ps1` | `GU czwartek backfill` |
-| **Piątek** | 09:00 | `schedule/run_piatek.ps1` | `GU piatek send` |
+| **Sobota** | **20:10** | `run_sroda.ps1` | `GU sobota discovery` |
+| **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` |
+| **Poniedziałek** | 08:00 | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
+| **Poniedziałek** | **12:00** | `run_poniedzialek_send.ps1` | `GU poniedzialek send` (partia 1) |
+| **Wtorek** | **09:00** | `run_wtorek.ps1` | `GU wtorek send` (partia 2) |
 
 Rejestracja zadań Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "schedule\register_tasks_3_dni.ps1"
+powershell -ExecutionPolicy Bypass -File "schedule\register_tasks_5_dni.ps1"
 ```
 
 ## GitHub Actions
 
-CI, testy, pipeline 3 dni i upload na Drive — [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md)
+CI, testy, pipeline 5 dni i upload na Drive — [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md)
 
 Sekrety (Settings → Secrets → Actions):
 
 | Secret | Wymagany | Opis |
 |--------|----------|------|
 | `SERPER_API_KEY` | tak | API Serper |
-| `MAIL_USER`, `MAIL_PASSWORD` | tak (piątek) | SMTP + IMAP |
+| `MAIL_USER`, `MAIL_PASSWORD` | tak (pon+wt) | SMTP + IMAP |
 | `GDRIVE_SERVICE_ACCOUNT_JSON` | opcjonalny | **Cały** plik JSON konta usługi (nie klucz `AIza...`) |
 
 Setup Drive: `scripts/setup_gdrive_github_secret.ps1` lub [`docs/GOOGLE_DRIVE.md`](docs/GOOGLE_DRIVE.md)

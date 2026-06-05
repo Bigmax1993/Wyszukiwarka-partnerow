@@ -8,7 +8,7 @@ Nie modyfikować przez Gemini ani szablony GUI — wyłącznie ten blok.
 def build_fixed_gu_inquiry_de() -> str:
     return """Sehr geehrte Damen und Herren,
 
-ich wende mich im Namen der Firma MFG Moderner Fliesenboden GmbH an Sie. Wir są specjalistycznym przedsiębiorstwem posadzkarskim, którego głównym profilem działalności jest realizacja obiektów handlowych.
+ich wende mich im Namen der Firma MFG Moderner Fliesenboden GmbH an Sie. Wir sind ein spezialisiertes Bodenlegerunternehmen, dessen Schwerpunkt die Realisierung von Einzelhandelsobjekten liegt.
 
 Unser Fokus liegt ausschließlich auf dem professionellen und termingerechten Ausbau von Fußböden (Estrich- und Rüttelboden-/Fliesenarbeiten) für namhafte Handelsketten wie ALDI, REWE, NETTO, PENNY und EDEKA. Durch unsere Spezialisierung sind uns die strengen technischen Vorgaben, Qualitätsstandards und die extremen zeitlichen Anforderungen bei der Errichtung oder Modernisierung von Lebensmittelmärkten bestens vertraut.
 

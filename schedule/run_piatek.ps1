@@ -1,14 +1,5 @@
-# PIĄTEK — dzień 3: wysyłka maili (okno 8–18 wg Europe/Berlin).
-# Task Scheduler: piątek 09:00
-# Przed produkcją: w run_config wyłącz dry_run_email i włącz enable_auto_email (lub użyj --send-emails-only).
+# [Legacy] Przekierowanie na run_poniedzialek_send.ps1 (pon 12:00, partia 1).
 
 . "$PSScriptRoot\_common.ps1"
-Enter-GuCampaign
-
-$env:SCRAPER_TIMEZONE = "Europe/Berlin"
-Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
-Remove-Item Env:SEND_WINDOW_START_HOUR -ErrorAction SilentlyContinue
-Remove-Item Env:SEND_WINDOW_END_HOUR -ErrorAction SilentlyContinue
-
-Write-Host "[PIATEK] Wysylka maili (--send-emails-only, okno 8-18 Berlin)..."
-python de_gu_bauunternehmen_scraper.py --send-emails-only @args
+Write-Warning "run_piatek.ps1 jest legacy — uzyj run_poniedzialek_send.ps1 (pon 12) i run_wtorek.ps1 (wt 9)."
+& (Join-Path $PSScriptRoot "run_poniedzialek_send.ps1") @args

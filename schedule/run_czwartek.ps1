@@ -1,6 +1,6 @@
 # CZWARTEK — dzień 2: backfill e-maili + przebudowa Excela (bez Serpera, bez wysyłki).
-# Task Scheduler: czwartek 06:00
-# Jeśli środa nie skończyła discovery — najpierw dokończ: run_sroda.ps1, potem ten skrypt.
+# Task Scheduler: niedziela 06:00
+# Jeśli sobota nie skończyła discovery — najpierw dokończ: run_sroda.ps1, potem ten skrypt.
 
 . "$PSScriptRoot\_common.ps1"
 Enter-GuCampaign
