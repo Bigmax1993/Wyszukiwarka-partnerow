@@ -50,8 +50,9 @@ jobs:
           run-id: ${{ steps.artifact_run.outputs.run-id }}
           path: .
 
-      - name: Backfill and rebuild Excel
+      - name: Verify pending www + backfill and rebuild Excel
         run: |
+          python de_gu_bauunternehmen_scraper.py --verify-pending-contacts
           python de_gu_bauunternehmen_scraper.py --backfill-emails-from-cache
           python de_gu_bauunternehmen_scraper.py --rebuild-from-cache
 

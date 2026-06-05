@@ -82,7 +82,7 @@ def commit_rotation_after_run(
     *,
     run_date: date | None = None,
 ) -> str:
-    """Po udanym discovery przesuwa rotację na następny land."""
+    """Po udanym discovery przesuwa rotację na następny land (≥20 retail_verified)."""
     idx = int(state.get("next_index", 0)) % len(BUNDESLAND_ROTATION_ORDER)
     if BUNDESLAND_ROTATION_ORDER[idx] != land:
         land = BUNDESLAND_ROTATION_ORDER[idx]

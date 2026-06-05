@@ -8,6 +8,9 @@ Enter-GuCampaign
 $env:SCRAPER_TIMEZONE = "Europe/Warsaw"
 Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
 
+Write-Host "[CZWARTEK] Weryfikacja www (pending z soboty)..."
+python de_gu_bauunternehmen_scraper.py --verify-pending-contacts
+
 Write-Host "[CZWARTEK] Backfill e-maili z cache..."
 python de_gu_bauunternehmen_scraper.py --backfill-emails-from-cache
 

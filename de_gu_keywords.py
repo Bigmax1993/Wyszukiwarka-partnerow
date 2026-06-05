@@ -287,6 +287,52 @@ def build_discovery_terms(active: list[str] | None = None, *, max_terms: int = 9
     return terms
 
 
+def build_landkreis_discovery_terms(active: list[str] | None = None) -> list[str]:
+    """Frazy z Landkreis / Kreis — czwarta fala discovery."""
+    lands = resolve_active_bundeslaender(active)
+    seen: set[str] = set()
+    terms: list[str] = []
+    for land in lands:
+        short = BUNDESLAND_CONFIG[land]["short"]
+        for city in BUNDESLAND_CONFIG[land]["cities"][:6]:
+            for raw in (
+                f"Generalunternehmer Filialbau Landkreis {city}",
+                f"Ladenbau {city} Kreis {short}",
+                f"Bauunternehmen Gewerbebau {city} Landkreis",
+            ):
+                _append_unique_term(terms, seen, raw, max_terms=10_000)
+        _append_unique_term(
+            terms,
+            seen,
+            f"Bauunternehmen Filialbau {land} Landkreis",
+            max_terms=10_000,
+        )
+    return terms
+
+
+def build_places_discovery_terms(active: list[str] | None = None) -> list[str]:
+    """Krótkie frazy pod endpoint /places Serper (bez suffixu regionu)."""
+    lands = resolve_active_bundeslaender(active)
+    seen: set[str] = set()
+    terms: list[str] = []
+    for land in lands:
+        for city in BUNDESLAND_CONFIG[land]["cities"][:8]:
+            for raw in (
+                f"Ladenbau {city}",
+                f"Filialbau {city}",
+                f"Bauunternehmen {city}",
+                f"Generalunternehmer {city}",
+            ):
+                _append_unique_term(terms, seen, raw, max_terms=10_000)
+        _append_unique_term(
+            terms,
+            seen,
+            f"Generalunternehmer Filialbau {land}",
+            max_terms=10_000,
+        )
+    return terms
+
+
 def build_broad_discovery_terms(active: list[str] | None = None) -> list[str]:
     """Bardzo krótkie frazy — trzecia fala gdy primary + fallback dają za mało firm."""
     lands = resolve_active_bundeslaender(active)
@@ -368,6 +414,8 @@ def configure_campaign_bundeslaender(
     )
     module.SERPER_DISCOVERY_FALLBACK_TERMS = build_fallback_terms(active)
     module.SERPER_DISCOVERY_BROAD_TERMS = build_broad_discovery_terms(active)
+    module.SERPER_DISCOVERY_LANDKREIS_TERMS = build_landkreis_discovery_terms(active)
+    module.SERPER_DISCOVERY_PLACES_TERMS = build_places_discovery_terms(active)
     module.SERPER_DISCOVERY_REGION_SUFFIX = build_region_suffix(active)
     return active
 
@@ -376,4 +424,6 @@ def configure_campaign_bundeslaender(
 SERPER_DISCOVERY_TERMS = build_discovery_terms()
 SERPER_DISCOVERY_FALLBACK_TERMS = build_fallback_terms()
 SERPER_DISCOVERY_BROAD_TERMS = build_broad_discovery_terms()
+SERPER_DISCOVERY_LANDKREIS_TERMS = build_landkreis_discovery_terms()
+SERPER_DISCOVERY_PLACES_TERMS = build_places_discovery_terms()
 SERPER_DISCOVERY_REGION_SUFFIX = build_region_suffix()

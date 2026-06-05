@@ -58,6 +58,8 @@ from de_gu_keywords import (
     RETAIL_REFERENCE_KEYWORDS,
     RETAIL_URL_PRIORITY_KEYWORDS,
     SERPER_DISCOVERY_BROAD_TERMS,
+    SERPER_DISCOVERY_LANDKREIS_TERMS,
+    SERPER_DISCOVERY_PLACES_TERMS,
     SERPER_DISCOVERY_FALLBACK_TERMS,
     SERPER_DISCOVERY_REGION_SUFFIX,
     SERPER_DISCOVERY_TERMS,
@@ -96,7 +98,7 @@ import random
 import re
 import subprocess
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import unquote, urljoin, urlparse
 
 from polish_text import (
@@ -176,6 +178,10 @@ LOG_FILE = _paths["log_file"]
 
 # Serper – frazy i słowniki: de_gu_keywords.py (GU Hochbau Einzelhandel)
 MIN_CONTACTS_TARGET = 150
+MIN_VERIFIED_CONTACTS_ROTATION = 20
+SERPER_CANDIDATES_TARGET = 80
+SERPER_DISCOVERY_EMPTY_CACHE_DAYS = 7
+PENDING_WWW_VERIFY_REASON = "pending_www_verify"
 
 # Geo: bundesweit (Filter PLZ/Distanz aus; center nur für Hilfsfunktionen)
 REGION_CENTER_LAT = 51.1657
@@ -195,6 +201,7 @@ EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL = True
 STEP_LOG_WITH_TIMESTAMP = True
 
 SERPER_API_URL = "https://google.serper.dev/search"
+SERPER_PLACES_API_URL = "https://google.serper.dev/places"
 SERPER_COUNTRY = "de"
 SERPER_LANGUAGE = "de"
 SERPER_TIMEOUT = 20
@@ -392,7 +399,8 @@ REQUIRE_WEBSITE_RETAIL_VERIFICATION = True
 REQUIRE_WEBSITE_REFERENCES_OR_PORTFOLIO = False
 REQUIRE_MARKET_PROJECTS_IN_PORTFOLIO = False
 ENABLE_GEMINI_RETAIL_VERIFICATION = False
-MAX_PAGES_FOR_RETAIL_VERIFICATION = 4
+MAX_PAGES_FOR_RETAIL_VERIFICATION = 8
+ENABLE_SERPER_PLACES_ENDPOINT = True
 LARGE_COMPANY_DOMAINS = frozenset(
     {
         "strabag.com",
@@ -1232,6 +1240,10 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
         return False
     if row.get("retail_verified"):
         return True
+    if (row.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
+        return is_loose_serper_discovery_candidate(
+            email=email, url=url, name=name, text=text
+        )
     return is_valid_retail_store_builder_contact(
         email="", url=url, name=name, text=text
     )
@@ -1941,6 +1953,76 @@ def mark_serper_limit_reached_today(cache: dict) -> None:
     today = date.today().isoformat()
     flags = cache.setdefault("serper_limit_reached", {})
     flags[today] = True
+
+
+def _serper_discovery_cache_key(query: str, *, use_places_endpoint: bool) -> str:
+    prefix = "places:" if use_places_endpoint else "search:"
+    return f"{prefix}{query}"
+
+
+def _parse_serper_discovery_cache_entry(entry) -> tuple[list[dict] | None, bool]:
+    """Zwraca (wiersze lub None, czy_traktować_jako_cache_miss)."""
+    if entry is None:
+        return None, True
+    if isinstance(entry, list):
+        return entry, False
+    if not isinstance(entry, dict):
+        return None, True
+    if entry.get("empty"):
+        ts = (entry.get("at") or "").strip()
+        if ts:
+            try:
+                age = datetime.now() - datetime.fromisoformat(ts)
+                if age < timedelta(days=SERPER_DISCOVERY_EMPTY_CACHE_DAYS):
+                    return [], False
+            except ValueError:
+                pass
+        return None, True
+    rows = entry.get("rows")
+    if isinstance(rows, list):
+        return rows, False
+    return None, True
+
+
+def get_cached_serper_discovery_rows(
+    cache: dict, query: str, *, use_places_endpoint: bool = False
+) -> list[dict] | None:
+    sd = cache.setdefault("serper_discovery", {})
+    key = _serper_discovery_cache_key(query, use_places_endpoint=use_places_endpoint)
+    rows, miss = _parse_serper_discovery_cache_entry(sd.get(key))
+    if miss:
+        return None
+    return rows
+
+
+def store_serper_discovery_rows(
+    cache: dict,
+    query: str,
+    rows: list[dict],
+    *,
+    use_places_endpoint: bool = False,
+) -> None:
+    sd = cache.setdefault("serper_discovery", {})
+    key = _serper_discovery_cache_key(query, use_places_endpoint=use_places_endpoint)
+    if rows:
+        sd[key] = {"rows": rows, "at": datetime.now().isoformat()}
+    else:
+        sd[key] = {"empty": True, "at": datetime.now().isoformat(), "rows": []}
+
+
+def count_retail_verified_for_bundesland(rows: list, land: str) -> int:
+    land_norm = (land or "").strip()
+    if not land_norm:
+        return 0
+    count = 0
+    for row in rows or []:
+        if not row.get("retail_verified"):
+            continue
+        tagged = (row.get("discovery_bundesland") or "").strip()
+        bl = (row.get("bundesland") or extract_bundesland(row) or "").strip()
+        if tagged == land_norm or bl == land_norm:
+            count += 1
+    return count
 
 
 def request_with_retry(
@@ -3328,10 +3410,20 @@ def discover_places_with_serper(
     cache: dict,
     *,
     apply_location_filter: bool = True,
+    use_places_endpoint: bool = False,
 ) -> list[dict]:
-    query = f"{term} {SERPER_DISCOVERY_REGION_SUFFIX}".strip()
+    query = term.strip()
+    if not use_places_endpoint:
+        query = f"{term} {SERPER_DISCOVERY_REGION_SUFFIX}".strip()
     if not query:
         return []
+    cached_rows = get_cached_serper_discovery_rows(
+        cache, query, use_places_endpoint=use_places_endpoint
+    )
+    if cached_rows is not None:
+        console_step(f"Serper Discovery Cache: {query} ({len(cached_rows)})")
+        return [dict(r) for r in cached_rows]
+
     api_key = get_serper_api_key()
     if not api_key:
         console_step("Serper Discovery: kein API-Key")
@@ -3339,19 +3431,22 @@ def discover_places_with_serper(
     if is_serper_limit_reached_today(cache):
         console_step("Serper Discovery: Tageslimit")
         return []
+    api_url = SERPER_PLACES_API_URL if use_places_endpoint else SERPER_API_URL
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
     payload = {
         "q": query,
         "gl": SERPER_COUNTRY,
         "hl": SERPER_LANGUAGE,
-        "num": SERPER_DISCOVERY_RESULTS_PER_TERM,
     }
+    if not use_places_endpoint:
+        payload["num"] = SERPER_DISCOVERY_RESULTS_PER_TERM
     try:
-        console_step(f"Serper Discovery: {query}")
+        label = "Places" if use_places_endpoint else "Discovery"
+        console_step(f"Serper {label}: {query}")
         increase_daily_serper_counter(cache, 1)
         resp = request_with_retry(
             requests.post,
-            SERPER_API_URL,
+            api_url,
             logger,
             headers=headers,
             json=payload,
@@ -3364,7 +3459,8 @@ def discover_places_with_serper(
 
     rows = []
     seen = set()
-    for bucket in ("organic", "places"):
+    buckets: tuple[str, ...] = ("places",) if use_places_endpoint else ("organic", "places")
+    for bucket in buckets:
         for item in data.get(bucket, []) or []:
             link = normalize_website(item.get("link") or item.get("website") or "")
             if not link or link in seen:
@@ -3374,7 +3470,7 @@ def discover_places_with_serper(
             ):
                 continue
             title = (item.get("title") or "").strip()
-            snippet = (item.get("snippet") or "").strip()
+            snippet = (item.get("snippet") or item.get("address") or "").strip()
             if not is_loose_serper_discovery_candidate(
                 url=link, name=title, text=f"{title} {snippet}"
             ):
@@ -3400,16 +3496,19 @@ def discover_places_with_serper(
                     "ocena": "",
                     "liczba_opinii": "",
                     "kategoria": term,
-                    "adres": "",
-                    "full_address": "",
+                    "adres": snippet,
+                    "full_address": snippet,
                     "status": "",
-                    "telefon": "",
+                    "telefon": item.get("phoneNumber") or item.get("phone") or "",
                     "www": link,
                     "url": link,
                     "lat_center": "",
                     "lon_center": "",
                 }
             )
+    store_serper_discovery_rows(
+        cache, query, rows, use_places_endpoint=use_places_endpoint
+    )
     console_step(f"Serper Discovery Ergebnisse '{term}': {len(rows)}")
     return rows
 
@@ -3785,6 +3884,81 @@ def backfill_emails_in_cache(cache: dict, logger: logging.Logger) -> dict:
         stats["cleaned_found"],
         stats["unchanged"],
         stats["still_empty"],
+    )
+    return stats
+
+
+def verify_pending_contacts(
+    cache: dict,
+    logger: logging.Logger,
+    *,
+    all_rows: list | None = None,
+) -> dict:
+    """WWW-verify rekordów ze statusem pending_www_verify (niedziela po serper-only)."""
+    contacts = cache.setdefault("contacts", {})
+    pending_urls: list[str] = []
+    seen_pending: set[str] = set()
+    for url, info in contacts.items():
+        if not isinstance(info, dict):
+            continue
+        reason = (info.get("verification_reason") or "").strip()
+        if reason == PENDING_WWW_VERIFY_REASON:
+            if url not in seen_pending:
+                pending_urls.append(url)
+                seen_pending.add(url)
+    if all_rows:
+        for row in all_rows:
+            url = (row.get("url") or row.get("www") or "").strip()
+            if not url or url in seen_pending:
+                continue
+            reason = (row.get("verification_reason") or "").strip()
+            if reason == PENDING_WWW_VERIFY_REASON and not row.get("retail_verified"):
+                pending_urls.append(url)
+                seen_pending.add(url)
+
+    stats = {
+        "pending": len(pending_urls),
+        "verified": 0,
+        "rejected": 0,
+        "errors": 0,
+    }
+    if not pending_urls:
+        console_step("Verify pending: brak rekordów do weryfikacji www")
+        return stats
+
+    console_step(f"Verify pending: {len(pending_urls)} URL do weryfikacji www")
+    rows_by_url = index_all_rows_by_url(all_rows or [])
+    for url in pending_urls:
+        row = rows_by_url.get(url)
+        if not row:
+            info = contacts.get(url) or {}
+            row = {
+                "url": url,
+                "www": url,
+                "nazwa": info.get("company_name") or info.get("company_name_clean") or "",
+                "company_name_clean": info.get("company_name_clean") or "",
+                "discovery_bundesland": info.get("discovery_bundesland") or "",
+            }
+            if all_rows is not None:
+                all_rows.append(row)
+                rows_by_url[url] = row
+        try:
+            updated = enrich_row_with_contacts(row, cache, logger, force_refresh=True)
+            rows_by_url[url] = updated
+            if updated.get("retail_verified"):
+                stats["verified"] += 1
+            else:
+                stats["rejected"] += 1
+        except Exception as exc:
+            stats["errors"] += 1
+            logger.warning("Verify pending błąd %s: %s", url, exc)
+
+    logger.info(
+        "Verify pending: oczekujących=%s, zweryfikowano=%s, odrzucono=%s, błędy=%s",
+        stats["pending"],
+        stats["verified"],
+        stats["rejected"],
+        stats["errors"],
     )
     return stats
 
@@ -4485,16 +4659,24 @@ def _process_serper_terms(
     total_new_rows: int,
     stop_requested: bool,
     rotate_mode: bool = False,
+    serper_only: bool = False,
+    discovery_bundesland: str | None = None,
+    use_places_endpoint: bool = False,
 ) -> tuple[int, bool]:
     """Zwraca (total_new_rows, stop_requested) po przetworzeniu listy fraz Serper."""
     by_url = index_all_rows_by_url(all_rows)
     by_domain = index_all_rows_by_domain(all_rows)
+    contacts_cache = cache.setdefault("contacts", {})
     for term in terms:
         if stop_requested:
             break
         console_step(f"Serper ({label}): {term}")
         rows = discover_places_with_serper(
-            term, logger, cache, apply_location_filter=apply_distance_filter
+            term,
+            logger,
+            cache,
+            apply_location_filter=apply_distance_filter,
+            use_places_endpoint=use_places_endpoint,
         )
         added = 0
         refreshed = 0
@@ -4507,12 +4689,25 @@ def _process_serper_terms(
             url = base_url or raw_url
             r["url"] = url
             r["www"] = url
+            if discovery_bundesland:
+                r["discovery_bundesland"] = discovery_bundesland
+                if not (r.get("bundesland") or "").strip():
+                    r["bundesland"] = discovery_bundesland
             existing = by_url.get(url) or (by_domain.get(dom) if dom else None)
             if existing and not DISCOVERY_IGNORE_CONTACT_CACHE and url in seen_global:
                 continue
-            if AUTO_ENRICH_CONTACTS:
+            if serper_only:
+                r["retail_verified"] = False
+                r["verification_reason"] = PENDING_WWW_VERIFY_REASON
+                r["email_target"] = ""
+                r["email_status"] = "pending_www_verify"
+            elif AUTO_ENRICH_CONTACTS:
                 r = enrich_row_with_contacts(r, cache, logger)
-            if REQUIRE_WEBSITE_RETAIL_VERIFICATION and not r.get("retail_verified"):
+            if (
+                not serper_only
+                and REQUIRE_WEBSITE_RETAIL_VERIFICATION
+                and not r.get("retail_verified")
+            ):
                 reason = (r.get("verification_reason") or "").strip()
                 console_step(
                     f"Übersprungen (www: {reason or 'kein GU/Filialbau/Referenzen'}): "
@@ -4520,7 +4715,10 @@ def _process_serper_terms(
                 )
                 continue
             if not (r.get("email_target") or "").strip():
-                if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL or not r.get("retail_verified"):
+                allow_without_email = EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL and (
+                    r.get("retail_verified") or serper_only
+                )
+                if not allow_without_email:
                     console_step(
                         f"Übersprungen (brak e-mail na www): {r.get('nazwa', '')}"
                     )
@@ -4549,7 +4747,18 @@ def _process_serper_terms(
                 continue
             if enable_auto_email and r.get("email_target"):
                 r["email_status"] = "queued"
-                cache.setdefault("contacts", {}).setdefault(url, {})["email_status"] = "queued"
+                contacts_cache.setdefault(url, {})["email_status"] = "queued"
+            if serper_only:
+                contacts_cache[url] = {
+                    "company_name": r.get("nazwa") or "",
+                    "company_name_clean": r.get("company_name_clean") or r.get("nazwa") or "",
+                    "official_website": url,
+                    "retail_verified": False,
+                    "verification_reason": PENDING_WWW_VERIFY_REASON,
+                    "discovery_bundesland": discovery_bundesland or "",
+                    "email_target": "",
+                    "email_status": "pending_www_verify",
+                }
             seen_global.add(url)
             if dom:
                 seen_global.add(dom)
@@ -4602,6 +4811,12 @@ def run_scraper(
     if enable_auto_email is None:
         enable_auto_email = ENABLE_AUTO_EMAIL
     rotate_mode = bool(rotate_bundesland and discovery_mode != "emails_only")
+    serper_only = discovery_mode == "serper_only"
+    if serper_only and discovery_mode != "emails_only":
+        console_step(
+            "Serper-only discovery: bez crawl www (weryfikacja w niedzielę "
+            f"— {PENDING_WWW_VERIFY_REASON})."
+        )
     if rotate_mode and enable_auto_email and not auto_email_explicit:
         enable_auto_email = False
         console_step(
@@ -4647,6 +4862,7 @@ def run_scraper(
     print(
         f"[MODUS] Jupyter={jupyter_mode} | Auto-Mail={enable_auto_email} | "
         f"DryRun={dry_run_email} | Discovery={discovery_mode} | "
+        f"SerperOnly={serper_only} | "
         f"ForceResend={force_resend} | IgnoreWindow={ignore_send_window} | "
         f"RebuildCache={rebuild_from_cache} | "
         f"IgnoreContactCache={DISCOVERY_IGNORE_CONTACT_CACHE}"
@@ -4655,6 +4871,10 @@ def run_scraper(
         print(f"[LIMIT] max. nowych wierszy: {max_new_rows}")
     if rotate_mode:
         print(f"[TARGET] min. nowych firm w tym runie: {MIN_CONTACTS_TARGET}")
+        print(
+            f"[TARGET] min. retail_verified do rotacji landu: "
+            f"{MIN_VERIFIED_CONTACTS_ROTATION}"
+        )
     else:
         print(f"[TARGET] min. kontaktów: {MIN_CONTACTS_TARGET}")
 
@@ -4692,19 +4912,24 @@ def run_scraper(
         if discovery_mode == "emails_only":
             console_step("Tylko wysyłka maili z cache (bez wyszukiwania Serper)")
         else:
-            total_new_rows, stop_requested = _process_serper_terms(
-                SERPER_DISCOVERY_TERMS,
-                "primary",
+            serper_kw = dict(
                 all_rows=all_rows,
                 seen_global=seen_global,
                 cache=cache,
                 logger=logger,
                 enable_auto_email=enable_auto_email,
-                apply_distance_filter=True,
                 max_new_rows=max_new_rows,
                 total_new_rows=total_new_rows,
                 stop_requested=stop_requested,
                 rotate_mode=rotate_mode,
+                serper_only=serper_only,
+                discovery_bundesland=rotation_land,
+            )
+            total_new_rows, stop_requested = _process_serper_terms(
+                SERPER_DISCOVERY_TERMS,
+                "primary",
+                apply_distance_filter=True,
+                **serper_kw,
             )
             if not stop_requested and not _discovery_target_reached(
                 all_rows, total_new_rows=total_new_rows, rotate_mode=rotate_mode
@@ -4716,16 +4941,8 @@ def run_scraper(
                 total_new_rows, stop_requested = _process_serper_terms(
                     SERPER_DISCOVERY_FALLBACK_TERMS,
                     "fallback",
-                    all_rows=all_rows,
-                    seen_global=seen_global,
-                    cache=cache,
-                    logger=logger,
-                    enable_auto_email=enable_auto_email,
                     apply_distance_filter=False,
-                    max_new_rows=max_new_rows,
-                    total_new_rows=total_new_rows,
-                    stop_requested=stop_requested,
-                    rotate_mode=rotate_mode,
+                    **serper_kw,
                 )
             if not stop_requested and not _discovery_target_reached(
                 all_rows, total_new_rows=total_new_rows, rotate_mode=rotate_mode
@@ -4737,23 +4954,51 @@ def run_scraper(
                 total_new_rows, stop_requested = _process_serper_terms(
                     SERPER_DISCOVERY_BROAD_TERMS,
                     "broad",
-                    all_rows=all_rows,
-                    seen_global=seen_global,
-                    cache=cache,
-                    logger=logger,
-                    enable_auto_email=enable_auto_email,
                     apply_distance_filter=False,
-                    max_new_rows=max_new_rows,
-                    total_new_rows=total_new_rows,
-                    stop_requested=stop_requested,
-                    rotate_mode=rotate_mode,
+                    **serper_kw,
+                )
+            if not stop_requested and not _discovery_target_reached(
+                all_rows, total_new_rows=total_new_rows, rotate_mode=rotate_mode
+            ):
+                metric = total_new_rows if rotate_mode else len(all_rows)
+                console_step(
+                    f"Za mało kontaktów ({metric}). Landkreis Serper — frazy Kreis."
+                )
+                total_new_rows, stop_requested = _process_serper_terms(
+                    SERPER_DISCOVERY_LANDKREIS_TERMS,
+                    "landkreis",
+                    apply_distance_filter=False,
+                    **serper_kw,
+                )
+            if (
+                not stop_requested
+                and ENABLE_SERPER_PLACES_ENDPOINT
+                and not _discovery_target_reached(
+                    all_rows, total_new_rows=total_new_rows, rotate_mode=rotate_mode
+                )
+            ):
+                metric = total_new_rows if rotate_mode else len(all_rows)
+                console_step(
+                    f"Za mało kontaktów ({metric}). Serper Places API."
+                )
+                total_new_rows, stop_requested = _process_serper_terms(
+                    SERPER_DISCOVERY_PLACES_TERMS,
+                    "places",
+                    apply_distance_filter=False,
+                    use_places_endpoint=True,
+                    **serper_kw,
                 )
             if rotate_mode and not _discovery_target_reached(
                 all_rows, total_new_rows=total_new_rows, rotate_mode=True
             ):
                 console_step(
                     f"Uwaga: znaleziono tylko {total_new_rows} nowych firm "
-                    f"(cel {MIN_CONTACTS_TARGET}). Następny land w kolejnej rotacji."
+                    f"(cel {MIN_CONTACTS_TARGET}). Land zostaje do kolejnego tygodnia."
+                )
+            elif rotate_mode and serper_only:
+                console_step(
+                    f"Serper-only: {total_new_rows} kandydatów zapisanych jako "
+                    f"{PENDING_WWW_VERIFY_REASON}."
                 )
 
         if enable_auto_email:
@@ -4779,15 +5024,32 @@ def run_scraper(
         and rotation_state is not None
         and rotation_state_path is not None
         and discovery_mode != "emails_only"
+        and not serper_only
     ):
         from gu_bundesland_rotation import commit_rotation_after_run
 
-        nxt = commit_rotation_after_run(
-            rotation_state_path, rotation_state, rotation_land
-        )
+        verified_n = count_retail_verified_for_bundesland(all_rows, rotation_land)
+        if verified_n >= MIN_VERIFIED_CONTACTS_ROTATION:
+            nxt = commit_rotation_after_run(
+                rotation_state_path, rotation_state, rotation_land
+            )
+            print(
+                f"[ROTACJA] {verified_n} retail_verified dla {rotation_land} "
+                f"(≥{MIN_VERIFIED_CONTACTS_ROTATION}). Następny cykl: {nxt}"
+            )
+        else:
+            print(
+                f"[ROTACJA] Tylko {verified_n}/{MIN_VERIFIED_CONTACTS_ROTATION} "
+                f"retail_verified dla {rotation_land} — land bez przesunięcia."
+            )
+    elif (
+        rotation_land
+        and rotation_state is not None
+        and serper_only
+    ):
         print(
-            f"[ROTACJA] Zakończono falę {rotation_land}. "
-            f"Następny cykl: {nxt}"
+            f"[ROTACJA] Serper-only ({rotation_land}): rotacja bez przesunięcia "
+            f"(weryfikacja www w niedzielę, cel {MIN_VERIFIED_CONTACTS_ROTATION} verified)."
         )
 
     logger.info(f"Fertig. {len(all_rows)} Zeilen -> {OUTPUT_FILE}")
@@ -4811,6 +5073,7 @@ def run_in_jupyter(
         max_new_rows=max_new_rows,
         enable_auto_email=enable_auto_email,
         dry_run_email=dry_run_email,
+        discovery_mode="serper_only",
         **_deprecated_kwargs,
     )
 
@@ -4960,11 +5223,18 @@ def _run_smoke_tests() -> None:
     )
     from de_gu_keywords import (
         SERPER_DISCOVERY_BROAD_TERMS,
+        SERPER_DISCOVERY_LANDKREIS_TERMS,
+        SERPER_DISCOVERY_PLACES_TERMS,
         build_region_suffix,
     )
 
     assert build_region_suffix(["Nordrhein-Westfalen"]) == "Deutschland"
     assert len(SERPER_DISCOVERY_BROAD_TERMS) >= 10
+    assert len(SERPER_DISCOVERY_LANDKREIS_TERMS) >= 5
+    assert len(SERPER_DISCOVERY_PLACES_TERMS) >= 5
+    assert PENDING_WWW_VERIFY_REASON == "pending_www_verify"
+    assert MIN_VERIFIED_CONTACTS_ROTATION == 20
+    assert MAX_PAGES_FOR_RETAIL_VERIFICATION >= 8
     assert is_unsuitable_inquiry_email("privacy@firma.de")
     best, sc = pick_best_email_for_inquiry(
         ["datenschutz@obi.de", "info@logmar.net"],
@@ -5121,6 +5391,39 @@ if __name__ == "__main__":
                 f"  Excel → {OUTPUT_FILE} ({len(all_rows)} wierszy pipeline)"
             )
             raise SystemExit(0)
+        if "--verify-pending-contacts" in sys.argv:
+            logger = setup_logging()
+            cache = load_cache(logger)
+            all_rows, _seen_from_file = load_existing_output(OUTPUT_FILE, logger)
+            stats = verify_pending_contacts(cache, logger, all_rows=all_rows)
+            persist_progress(all_rows, cache, logger, reason="verify_pending_contacts")
+            from gu_bundesland_rotation import (
+                commit_rotation_after_run,
+                load_rotation_state,
+                peek_next_bundesland,
+                rotation_state_path,
+            )
+
+            rot_path = rotation_state_path(OUTPUT_DIR)
+            rot_state = load_rotation_state(rot_path)
+            current_land = peek_next_bundesland(rot_state)
+            verified_n = count_retail_verified_for_bundesland(all_rows, current_land)
+            rot_msg = (
+                f"[ROTACJA] {verified_n}/{MIN_VERIFIED_CONTACTS_ROTATION} "
+                f"retail_verified dla {current_land}"
+            )
+            if verified_n >= MIN_VERIFIED_CONTACTS_ROTATION:
+                nxt = commit_rotation_after_run(rot_path, rot_state, current_land)
+                rot_msg += f" — przesunięto rotację, następny land: {nxt}"
+            else:
+                rot_msg += " — land bez przesunięcia"
+            print(
+                f"[VERIFY] pending={stats['pending']}, verified={stats['verified']}, "
+                f"rejected={stats['rejected']}, errors={stats['errors']}\n"
+                f"  Excel → {OUTPUT_FILE} ({len(all_rows)} wierszy)\n"
+                f"  {rot_msg}"
+            )
+            raise SystemExit(0)
         if "--rebuild-from-cache" in sys.argv:
             extra_kw["rebuild_from_cache"] = True
             if "discovery_mode" not in extra_kw:
@@ -5169,6 +5472,12 @@ if __name__ == "__main__":
         if "--no-auto-email" in sys.argv:
             extra_kw["enable_auto_email"] = False
             print("[TRYB] Wysyłka maili wyłączona w tym uruchomieniu.")
+        if "--serper-only-discovery" in sys.argv:
+            extra_kw["discovery_mode"] = "serper_only"
+            print(
+                "[TRYB] Serper-only: zapis kandydatów bez crawl www "
+                f"({PENDING_WWW_VERIFY_REASON})."
+            )
         if rc_path:
             from scraper_run_config import apply_run_config_file, run_scraper_launch_kwargs
 
