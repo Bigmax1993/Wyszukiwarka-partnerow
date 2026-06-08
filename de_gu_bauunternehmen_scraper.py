@@ -1279,6 +1279,15 @@ def _row_has_gu_signal(row: dict) -> bool:
     return ok
 
 
+def _excel_status_label(row: dict) -> str:
+    status = (row.get("email_status") or "").strip()
+    if status:
+        return status
+    if (row.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
+        return "pending_www_verify"
+    return ""
+
+
 def is_row_eligible_for_excel_export(row: dict) -> bool:
     """Firma do arkusza Kontakte — wyłącznie Generalunternehmer (GU)."""
     name = (row.get("company_name_clean") or row.get("nazwa") or "").strip()
@@ -1293,6 +1302,14 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
         return False
     if is_retail_store_operator_contact(url=url, email=email, text=text):
         return False
+    if (row.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
+        if not (url and name):
+            return False
+        if row.get("is_gu") or _row_has_gu_signal(row):
+            return True
+        return is_serper_only_pending_candidate(
+            email=email, url=url, name=name, text=text
+        )
     if email:
         return not is_blocked_non_commercial_row(row)
     if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL:
@@ -1362,6 +1379,7 @@ def build_export_rows(rows, logger=None, cache=None):
             "Kleinunternehmen": "ja" if row.get("is_small_firm") else "nein",
             "GU": "ja" if row.get("is_gu") or _row_has_gu_signal(row) else "nein",
             "GU_Marker": (row.get("gu_marker") or "").strip(),
+            "Status": _excel_status_label(row),
         }
         if cache is not None and email:
             base = merge_export_row(base, cache, email, lang="de")
@@ -1425,6 +1443,8 @@ EXCEL_IMPORT_COLUMNS = {
     "E-mail": "email_target",
     "Strona www": "www",
     "URL": "url",
+    "GU_Marker": "gu_marker",
+    "Status": "email_status",
 }
 
 
@@ -1447,6 +1467,19 @@ def row_from_excel_record(rec: dict) -> dict:
         row["phones_found"] = row["telefon"]
     if row.get("www"):
         row["official_website"] = row["www"]
+    www_checked = str(rec.get("WWW_geprueft") or "").strip().lower()
+    if www_checked == "ja":
+        row["retail_verified"] = True
+    elif www_checked == "nein":
+        row["retail_verified"] = False
+        if not (row.get("email_target") or "").strip():
+            row["verification_reason"] = PENDING_WWW_VERIFY_REASON
+            row["email_status"] = "pending_www_verify"
+    gu_col = str(rec.get("GU") or "").strip().lower()
+    if gu_col == "ja":
+        row["is_gu"] = True
+    elif gu_col == "nein":
+        row["is_gu"] = False
     return row
 
 
@@ -1573,7 +1606,11 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
         "is_gu": info.get("is_gu", False),
         "gu_marker": info.get("gu_marker") or "",
     }
-    if not is_row_eligible_for_excel_export(row_probe):
+    pending_www = (
+        (info.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON
+        and not info.get("retail_verified")
+    )
+    if not pending_www and not is_row_eligible_for_excel_export(row_probe):
         return None
     phone = (info.get("phones_found") or "").strip()
     if "," in phone:
@@ -1593,6 +1630,22 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
             "contact_quality_score": int(info.get("contact_quality_score", 0) or 0),
         }
     )
+
+
+def merge_pipeline_rows(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """Łączy wiersze pipeline po URL (incoming nadpisuje pola istniejących)."""
+    by_url = index_all_rows_by_url(list(existing))
+    merged = list(existing)
+    for row in incoming:
+        url = (row.get("url") or "").strip()
+        if not url:
+            continue
+        if url in by_url:
+            by_url[url].update(row)
+        else:
+            merged.append(row)
+            by_url[url] = row
+    return merged
 
 
 def build_all_rows_from_cache(cache: dict) -> list[dict]:
@@ -3970,6 +4023,7 @@ def discover_places_with_serper(
                     "kategoria": term,
                     "adres": snippet,
                     "full_address": snippet,
+                    "page_snippet": f"{title} {snippet}".strip(),
                     "status": "",
                     "telefon": item.get("phoneNumber") or item.get("phone") or "",
                     "www": link,
@@ -5237,10 +5291,22 @@ def _process_serper_terms(
                 r["email_status"] = "queued"
                 contacts_cache.setdefault(url, {})["email_status"] = "queued"
             if serper_only:
+                snippet_text = (
+                    r.get("page_snippet")
+                    or r.get("full_address")
+                    or r.get("adres")
+                    or ""
+                ).strip()
                 contacts_cache[url] = {
                     "company_name": r.get("nazwa") or "",
                     "company_name_clean": r.get("company_name_clean") or r.get("nazwa") or "",
+                    "company_name_raw": r.get("company_name_raw") or "",
                     "official_website": url,
+                    "full_address": r.get("full_address") or r.get("adres") or "",
+                    "page_snippet": snippet_text,
+                    "serper_title": r.get("company_name_raw") or r.get("nazwa") or "",
+                    "serper_snippet": snippet_text,
+                    "discovery_search_term": r.get("fraza") or r.get("kategoria") or "",
                     "retail_verified": False,
                     "verification_reason": PENDING_WWW_VERIFY_REASON,
                     "discovery_bundesland": discovery_bundesland or "",
@@ -5381,12 +5447,26 @@ def run_scraper(
         reset_serper_daily_for_discovery(cache)
         ensure_serper_budget_or_fail(cache)
     if rebuild_from_cache:
-        all_rows = build_all_rows_from_cache(cache)
+        cache_rows = build_all_rows_from_cache(cache)
+        existing_rows, _ = load_existing_output(OUTPUT_FILE, logger)
+        contacts_n = len(cache.get("contacts", {}) or {})
+        if cache_rows:
+            all_rows = merge_pipeline_rows(existing_rows, cache_rows)
+            console_step(
+                f"Excel aus Cache: {len(cache_rows)} z JSON + {len(existing_rows)} z Excel "
+                f"→ {len(all_rows)} (contacts={contacts_n})"
+            )
+        elif existing_rows:
+            all_rows = existing_rows
+            console_step(
+                f"Excel aus Cache: contacts=0 — zachowano {len(existing_rows)} wierszy z Excela"
+            )
+        else:
+            all_rows = []
+            console_step(
+                f"Excel aus Cache neu: 0 Zeilen (contacts={contacts_n}, pusty Excel)"
+            )
         seen_global = build_discovery_seen_urls(all_rows, cache)
-        console_step(
-            f"Excel aus Cache neu: {len(all_rows)} Zeilen "
-            f"(contacts={len(cache.get('contacts', {}))}, także bez E-Mail)"
-        )
         persist_progress(all_rows, cache, logger, reason="rebuild_from_cache")
     else:
         all_rows, _seen_from_file = load_existing_output(OUTPUT_FILE, logger)

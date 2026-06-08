@@ -151,6 +151,51 @@ class SerperOnlyFilterRegression(unittest.TestCase):
             is_loose_serper_discovery_candidate(name=name, text=text, url=url)
         )
 
+    def test_serper_only_accepts_gu_in_company_name(self):
+        self.assertTrue(
+            is_serper_only_pending_candidate(
+                name="BAUTAL GU GmbH, Wuppertal",
+                url="https://bautal-gu.de",
+                text="Bauunternehmen Wuppertal",
+            )
+        )
+
+    def test_pending_not_purged_from_cache(self):
+        from retail_store_builder_filter import is_cache_contact_not_store_builder
+
+        info = {
+            "company_name_clean": "ZD BAU GmbH",
+            "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
+            "retail_verified": False,
+        }
+        self.assertFalse(
+            is_cache_contact_not_store_builder("https://zd-bau.de", info)
+        )
+
+    def test_excel_roundtrip_restores_pending(self):
+        rec = {
+            "Nazwa firmy": "BAUTAL GU GmbH",
+            "URL": "https://bautal-gu.de",
+            "Strona www": "https://bautal-gu.de",
+            "WWW_geprueft": "nein",
+            "E-mail": "",
+        }
+        row = scraper.row_from_excel_record(rec)
+        self.assertEqual(row.get("verification_reason"), scraper.PENDING_WWW_VERIFY_REASON)
+        self.assertTrue(scraper.is_row_eligible_for_excel_export(row))
+
+    def test_merge_pipeline_preserves_existing_when_cache_empty(self):
+        existing = [
+            {
+                "nazwa": "BAUTAL GU GmbH",
+                "url": "https://bautal-gu.de",
+                "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
+            }
+        ]
+        merged = scraper.merge_pipeline_rows(existing, [])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["nazwa"], "BAUTAL GU GmbH")
+
     def test_pending_row_eligible_for_excel_when_gu_in_snippet(self):
         row = {
             "nazwa": "Weber Generalunternehmer GmbH",

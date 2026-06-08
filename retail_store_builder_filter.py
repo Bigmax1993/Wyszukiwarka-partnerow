@@ -575,10 +575,13 @@ def is_serper_only_pending_candidate(
     if is_excluded_non_gu_role(low):
         return False
     gu_ok, _ = is_generalunternehmer(low)
-    if not gu_ok:
-        return False
+    if gu_ok:
+        return True
+    # GU w nazwie (np. „BAUTAL GU GmbH”) — bez wymogu słów branżowych w snippetcie
+    if " gu " in f" {low} " or low.endswith(" gu"):
+        return True
     has_trade = any(m in low for m in _SERPER_ONLY_TRADE_MARKERS)
-    return has_trade
+    return gu_ok and has_trade
 
 
 def is_loose_serper_discovery_candidate(
@@ -629,6 +632,11 @@ def is_valid_retail_store_builder_contact(
 def is_cache_contact_not_store_builder(place_url: str, info: dict | None) -> bool:
     if not isinstance(info, dict):
         return True
+    if (
+        (info.get("verification_reason") or "").strip() == "pending_www_verify"
+        and not info.get("retail_verified")
+    ):
+        return False
     email = (info.get("email_target") or "").strip()
     if not email:
         found = (info.get("emails_found") or "").strip()
