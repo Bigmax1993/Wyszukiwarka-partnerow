@@ -105,6 +105,7 @@ def apply_gu_run_config_extras(module, data: dict) -> None:
         if rsf is not None:
             rsf.REQUIRE_GENERALUNTERNEHMER = bool(data["require_generalunternehmer"])
     _int_keys = (
+        ("serper_daily_limit", "SERPER_DAILY_LIMIT"),
         ("gemini_discovery_max_rounds", "GEMINI_DISCOVERY_MAX_ROUNDS"),
         ("gemini_discovery_terms_per_round", "GEMINI_DISCOVERY_TERMS_PER_ROUND"),
         ("serper_discovery_reserve", "SERPER_DISCOVERY_RESERVE"),
@@ -240,8 +241,14 @@ SERPER_PLACES_API_URL = "https://google.serper.dev/places"
 SERPER_COUNTRY = "de"
 SERPER_LANGUAGE = "de"
 SERPER_TIMEOUT = 20
-SERPER_DAILY_LIMIT = 300
-# True lub env SERPER_UNLIMITED=1 → brak dziennego limitu (pełny pipeline GHA)
+SERPER_DAILY_LIMIT = 625
+_serper_limit_env = (os.environ.get("SERPER_DAILY_LIMIT") or "").strip()
+if _serper_limit_env:
+    try:
+        SERPER_DAILY_LIMIT = int(_serper_limit_env)
+    except ValueError:
+        pass
+# True lub env SERPER_UNLIMITED=1 → brak dziennego limitu
 SERPER_UNLIMITED = False
 FORCE_SERPER_LOOKUP = True
 SERPER_DISCOVERY_RESULTS_PER_TERM = 30
