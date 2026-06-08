@@ -8,6 +8,11 @@ name: Sync wyniki Google Drive
 
 on:
   workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: "Opcjonalnie wymus artefakt (np. de-gu-wyniki-wed)"
+        required: false
+        type: string
   schedule:
     # 04:00 UTC = 06:00 Europe/Warsaw (CEST); zimą (CET) ustaw 05:00 UTC
     - cron: "0 4 * * 1"
@@ -37,9 +42,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Najswiezszy artefakt z pipeline (np. wed po sobocie, thu po niedzieli).
-          PICK=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
-            --paginate --jq '[.artifacts[] | select(.expired==false) | select(.name=="de-gu-wyniki-thu" or .name=="de-gu-wyniki-wed" or .name=="de-gu-wyniki-mon" or .name=="de-gu-wyniki-tue" or .name=="de-gu-wyniki-fri")] | sort_by(.created_at) | reverse | .[0] // empty')
+          FORCED="${{ github.event.inputs.artifact_name }}"
+          if [ -n "$FORCED" ]; then
+            PICK=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+              --paginate --jq "[.artifacts[] | select(.expired==false) | select(.name==\"$FORCED\")] | sort_by(.created_at) | reverse | .[0] // empty")
+          else
+            PICK=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+              --paginate --jq '[.artifacts[] | select(.expired==false) | select(.name=="de-gu-wyniki-thu" or .name=="de-gu-wyniki-wed" or .name=="de-gu-wyniki-mon" or .name=="de-gu-wyniki-tue" or .name=="de-gu-wyniki-fri")] | sort_by(.created_at) | reverse | .[0] // empty')
+          fi
           ARTIFACT=$(echo "$PICK" | jq -r '.name // empty')
           RUN_ID=$(echo "$PICK" | jq -r '.workflow_run.id // empty')
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
