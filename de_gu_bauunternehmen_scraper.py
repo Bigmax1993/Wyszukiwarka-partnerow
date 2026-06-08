@@ -2658,6 +2658,7 @@ def _run_gemini_discovery_supplement(
         total_new_rows, stop_requested = _process_serper_terms(
             batch,
             f"gemini-r{round_n}",
+            apply_distance_filter=False,
             funnel=funnel,
             total_new_rows=total_new_rows,
             stop_requested=stop_requested,
