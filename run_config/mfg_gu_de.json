@@ -29,6 +29,7 @@
   "enable_auto_email": false,
   "enable_gemini_discovery_terms": true,
   "enable_gemini_page_verify": true,
+  "enable_gemini_contact_extraction": true,
   "gemini_discovery_max_rounds": 5,
   "gemini_discovery_terms_per_round": 12,
   "serper_discovery_reserve": 50,

@@ -4,7 +4,7 @@ Serper API – DE bundesweit: Generalunternehmer (GU), którzy stawiają sklepy/
 lub robią przebudowy/umbau i modernizację filii (Rewe, Aldi, Kaufland, Netto, Penny, Edeka).
 Nicht: Einzelhandels-Märkte als Betreiber, keine Urzędy/Portale.
 E-mail MFG + PPTX nur in diesem Modul (send_email_de_gu).
-Discovery i kontakty: Serper + requests + BeautifulSoup. www: Gemini czyści tekst (firma, e-mail, tel.), potem luźny regex. Przed Excel: Gemini czyści wiersze.
+Discovery i kontakty: Serper + requests + BeautifulSoup. www: Gemini ekstrahuje i waliduje kontakty (firma, e-mail, tel.) — bez regex na tekście. Przed Excel: reguły.
 Bez Selenium / Google Maps. Baner cookie: Playwright (tylko „Akceptuj”).
 Jupyter Lab: komórka 1 = %pip install …, komórka 2 = ten plik, komórka 3 = run_in_jupyter(…).
 """
@@ -36,11 +36,9 @@ from scraper_web_config import (
 
 # Excel: Gemini bereinigt Nazwa/Adres/Telefon/www/Bundesland vor dem Export (www-Verify bleibt regelbasiert)
 ENABLE_GEMINI_ROW_CLEANUP = False
-# Kontakte www: zuerst Gemini (Firma, E-Mail, Telefon), danach lockeres Regex
-ENABLE_GEMINI_CONTACT_TEXT_CLEANUP = False
-ENABLE_GEMINI_EMAIL_TEXT_CLEANUP = ENABLE_GEMINI_CONTACT_TEXT_CLEANUP  # Alias
-GEMINI_CONTACT_TEXT_MAX_INPUT_CHARS = 10_000
-GEMINI_EMAIL_TEXT_MAX_INPUT_CHARS = GEMINI_CONTACT_TEXT_MAX_INPUT_CHARS
+# Kontakte www: Gemini extrahiert und validiert Firma, E-Mail, Telefon (kein Regex auf Seitentext)
+ENABLE_GEMINI_CONTACT_EXTRACTION = True
+GEMINI_CONTACT_EXTRACT_MAX_INPUT_CHARS = 10_000
 from playwright_cookie_consent import apply_playwright_cookie_fallback
 from de_gu_keywords import (
     DE_OST_PLACE_MARKERS,
@@ -91,6 +89,7 @@ def apply_gu_run_config_extras(module, data: dict) -> None:
     _bool_keys = (
         "enable_gemini_discovery_terms",
         "enable_gemini_page_verify",
+        "enable_gemini_contact_extraction",
         "require_generalunternehmer",
         "require_market_projects_in_portfolio",
         "require_website_references_or_portfolio",
@@ -1717,8 +1716,7 @@ def _empty_cache() -> dict:
         "email_domain_daily": {},
         "email_suppression": {},
         "gemini_row_enrichment": {},
-        "gemini_contact_text_clean": {},
-        "gemini_email_text_clean": {},
+        "gemini_contact_extract": {},
         "gemini_disabled_models": {},
         "serper_discovery": {},
         "serper_term_stats": {},
@@ -1936,8 +1934,7 @@ def purge_institutions_from_cache(
     for url in removed_urls:
         for bucket in (
             "gemini_row_enrichment",
-            "gemini_contact_text_clean",
-            "gemini_email_text_clean",
+            "gemini_contact_extract",
         ):
             sub = cache.get(bucket)
             if not isinstance(sub, dict):
@@ -3566,189 +3563,55 @@ def gemini_generate_text(prompt: str, logger: logging.Logger, api_key: str, cach
     raise last_err or RuntimeError("Keine Gemini-Antwort für alle Modelle.")
 
 
-def prepare_text_for_email_extraction(text: str) -> str:
-    """Obfuskation DE/PL: (at), punkt/dot, Leerzeichen um @ → normalisieren."""
-    if not text:
-        return ""
-    t = unquote(text)
-    t = t.replace("%40", "@").replace("&#64;", "@").replace("&commat;", "@")
-    for pat in (
-        r"\(\s*at\s*\)",
-        r"\[\s*at\s*\]",
-        r"\{\s*at\s*\}",
-        r"\(\s*ät\s*\)",
-        r"\(\s*a\s*t\s*\)",
-        r"<\s*at\s*>",
-        r"/\s*at\s*/",
-    ):
-        t = re.sub(pat, "@", t, flags=re.IGNORECASE)
-    t = re.sub(
-        r"\b([A-Za-z0-9._%+\-]{1,96})\s*(?:at|ät|a\s*t)\s*([A-Za-z0-9.\-]{1,240})\b",
-        r"\1@\2",
-        t,
-        flags=re.IGNORECASE,
-    )
-    for dot_pat in (
-        r"\(\s*dot\s*\)",
-        r"\[\s*dot\s*\]",
-        r"\(\s*punkt\s*\)",
-        r"\[\s*punkt\s*\]",
-        r"\s+dot\s+",
-        r"\s+punkt\s+",
-    ):
-        t = re.sub(dot_pat, ".", t, flags=re.IGNORECASE)
-    t = re.sub(r"\s*@\s*", "@", t)
-    t = re.sub(r"([A-Za-z0-9])\s+\.\s+([A-Za-z0-9])", r"\1.\2", t)
-    t = re.sub(r"\.{2,}", ".", t)
-    return t
+def _normalize_href_email(raw: str) -> str:
+    """mailto:-Links aus HTML — keine Regex auf Seitentext."""
+    from gemini_contact_extract import _normalize_email
+
+    low = unquote((raw or "").strip()).lower().replace("%40", "@")
+    return _normalize_email(low)
 
 
-_RELAXED_EMAIL_REGEXES = (
-    # Standard + zweite TLD (z. B. co.uk)
-    re.compile(
-        r"[A-Za-z0-9][A-Za-z0-9._%+\-]*@"
-        r"[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z]{2,}(?:\.[A-Za-z]{2,})?",
-        re.IGNORECASE,
-    ),
-    # Kurze TLD / IDN-ähnlich (mind. 2 Zeichen nach letztem Punkt)
-    re.compile(
-        r"[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z0-9\-]{2,24}",
-        re.IGNORECASE,
-    ),
-    # Sehr locker: alles mit @ und mindestens einem Punkt in der Domain
-    re.compile(
-        r"[A-Za-z0-9][\w.%+\-]{0,96}@[A-Za-z0-9][\w.\-]{0,240}\.[A-Za-z0-9]{2,24}",
-        re.IGNORECASE,
-    ),
-)
+def _normalize_href_phone(raw: str) -> str:
+    from gemini_contact_extract import normalize_phone_contact
 
-_FAKE_EMAIL_SUFFIXES = (
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".svg",
-    ".webp",
-    ".css",
-    ".js",
-    ".woff",
-    ".woff2",
-)
+    return normalize_phone_contact((raw or "").replace("tel:", "", 1))
 
 
-def _normalize_relaxed_email(raw: str) -> str:
-    low = unquote((raw or "").strip()).lower()
-    low = low.replace("%40", "@")
-    low = re.sub(r"^mailto:\s*", "", low)
-    low = low.split("?")[0].split("#")[0]
-    low = low.strip(".,;:()[]{}<>\"'`")
-    if "@" not in low:
-        return ""
-    local, _, domain = low.partition("@")
-    local, domain = local.strip(), domain.strip().rstrip(".")
-    if not local or not domain or "." not in domain:
-        return ""
-    if any(domain.endswith(suf) for suf in _FAKE_EMAIL_SUFFIXES):
-        return ""
-    if len(local) > 96 or len(domain) > 253:
-        return ""
-    return f"{local}@{domain}"
-
-
-def _extract_emails_with_relaxed_regex(text: str) -> list[str]:
-    if not text:
-        return []
-    prepared = prepare_text_for_email_extraction(text)
-    seen: list[str] = []
-    for rx in _RELAXED_EMAIL_REGEXES:
-        for match in rx.findall(prepared):
-            norm = _normalize_relaxed_email(match)
-            if norm and norm not in seen:
-                seen.append(norm)
-    return seen
-
-
-def gemini_clean_text_for_contact_extraction(
-    text: str,
-    page_url: str,
-    logger: logging.Logger,
-    cache: dict | None,
-) -> str:
-    """
-    Gemini normalisiert Kontakt-Text (Firma, E-Mails, Telefon) vor dem Regex.
-    Nichts erfinden — nur Entschleierung und Lesbarkeit aus dem Eingabetext.
-    """
-    if not ENABLE_GEMINI_CONTACT_TEXT_CLEANUP or not (text or "").strip():
-        return ""
-    api_key = get_google_ai_studio_api_key()
-    if not api_key or is_gemini_rate_limited(cache):
-        return ""
-    snippet = re.sub(r"\s+", " ", text.strip())
-    if len(snippet) > GEMINI_CONTACT_TEXT_MAX_INPUT_CHARS:
-        snippet = snippet[: GEMINI_CONTACT_TEXT_MAX_INPUT_CHARS - 3] + "..."
-    cache_bucket = (cache or {}).setdefault("gemini_contact_text_clean", {})
-    legacy = (cache or {}).get("gemini_email_text_clean") or {}
-    digest = hashlib.sha256(f"{page_url}|{snippet[:1200]}".encode("utf-8")).hexdigest()[:24]
-    if digest in cache_bucket:
-        return cache_bucket[digest] or ""
-    if digest in legacy:
-        cache_bucket[digest] = legacy[digest]
-        return legacy[digest] or ""
-    prompt = (
-        "Du bereinigst einen Webseiten-Auszug (Bau/GU, Kontakt/Impressum). NUR diese Zeilen, nichts erfinden.\n"
-        "Firma: NUR echter Firmenname + Rechtsform (GmbH/UG/AG/…). "
-        "LEER lassen bei PDF, PDF-XChange/Software, Vergabemarktplatz, [PDF], reinen Städten, "
-        "News-Überschriften, Katalogen, ALDI/Penny-Projekttiteln ohne Baufirma.\n"
-        "E-Mail: alle Adressen mit @, Semikolon-getrennt.\n"
-        "Telefon: deutsche Nummern (+49/0…), Semikolon-getrennt.\n"
-        f"URL: {page_url or 'unbekannt'}\n"
-        f"Text:\n{snippet}"
-    )
-    try:
-        cleaned, used_model = gemini_generate_text(prompt, logger, api_key, cache=cache)
-        cleaned = (cleaned or "").strip()
-        console_step(f"Gemini Kontakt-Textbereinigung: {used_model}")
-        cache_bucket[digest] = cleaned
-        return cleaned
-    except Exception as e:
-        logger.warning(f"Gemini Kontakt-Textbereinigung fehlgeschlagen ({page_url}): {e}")
-        cache_bucket[digest] = ""
-        return ""
-
-
-def gemini_clean_text_for_email_extraction(
-    text: str,
-    page_url: str,
-    logger: logging.Logger,
-    cache: dict | None,
-) -> str:
-    """Alias — ein Aufruf für Firma, E-Mail und Telefon."""
-    return gemini_clean_text_for_contact_extraction(text, page_url, logger, cache)
-
-
-def _resolve_contact_source_text(
+def _ensure_gemini_page_contacts(
     text: str,
     *,
     logger: logging.Logger | None = None,
     cache: dict | None = None,
     page_url: str = "",
+    website: str = "",
     gemini_buf: dict | None = None,
-) -> str:
-    """Ein Gemini-Lauf pro Seite; Ergebnis für E-Mail-, Telefon- und Firmen-Regex."""
-    if not text:
-        return ""
-    if gemini_buf is not None and "resolved" in gemini_buf:
-        return gemini_buf["resolved"]
-    source = text
-    if ENABLE_GEMINI_CONTACT_TEXT_CLEANUP and logger is not None:
-        gemini_text = gemini_clean_text_for_contact_extraction(
-            text, page_url, logger, cache
-        )
-        if gemini_text:
-            source = gemini_text
+) -> dict:
+    """Ein Gemini-Aufruf pro Seite — E-Mails, Telefone, Firmenname."""
+    empty = {"emails": [], "phones": [], "company_names": [], "company_name": ""}
+    if gemini_buf is not None and "contacts" in gemini_buf:
+        return gemini_buf["contacts"]
+    if not ENABLE_GEMINI_CONTACT_EXTRACTION or not (text or "").strip() or logger is None:
+        if gemini_buf is not None:
+            gemini_buf["contacts"] = empty
+        return empty
+    from gemini_contact_extract import gemini_extract_contacts_from_page
+
+    api_key = get_google_ai_studio_api_key()
+    contacts = gemini_extract_contacts_from_page(
+        text,
+        page_url,
+        logger,
+        cache,
+        gemini_generate_text=gemini_generate_text,
+        api_key=api_key or "",
+        website=website or page_url,
+        max_input_chars=GEMINI_CONTACT_EXTRACT_MAX_INPUT_CHARS,
+        is_rate_limited=is_gemini_rate_limited,
+        on_step=console_step,
+    )
     if gemini_buf is not None:
-        gemini_buf["resolved"] = source
-    return source
+        gemini_buf["contacts"] = contacts
+    return contacts
 
 
 def find_emails_in_text(
@@ -3757,88 +3620,28 @@ def find_emails_in_text(
     logger: logging.Logger | None = None,
     cache: dict | None = None,
     page_url: str = "",
+    website: str = "",
     gemini_buf: dict | None = None,
 ) -> list[str]:
     """
-    Pipeline: Gemini bereinigt Text → maximal lockeres Regex.
-    mailto:-Links werden separat in parse_contacts_from_html ergänzt.
+    Gemini extrahiert E-Mails aus Seitentext; mailto:-Links separat in parse_contacts_from_html.
     """
     if not text:
         return []
-    source = _resolve_contact_source_text(
-        text, logger=logger, cache=cache, page_url=page_url, gemini_buf=gemini_buf
+    contacts = _ensure_gemini_page_contacts(
+        text,
+        logger=logger,
+        cache=cache,
+        page_url=page_url,
+        website=website,
+        gemini_buf=gemini_buf,
     )
-    found = _extract_emails_with_relaxed_regex(source)
-    if not found:
-        for e in _extract_emails_with_relaxed_regex(text):
-            if e not in found:
-                found.append(e)
-    return filter_commercial_emails(found)
+    return list(contacts.get("emails") or [])
 
 
 _COMPANY_LEGAL_SUFFIX = (
     r"(?:GmbH|UG(?:\s*\(haftungsbeschränkt\))?|AG|GbR|e\.?\s*K\.?|KG|OHG|PartG|mbH|Co\.\s*KG)"
 )
-_RELAXED_COMPANY_REGEXES = (
-    re.compile(
-        rf"([A-ZÄÖÜ0-9][\wäöüßÄÖÜ&\.\-'„“ ]{{1,100}}?\s+{_COMPANY_LEGAL_SUFFIX})\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:Firma|FIRMA|Unternehmen|Company)\s*:\s*([^\n;|]+)",
-        re.IGNORECASE,
-    ),
-)
-
-_RELAXED_PHONE_REGEXES = (
-    re.compile(r"\+49[\s(]?\d{2,5}[\s)./-]*\d[\d\s()./-]{4,18}"),
-    re.compile(r"0049[\s(]?\d{2,5}[\s)./-]*\d[\d\s()./-]{4,18}"),
-    re.compile(r"(?<!\d)0\d{2,5}[\s/.-]?\d[\d\s()./-]{4,18}(?!\d)"),
-    re.compile(r"(?:\+?\d[\d\s()./-]{6,}\d)"),
-)
-
-_PHONE_SKIP_DIGIT_PREFIXES = ("19", "20")  # Jahreszahlen
-
-
-def _normalize_relaxed_phone(raw: str) -> str:
-    normalized = " ".join((raw or "").split()).strip(".,;:()[]")
-    digits = re.sub(r"\D", "", normalized)
-    if len(digits) < 7:
-        return ""
-    if len(digits) in (4, 8) and digits.startswith(_PHONE_SKIP_DIGIT_PREFIXES):
-        return ""
-    if digits.startswith("49") and len(digits) < 10:
-        return ""
-    if digits.startswith("0049"):
-        digits = "49" + digits[4:]
-    if digits.startswith("49") and not normalized.startswith("+"):
-        rest = digits[2:]
-        if len(rest) >= 9:
-            normalized = f"+49 {rest[:3]} {rest[3:]}".strip()
-    return normalized
-
-
-def _extract_phones_with_relaxed_regex(text: str) -> list[str]:
-    if not text:
-        return []
-    prepared = prepare_text_for_email_extraction(text)
-    seen: list[str] = []
-    for rx in _RELAXED_PHONE_REGEXES:
-        for match in rx.findall(prepared):
-            norm = _normalize_relaxed_phone(match)
-            if norm and norm not in seen:
-                seen.append(norm)
-    gemini_lines = re.findall(
-        r"(?:Telefon|Tel\.?|PHONE)\s*:\s*([^\n]+)", prepared, flags=re.IGNORECASE
-    )
-    for line in gemini_lines:
-        for part in re.split(r"[;,|]", line):
-            norm = _normalize_relaxed_phone(part)
-            if norm and norm not in seen:
-                seen.append(norm)
-    return seen
-
-
 def _pick_best_company_name(
     candidates: list[str], website: str = "", email: str = ""
 ) -> str:
@@ -3873,19 +3676,6 @@ def _pick_best_company_name(
     return cleaned[0]
 
 
-def _extract_company_names_with_relaxed_regex(text: str, website: str = "") -> list[str]:
-    if not text:
-        return []
-    prepared = re.sub(r"\s+", " ", text.strip())
-    found: list[str] = []
-    for rx in _RELAXED_COMPANY_REGEXES:
-        for match in rx.findall(prepared):
-            name = " ".join(str(match).split()).strip(" -|–—:;")
-            if name and name not in found:
-                found.append(name)
-    return found
-
-
 def find_company_names_in_text(
     text: str,
     *,
@@ -3895,18 +3685,18 @@ def find_company_names_in_text(
     website: str = "",
     gemini_buf: dict | None = None,
 ) -> list[str]:
-    """Gemini → Regex; liefert Kandidaten für den Firmennamen."""
+    """Gemini liefert Kandidaten für den Firmennamen."""
     if not text:
         return []
-    source = _resolve_contact_source_text(
-        text, logger=logger, cache=cache, page_url=page_url, gemini_buf=gemini_buf
+    contacts = _ensure_gemini_page_contacts(
+        text,
+        logger=logger,
+        cache=cache,
+        page_url=page_url,
+        website=website,
+        gemini_buf=gemini_buf,
     )
-    found = _extract_company_names_with_relaxed_regex(source, website)
-    if not found:
-        for name in _extract_company_names_with_relaxed_regex(text, website):
-            if name not in found:
-                found.append(name)
-    return found
+    return list(contacts.get("company_names") or [])
 
 
 def find_company_name_in_text(
@@ -3935,20 +3725,21 @@ def find_phones_in_text(
     logger: logging.Logger | None = None,
     cache: dict | None = None,
     page_url: str = "",
+    website: str = "",
     gemini_buf: dict | None = None,
 ) -> list[str]:
-    """Pipeline: Gemini bereinigt Text → maximal lockeres Regex."""
+    """Gemini extrahiert Telefonnummern; tel:-Links separat in parse_contacts_from_html."""
     if not text:
         return []
-    source = _resolve_contact_source_text(
-        text, logger=logger, cache=cache, page_url=page_url, gemini_buf=gemini_buf
+    contacts = _ensure_gemini_page_contacts(
+        text,
+        logger=logger,
+        cache=cache,
+        page_url=page_url,
+        website=website,
+        gemini_buf=gemini_buf,
     )
-    found = _extract_phones_with_relaxed_regex(source)
-    if not found:
-        for p in _extract_phones_with_relaxed_regex(text):
-            if p not in found:
-                found.append(p)
-    return found
+    return list(contacts.get("phones") or [])
 
 
 def _extract_company_names_from_html(soup: BeautifulSoup, base_url: str) -> list[str]:
@@ -4601,6 +4392,7 @@ def parse_contacts_from_html(
         logger=logger,
         cache=cache,
         page_url=base_url,
+        website=base_url,
         gemini_buf=gemini_buf,
     )
     phones = find_phones_in_text(
@@ -4608,6 +4400,7 @@ def parse_contacts_from_html(
         logger=logger,
         cache=cache,
         page_url=base_url,
+        website=base_url,
         gemini_buf=gemini_buf,
     )
     company_candidates = _extract_company_names_from_html(soup, base_url)
@@ -4627,13 +4420,11 @@ def parse_contacts_from_html(
         href = (a.get("href") or "").strip()
         label = (a.get_text(" ", strip=True) or "").lower()
         if href.startswith("mailto:"):
-            email = _normalize_relaxed_email(
-                href.replace("mailto:", "", 1)
-            )
+            email = _normalize_href_email(href.replace("mailto:", "", 1))
             if email and email not in emails:
                 emails.append(email)
         if href.startswith("tel:"):
-            phone = _normalize_relaxed_phone(href.replace("tel:", "", 1))
+            phone = _normalize_href_phone(href)
             if phone and phone not in phones:
                 phones.append(phone)
         if href.startswith(("mailto:", "tel:", "javascript:", "#")):
@@ -4644,7 +4435,7 @@ def parse_contacts_from_html(
                 contact_urls.append(full)
     contact_urls = merge_contact_subpage_urls(base_url, contact_urls)
     return {
-        "emails": emails,
+        "emails": filter_commercial_emails(emails),
         "phones": phones,
         "company_name": company_name,
         "contact_urls": contact_urls,
@@ -6334,15 +6125,16 @@ def _run_smoke_tests() -> None:
     assert "Mit freundlichen Grüßen" in cleaned
     assert "Kurzer Test" not in body
     assert is_germany_de_candidate("https://firma.de/kontakt", "GU Leipzig", "")
-    assert "@" in prepare_text_for_email_extraction("info (at) example.de")
-    assert find_emails_in_text("Kontakt: name at example.de") == ["name@example.de"]
-    assert find_emails_in_text("info (at) example.de") == ["info@example.de"]
-    assert find_emails_in_text("vertrieb (at) firma (dot) de") == ["vertrieb@firma.de"]
-    assert find_phones_in_text("Tel: +49 341 1234567 und 0341 987654") != []
-    assert "GmbH" in find_company_name_in_text(
-        "Willkommen bei Muster Bau GmbH — Kontakt"
+    from gemini_contact_extract import parse_gemini_contact_extract_response
+
+    parsed_contacts = parse_gemini_contact_extract_response(
+        '{"company_name":"Muster Bau GmbH","emails":["info@example.de"],'
+        '"phones":["+49 341 1234567"],"reason":"ok"}'
     )
-    assert ENABLE_GEMINI_CONTACT_TEXT_CLEANUP is False
+    assert parsed_contacts["emails"] == ["info@example.de"]
+    assert parsed_contacts["phones"]
+    assert "GmbH" in parsed_contacts["company_name"]
+    assert ENABLE_GEMINI_CONTACT_EXTRACTION is True
     assert ENABLE_REGION_PLZ_FILTER is False
     assert len(SERPER_DISCOVERY_TERMS) >= 20
     from gu_bundesland_rotation import (
@@ -6535,9 +6327,11 @@ def _run_smoke_tests() -> None:
                 "email_target": "",
                 "retail_verified": True,
                 "is_gu": True,
+                "is_small_firm": True,
                 "gu_marker": "generalunternehmer",
                 "verification_reason": "referenz_filialbau",
-                "page_snippet": "Generalunternehmer Filialbau Referenzprojekte Supermarkt",
+                "page_snippet": "Generalunternehmer Filialbau Referenzprojekte Aldi Supermarkt",
+                "retail_chains_found": "aldi",
             }
         ]
     )
@@ -6560,11 +6354,13 @@ def _run_smoke_tests() -> None:
     )
     assert not ok_ohne and reason_ohne == "kein_markt_nachweis"
     ok_opis, _, reason_opis = page_mentions_retail_store_projects(
-        "Generalunternehmer Filialbau. Wir realisieren Neubau Supermarkt "
+        "Generalunternehmer Filialbau. Wir realisieren Neubau Aldi Supermarkt "
         "für Discounter — Projektbeschreibung mit Details."
     )
     assert ok_opis and (
-        reason_opis == "markt_referenz_nachweis" or reason_opis.startswith("referenz")
+        reason_opis == "markt_referenz_nachweis"
+        or reason_opis.startswith("referenz")
+        or reason_opis.startswith("kette_")
     )
     ok_nur_ref, _, reason_nur = page_mentions_retail_store_projects(
         "Generalunternehmer Filialbau. Referenzen Hallenbau und Bürobau — keine Supermarktprojekte."

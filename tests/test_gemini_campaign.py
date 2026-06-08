@@ -14,6 +14,10 @@ from gemini_discovery_terms import (
     parse_gemini_term_lines,
     validate_discovery_term,
 )
+from gemini_contact_extract import (
+    normalize_phone_contact,
+    parse_gemini_contact_extract_response,
+)
 from gemini_page_verify import (
     apply_gemini_page_verdict,
     parse_gemini_page_verify_response,
@@ -37,6 +41,22 @@ class GeminiDiscoveryTermsTest(unittest.TestCase):
 
     def test_validate_rejects_bauunternehmen_only(self):
         self.assertFalse(validate_discovery_term("Bauunternehmen Gewerbebau Hannover"))
+
+
+class GeminiContactExtractTest(unittest.TestCase):
+    def test_parse_contact_json(self):
+        raw = (
+            '{"company_name": "Bau GmbH", "emails": ["info@bau.de", "x@11880.de"], '
+            '"phones": ["+49 231 1234567"], "reason": "Impressum"}'
+        )
+        parsed = parse_gemini_contact_extract_response(raw)
+        self.assertEqual(parsed["company_name"], "Bau GmbH")
+        self.assertIn("info@bau.de", parsed["emails"])
+        self.assertNotIn("x@11880.de", parsed["emails"])
+        self.assertTrue(parsed["phones"])
+
+    def test_normalize_phone_rejects_year(self):
+        self.assertEqual(normalize_phone_contact("2024"), "")
 
 
 class GeminiPageVerifyTest(unittest.TestCase):

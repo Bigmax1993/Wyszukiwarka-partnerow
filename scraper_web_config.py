@@ -3,7 +3,7 @@
 Wspólna konfiguracja dla wszystkich scraperów w „Automatyczna wyszukiwarka…”.
 
 Strony www: requests + BeautifulSoup; baner cookie — Playwright (DE: „Alle akzeptieren” itd.).
-Gemini nie wybiera e-maili ze stron ani nie „czyści” rekordów z HTML.
+Kontakty www: Gemini ekstrahuje e-mail/telefon/firmę (bez regex na tekście strony).
 """
 from __future__ import annotations
 
