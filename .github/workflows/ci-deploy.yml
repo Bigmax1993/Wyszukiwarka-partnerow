@@ -31,12 +31,13 @@ jobs:
       - name: Validate secrets (presence only)
         env:
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          GOOGLE_AI_STUDIO_API_KEY: ${{ secrets.GOOGLE_AI_STUDIO_API_KEY }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
         run: |
           python -c "
           import os, sys
-          missing = [k for k in ('SERPER_API_KEY','MAIL_USER','MAIL_PASSWORD') if not (os.environ.get(k) or '').strip()]
+          missing = [k for k in ('SERPER_API_KEY','GOOGLE_AI_STUDIO_API_KEY','MAIL_USER','MAIL_PASSWORD') if not (os.environ.get(k) or '').strip()]
           if missing:
               print('MISSING SECRETS:', ', '.join(missing))
               sys.exit(1)

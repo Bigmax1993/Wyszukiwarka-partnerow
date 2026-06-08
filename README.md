@@ -1,135 +1,271 @@
-﻿# Wyszukiwarka partnerów — kampania GU (bundesweit)
-
-Repozytorium: [Bigmax1993/Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwarka-partnerow) (private)
-
-Pipeline: **Serper → strony www → cache/Excel → maile MFG** (Generalunternehmer / Filialbau DE).
-
-| Moduł | Plik |
-|-------|------|
-| Scraper | `de_gu_bauunternehmen_scraper.py` |
-| Frazy per Bundesland | `de_gu_keywords.py` |
-| Rotacja landów | `gu_bundesland_rotation.py` |
-| Treść maila DE | `mfg_gu_inquiry_email_de.py` |
-| Załącznik PPTX | `mfg_gu_email_attachment.py` |
-
-## Szybki start (lokalnie)
-
-```powershell
-git clone https://github.com/Bigmax1993/Wyszukiwarka-partnerow.git
-cd Wyszukiwarka-partnerow
-pip install -r requirements.txt
-$env:KANBUD_PROJECT_ROOT = "$PWD\libs"
-python de_gu_bauunternehmen_scraper.py --test
-```
-
-Pełna bateria testów:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1
-```
-
-## Wyniki
-
-| Plik / folder | Opis |
-|---------------|------|
-| `Wyniki/de_gu_bauunternehmen_cache.json` | Cache Serper + kontakty (kumulacja tygodniowa) |
-| `Wyniki/de_gu_bauunternehmen_kontakte.xlsx` | Excel — nowe firmy dopisywane przy każdym runie |
-| `Wyniki/de_gu_bauunternehmen_scraper.log` | Log |
-| `Wyniki/de_gu_bundeslaender_rotation.json` | Stan rotacji Bundesland |
-| `wyslane/` | Kopie wysłanych maili (.eml) |
-
-**Google Drive:** [folder wyników GU](https://drive.google.com/drive/folders/1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf) — [`docs/GOOGLE_DRIVE.md`](docs/GOOGLE_DRIVE.md)
-
-## Uruchomienie scrapera
-
-```powershell
-$env:KANBUD_PROJECT_ROOT = "$PWD\libs"
-
-python de_gu_bauunternehmen_scraper.py --test
-python de_gu_bauunternehmen_scraper.py --rotate-bundesland
-python de_gu_bauunternehmen_scraper.py --rotation-status
-python de_gu_bauunternehmen_scraper.py --backfill-emails-from-cache
-python de_gu_bauunternehmen_scraper.py --rebuild-from-cache
-python de_gu_bauunternehmen_scraper.py --send-emails-only
-python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only
-```
-
-### Rotacja Bundesland (domyślnie — 1 land / sobota)
-
-```powershell
-python de_gu_bauunternehmen_scraper.py --rotate-bundesland
-```
-
-Kolejność 16 landów: NRW → Bayern → BW → Niedersachsen → Hessen → Sachsen → … (cykl w `gu_bundesland_rotation.py`).
-
-### Ręcznie wiele landów
-
-```powershell
-python de_gu_bauunternehmen_scraper.py --bundesland NRW,BY,BW
-python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.json
-```
-
-## Limity
-
-| Limit | Wartość |
-|-------|---------|
-| Serper | 300 zapytań / dzień |
-| E-mail | 300 / dzień kalendarzowy, 2 / domena / dzień |
-| 1 Bundesland / tydzień | ~40–60 fraz Serper (mieści się w 1 sobotę) |
-
-## Harmonogram 5 dni
-
-Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
-
-| Dzień | Godzina (PL) | PC | GitHub Actions |
-|-------|--------------|-----|----------------|
-| **Sobota** | 20:10 | `run_sroda.ps1` | `GU sobota discovery` |
-| **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` |
-| **Poniedziałek** | 08:00 | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
-| **Poniedziałek** | **12:00** | `run_poniedzialek_send.ps1` | `GU poniedzialek send` (partia 1) |
-| **Wtorek** | **09:00** | `run_wtorek.ps1` | `GU wtorek send` (partia 2) |
-
-Task Scheduler:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File schedule\register_tasks_5_dni.ps1
-```
-
-Pełny pipeline na GitHub Actions (ręcznie):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -ForceResend
-```
-
-## GitHub Actions
-
-[`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md)
-
-| Secret | Wymagany | Opis |
-|--------|----------|------|
-| `SERPER_API_KEY` | tak (discovery) | API Serper |
-| `MAIL_USER`, `MAIL_PASSWORD` | tak (pon+wt) | SMTP + IMAP |
-| `GDRIVE_OAUTH_*` | zalecany | Upload wyników na „Mój dysk” |
-| `GDRIVE_SERVICE_ACCOUNT_JSON` | opcjonalny | Konto usługi (Shared Drive) |
-
-## Maile MFG
-
-- Treść: `mfg_gu_inquiry_email_de.py` (tylko niemiecki)
-- Załącznik: [Google Slides](https://docs.google.com/presentation/d/1Q66gIF_Y6R7r98NYzo2dtQy0Jr_K8mTl/edit) → PPTX (`mfg_gu_email_attachment.py`)
-- Na GitHub Actions: `assets/campaign/MFG_Referenzliste_Einzelhandel.pptx` (podmień po zmianie Slides)
-- Cc: tylko z `MAIL_CC` w `.env` — **bez** automatycznego `office@mfg-fliesen.de`
-
-## Struktura repo
-
-```
-├── de_gu_bauunternehmen_scraper.py
-├── gu_bundesland_rotation.py
-├── libs/
-├── schedule/           # PLAN_5_DNI.md, register_tasks_5_dni.ps1
-├── run_config/
-├── assets/campaign/    # PPTX na runnerze GitHub
-├── scripts/            # gdrive_*, run_full_pipeline_gha.ps1, RUN_ALL_TESTS.ps1
-├── .github/workflows/
-└── docs/
-```
-
+﻿# Wyszukiwarka partnerów — kampania GU (bundesweit)
+
+
+
+Repozytorium: [Bigmax1993/Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwarka-partnerow) (private)
+
+
+
+Pipeline: **Serper → strony www → cache/Excel → maile MFG** (Generalunternehmer / Filialbau DE).
+
+
+
+| Moduł | Plik |
+
+|-------|------|
+
+| Scraper | `de_gu_bauunternehmen_scraper.py` |
+
+| Frazy per Bundesland | `de_gu_keywords.py` |
+
+| Rotacja landów | `gu_bundesland_rotation.py` |
+
+| Treść maila DE | `mfg_gu_inquiry_email_de.py` |
+
+| Załącznik PPTX | `mfg_gu_email_attachment.py` |
+
+
+
+## Szybki start (lokalnie)
+
+
+
+```powershell
+
+git clone https://github.com/Bigmax1993/Wyszukiwarka-partnerow.git
+
+cd Wyszukiwarka-partnerow
+
+pip install -r requirements.txt
+
+$env:KANBUD_PROJECT_ROOT = "$PWD\libs"
+
+python de_gu_bauunternehmen_scraper.py --test
+
+```
+
+
+
+Pełna bateria testów:
+
+
+
+```powershell
+
+powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1
+
+```
+
+
+
+## Wyniki
+
+
+
+| Plik / folder | Opis |
+
+|---------------|------|
+
+| `Wyniki/de_gu_bauunternehmen_cache.json` | Cache Serper + kontakty (kumulacja tygodniowa) |
+
+| `Wyniki/de_gu_bauunternehmen_kontakte.xlsx` | Excel — nowe firmy dopisywane przy każdym runie |
+
+| `Wyniki/de_gu_bauunternehmen_scraper.log` | Log |
+
+| `Wyniki/de_gu_bundeslaender_rotation.json` | Stan rotacji Bundesland |
+
+| `wyslane/` | Kopie wysłanych maili (.eml) |
+
+
+
+**Google Drive:** [folder wyników GU](https://drive.google.com/drive/folders/1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf) — [`docs/GOOGLE_DRIVE.md`](docs/GOOGLE_DRIVE.md)
+
+
+
+## Uruchomienie scrapera
+
+
+
+```powershell
+
+$env:KANBUD_PROJECT_ROOT = "$PWD\libs"
+
+
+
+python de_gu_bauunternehmen_scraper.py --test
+
+python de_gu_bauunternehmen_scraper.py --rotate-bundesland
+
+python de_gu_bauunternehmen_scraper.py --rotation-status
+
+python de_gu_bauunternehmen_scraper.py --backfill-emails-from-cache
+
+python de_gu_bauunternehmen_scraper.py --rebuild-from-cache
+
+python de_gu_bauunternehmen_scraper.py --send-emails-only
+
+python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only
+
+```
+
+
+
+### Rotacja Bundesland (domyślnie — 1 land / sobota)
+
+
+
+```powershell
+
+python de_gu_bauunternehmen_scraper.py --rotate-bundesland
+
+```
+
+
+
+Kolejność 16 landów: NRW → Bayern → BW → Niedersachsen → Hessen → Sachsen → … (cykl w `gu_bundesland_rotation.py`).
+
+
+
+### Ręcznie wiele landów
+
+
+
+```powershell
+
+python de_gu_bauunternehmen_scraper.py --bundesland NRW,BY,BW
+
+python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.json
+
+```
+
+
+
+## Limity
+
+
+
+| Limit | Wartość |
+
+|-------|---------|
+
+| Serper | 300 zapytań / dzień |
+
+| E-mail | 300 / dzień kalendarzowy, 2 / domena / dzień |
+
+| 1 Bundesland / tydzień | ~40–60 fraz Serper (mieści się w 1 sobotę) |
+
+
+
+## Harmonogram 5 dni
+
+
+
+Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
+
+
+
+| Dzień | Godzina (PL) | PC | GitHub Actions |
+
+|-------|--------------|-----|----------------|
+
+| **Sobota** | 20:10 | `run_sroda.ps1` | `GU sobota discovery` |
+
+| **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` |
+
+| **Poniedziałek** | 08:00 | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
+
+| **Poniedziałek** | **12:00** | `run_poniedzialek_send.ps1` | `GU poniedzialek send` (partia 1) |
+
+| **Wtorek** | **09:00** | `run_wtorek.ps1` | `GU wtorek send` (partia 2) |
+
+
+
+Task Scheduler:
+
+
+
+```powershell
+
+powershell -ExecutionPolicy Bypass -File schedule\register_tasks_5_dni.ps1
+
+```
+
+
+
+Pełny pipeline na GitHub Actions (ręcznie):
+
+
+
+```powershell
+
+powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -ForceResend
+
+```
+
+
+
+## GitHub Actions
+
+
+
+[`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md)
+
+
+
+| Secret | Wymagany | Opis |
+
+|--------|----------|------|
+
+| `SERPER_API_KEY` | tak (discovery) | API Serper |
+
+| `GOOGLE_AI_STUDIO_API_KEY` | tak (discovery + backfill) | Gemini: frazy Serper + weryfikacja www |
+
+| `MAIL_USER`, `MAIL_PASSWORD` | tak (pon+wt) | SMTP + IMAP |
+
+| `GDRIVE_OAUTH_*` | zalecany | Upload wyników na „Mój dysk” |
+
+| `GDRIVE_SERVICE_ACCOUNT_JSON` | opcjonalny | Konto usługi (Shared Drive) |
+
+
+
+## Maile MFG
+
+
+
+- Treść: `mfg_gu_inquiry_email_de.py` (tylko niemiecki)
+
+- Załącznik: [Google Slides](https://docs.google.com/presentation/d/1Q66gIF_Y6R7r98NYzo2dtQy0Jr_K8mTl/edit) → PPTX (`mfg_gu_email_attachment.py`)
+
+- Na GitHub Actions: `assets/campaign/MFG_Referenzliste_Einzelhandel.pptx` (podmień po zmianie Slides)
+
+- Cc: tylko z `MAIL_CC` w `.env` — **bez** automatycznego `office@mfg-fliesen.de`
+
+
+
+## Struktura repo
+
+
+
+```
+
+├── de_gu_bauunternehmen_scraper.py
+
+├── gu_bundesland_rotation.py
+
+├── libs/
+
+├── schedule/           # PLAN_5_DNI.md, register_tasks_5_dni.ps1
+
+├── run_config/
+
+├── assets/campaign/    # PPTX na runnerze GitHub
+
+├── scripts/            # gdrive_*, run_full_pipeline_gha.ps1, RUN_ALL_TESTS.ps1
+
+├── .github/workflows/
+
+└── docs/
+
+```
+
+

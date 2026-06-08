@@ -72,6 +72,8 @@ Wysyłka w oknie **8–18** czasu berlińskiego (bez `DISABLE_SEND_WINDOW` w wor
 
 | `SERPER_API_KEY` | discovery | API Serper |
 
+| `GOOGLE_AI_STUDIO_API_KEY` | discovery + backfill | Gemini: frazy Serper (sobota) + weryfikacja www (niedziela) |
+
 | `MAIL_USER` | pon+wt send | Login SMTP |
 
 | `MAIL_PASSWORD` | pon+wt send | Hasło SMTP / IMAP |
