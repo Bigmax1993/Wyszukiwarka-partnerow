@@ -2,7 +2,7 @@
   "config_type": "de_gu_filialbau",
   "campaign_id": "mfg_gu_de",
   "lang": "de",
-  "active_bundeslaender": ["Bayern"],
+  "active_bundeslaender": ["Niedersachsen"],
   "min_contacts_target": 20,
   "require_generalunternehmer": true,
   "enable_auto_email": false,
@@ -11,5 +11,6 @@
   "gemini_discovery_max_rounds": 3,
   "gemini_discovery_terms_per_round": 8,
   "serper_discovery_reserve": 50,
-  "gemini_discovery_min_gain": 1
+  "gemini_discovery_min_gain": 1,
+  "gemini_discovery_cache_days": 7
 }

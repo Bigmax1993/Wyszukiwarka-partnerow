@@ -76,7 +76,7 @@ CAMPAIGN_ACTIVE_BUNDESLAENDER = list(_KW_ACTIVE_BL)
 
 
 def apply_gu_run_config_extras(module, data: dict) -> None:
-    """run_config.json: active_bundeslaender, min_contacts_target."""
+    """run_config.json: landy, limity, Gemini discovery/verify."""
     if data.get("active_bundeslaender"):
         lands = data["active_bundeslaender"]
         if isinstance(lands, str):
@@ -87,6 +87,33 @@ def apply_gu_run_config_extras(module, data: dict) -> None:
             module.MIN_CONTACTS_TARGET = int(data["min_contacts_target"])
         except (TypeError, ValueError):
             pass
+    _bool_keys = (
+        "enable_gemini_discovery_terms",
+        "enable_gemini_page_verify",
+        "require_generalunternehmer",
+    )
+    for key in _bool_keys:
+        if key in data:
+            attr = key.upper()
+            if hasattr(module, attr):
+                setattr(module, attr, bool(data[key]))
+    if "require_generalunternehmer" in data:
+        rsf = getattr(module, "_retail_store_builder_filter", None)
+        if rsf is not None:
+            rsf.REQUIRE_GENERALUNTERNEHMER = bool(data["require_generalunternehmer"])
+    _int_keys = (
+        ("gemini_discovery_max_rounds", "GEMINI_DISCOVERY_MAX_ROUNDS"),
+        ("gemini_discovery_terms_per_round", "GEMINI_DISCOVERY_TERMS_PER_ROUND"),
+        ("serper_discovery_reserve", "SERPER_DISCOVERY_RESERVE"),
+        ("gemini_discovery_min_gain", "GEMINI_DISCOVERY_MIN_GAIN"),
+        ("gemini_discovery_cache_days", "GEMINI_DISCOVERY_CACHE_DAYS"),
+    )
+    for json_key, attr in _int_keys:
+        if json_key in data and hasattr(module, attr):
+            try:
+                setattr(module, attr, int(data[json_key]))
+            except (TypeError, ValueError):
+                pass
 
 
 import csv
@@ -408,6 +435,13 @@ REQUIRE_WEBSITE_RETAIL_VERIFICATION = True
 REQUIRE_WEBSITE_REFERENCES_OR_PORTFOLIO = False
 REQUIRE_MARKET_PROJECTS_IN_PORTFOLIO = False
 ENABLE_GEMINI_RETAIL_VERIFICATION = False
+ENABLE_GEMINI_PAGE_VERIFY = True
+ENABLE_GEMINI_DISCOVERY_TERMS = True
+GEMINI_DISCOVERY_MAX_ROUNDS = 3
+GEMINI_DISCOVERY_TERMS_PER_ROUND = 8
+SERPER_DISCOVERY_RESERVE = 50
+GEMINI_DISCOVERY_MIN_GAIN = 1
+GEMINI_DISCOVERY_CACHE_DAYS = 7
 MAX_PAGES_FOR_RETAIL_VERIFICATION = 8
 ENABLE_SERPER_PLACES_ENDPOINT = True
 LARGE_COMPANY_DOMAINS = frozenset(
@@ -2022,7 +2056,26 @@ def new_discovery_funnel() -> dict:
         "filtered_large_serper": 0,
         "pending_saved": 0,
         "rejected_excel": 0,
+        "gemini_rounds": 0,
+        "gemini_terms": 0,
     }
+
+
+def _record_serper_term_stat(
+    cache: dict,
+    term: str,
+    label: str,
+    *,
+    raw_hits: int = 0,
+    pending_added: int = 0,
+) -> None:
+    stats = cache.setdefault("serper_term_stats", {})
+    key = f"{label}:{term}"
+    entry = stats.setdefault(
+        key, {"term": term, "source": label, "raw": 0, "pending": 0}
+    )
+    entry["raw"] = int(entry.get("raw", 0)) + int(raw_hits)
+    entry["pending"] = int(entry.get("pending", 0)) + int(pending_added)
 
 
 def log_discovery_funnel(funnel: dict, logger: logging.Logger) -> None:
@@ -2030,7 +2083,8 @@ def log_discovery_funnel(funnel: dict, logger: logging.Logger) -> None:
         "[LEjek] serper_queries={serper_queries} | api_zero={api_zero_terms} | "
         "raw_hits={raw_hits} | filtered_serper={filtered_serper} | "
         "filtered_large={filtered_large_serper} | pending_saved={pending_saved} | "
-        "rejected_excel={rejected_excel}"
+        "rejected_excel={rejected_excel} | gemini_rounds={gemini_rounds} | "
+        "gemini_terms={gemini_terms}"
     ).format(**funnel)
     console_step(msg)
     logger.info(msg)
@@ -2500,6 +2554,132 @@ def gemini_verify_retail_small_company(
     return out
 
 
+def _needs_gemini_discovery_supplement(
+    all_rows: list,
+    cache: dict,
+    rotation_land: str | None,
+    total_new_rows: int,
+    *,
+    rotate_mode: bool,
+    serper_only: bool,
+) -> bool:
+    if rotate_mode and serper_only:
+        pending = count_pending_for_bundesland(all_rows, cache, rotation_land or "")
+        return pending < MIN_CONTACTS_TARGET
+    return not _discovery_target_reached(
+        all_rows, total_new_rows=total_new_rows, rotate_mode=rotate_mode
+    )
+
+
+def _run_gemini_discovery_supplement(
+    all_rows: list,
+    cache: dict,
+    logger: logging.Logger,
+    rotation_land: str | None,
+    serper_kw: dict,
+    funnel: dict | None,
+) -> tuple[int, bool]:
+    from gemini_discovery_terms import generate_gemini_discovery_terms
+
+    total_new_rows = int(serper_kw.get("total_new_rows") or 0)
+    stop_requested = bool(serper_kw.get("stop_requested"))
+    rotate_mode = bool(serper_kw.get("rotate_mode"))
+    serper_only = bool(serper_kw.get("serper_only"))
+    api_key = get_google_ai_studio_api_key()
+
+    if not ENABLE_GEMINI_DISCOVERY_TERMS or not api_key or is_gemini_rate_limited(cache):
+        return total_new_rows, stop_requested
+
+    lands = [rotation_land] if rotation_land else list(CAMPAIGN_ACTIVE_BUNDESLAENDER)
+    used_terms: list[str] = []
+
+    for round_n in range(1, GEMINI_DISCOVERY_MAX_ROUNDS + 1):
+        if stop_requested:
+            break
+        if not _needs_gemini_discovery_supplement(
+            all_rows,
+            cache,
+            rotation_land,
+            total_new_rows,
+            rotate_mode=rotate_mode,
+            serper_only=serper_only,
+        ):
+            break
+
+        _, _, remaining = get_remaining_daily_serper_limit(cache)
+        if remaining <= SERPER_DISCOVERY_RESERVE:
+            console_step(
+                f"Gemini discovery: rezerwa Serper ({remaining} <= "
+                f"{SERPER_DISCOVERY_RESERVE})"
+            )
+            break
+
+        pending_before = count_pending_for_bundesland(
+            all_rows, cache, rotation_land or ""
+        )
+
+        terms = generate_gemini_discovery_terms(
+            cache,
+            logger,
+            [l for l in lands if l],
+            gemini_generate_text=gemini_generate_text,
+            api_key=api_key,
+            terms_requested=GEMINI_DISCOVERY_TERMS_PER_ROUND,
+            cache_days=GEMINI_DISCOVERY_CACHE_DAYS,
+            use_cache=(round_n == 1),
+            exclude_terms=used_terms,
+        )
+        if not terms:
+            console_step("Gemini discovery: brak nowych fraz po walidacji")
+            break
+
+        budget = min(
+            len(terms),
+            GEMINI_DISCOVERY_TERMS_PER_ROUND,
+            max(0, remaining - SERPER_DISCOVERY_RESERVE),
+        )
+        if budget <= 0:
+            break
+
+        batch = terms[:budget]
+        used_terms.extend(batch)
+        if funnel is not None:
+            funnel["gemini_rounds"] = funnel.get("gemini_rounds", 0) + 1
+            funnel["gemini_terms"] = funnel.get("gemini_terms", 0) + len(batch)
+
+        console_step(
+            f"Gemini discovery runda {round_n}: {len(batch)} fraz → Serper"
+        )
+        proc_kw = {
+            k: v
+            for k, v in serper_kw.items()
+            if k not in ("total_new_rows", "stop_requested", "funnel")
+        }
+        total_new_rows, stop_requested = _process_serper_terms(
+            batch,
+            f"gemini-r{round_n}",
+            funnel=funnel,
+            total_new_rows=total_new_rows,
+            stop_requested=stop_requested,
+            **proc_kw,
+        )
+        serper_kw["total_new_rows"] = total_new_rows
+        serper_kw["stop_requested"] = stop_requested
+
+        pending_after = count_pending_for_bundesland(
+            all_rows, cache, rotation_land or ""
+        )
+        gain = pending_after - pending_before
+        console_step(f"Gemini discovery runda {round_n}: +{gain} pending")
+        if gain < GEMINI_DISCOVERY_MIN_GAIN:
+            console_step(
+                f"Gemini discovery: zysk +{gain} < {GEMINI_DISCOVERY_MIN_GAIN}, stop"
+            )
+            break
+
+    return total_new_rows, stop_requested
+
+
 def _finalize_verification_result(result: dict, blob: str) -> dict:
     gu_ok, gu_marker = is_generalunternehmer(blob)
     result["is_gu"] = gu_ok
@@ -2543,6 +2723,40 @@ def verify_company_on_website(
             },
             blob,
         )
+
+    if ENABLE_GEMINI_PAGE_VERIFY:
+        from gemini_page_verify import gemini_verify_company_page
+
+        api_key = get_google_ai_studio_api_key()
+        if api_key and not is_gemini_rate_limited(cache):
+            gem = gemini_verify_company_page(
+                company_name,
+                website,
+                page_text,
+                logger,
+                cache,
+                gemini_generate_text=gemini_generate_text,
+                api_key=api_key,
+                cache_key=cache_key or website,
+                serper_blob=serper_blob,
+                require_generalunternehmer=REQUIRE_GENERALUNTERNEHMER,
+            )
+            if gem is not None:
+                small_hint = any(m in blob.lower() for m in SMALL_COMPANY_PAGE_MARKERS)
+                return _finalize_verification_result(
+                    {
+                        "verified": gem.get("verified", False),
+                        "is_small_firm": small_hint or not large,
+                        "retail_chains": gem.get("retail_chains") or [],
+                        "verification_reason": gem.get("verification_reason", "gemini"),
+                        "verification_method": "gemini_profile",
+                        "pages_checked": pages_checked,
+                        "page_snippet": _truncate_page_snippet(page_text),
+                        "is_gu": gem.get("is_gu", False),
+                        "gu_marker": gem.get("gu_marker", ""),
+                    },
+                    blob,
+                )
 
     if _is_small_ladenbau_specialist(company_name, website, page_text):
         chains = detect_retail_chains_in_text(page_text)
@@ -5050,6 +5264,14 @@ def _process_serper_terms(
             if max_new_rows is not None and total_new_rows >= max_new_rows:
                 stop_requested = True
             persist_progress(all_rows, cache, logger, reason=f"serper +{total_new_rows}")
+        pending_added = added if serper_only else 0
+        _record_serper_term_stat(
+            cache,
+            term,
+            label,
+            raw_hits=len(rows),
+            pending_added=pending_added,
+        )
         suffix = f", odświeżono {refreshed}" if refreshed else ""
         print(f"{term}: +{added}{suffix}")
         persist_progress(all_rows, cache, logger, reason=f"Ende {term}")
@@ -5267,6 +5489,31 @@ def run_scraper(
                     apply_distance_filter=False,
                     use_places_endpoint=True,
                     **serper_kw,
+                )
+            if (
+                not stop_requested
+                and ENABLE_GEMINI_DISCOVERY_TERMS
+                and _needs_gemini_discovery_supplement(
+                    all_rows,
+                    cache,
+                    rotation_land,
+                    total_new_rows,
+                    rotate_mode=rotate_mode,
+                    serper_only=serper_only,
+                )
+            ):
+                console_step(
+                    "Za mało wyników po szablonach — uzupełnienie Gemini → Serper"
+                )
+                serper_kw["total_new_rows"] = total_new_rows
+                serper_kw["stop_requested"] = stop_requested
+                total_new_rows, stop_requested = _run_gemini_discovery_supplement(
+                    all_rows,
+                    cache,
+                    logger,
+                    rotation_land,
+                    serper_kw,
+                    funnel,
                 )
             if rotate_mode and not _discovery_target_reached(
                 all_rows, total_new_rows=total_new_rows, rotate_mode=True

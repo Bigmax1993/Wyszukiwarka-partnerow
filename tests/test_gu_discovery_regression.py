@@ -241,6 +241,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             )
         )
 
+    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_small_ladenbau_path_requires_gu(self, mock_gather):
         mock_gather.return_value = (
@@ -258,6 +259,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
         self.assertTrue(result["is_small_firm"])
         self.assertTrue(result["is_gu"])
 
+    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_rejects_ladenbau_without_gu(self, mock_gather):
         mock_gather.return_value = (
@@ -276,6 +278,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             ("kein_generalunternehmer", "kein_gu_filialbau_kontext"),
         )
 
+    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_rejects_large_konzern(self, mock_gather):
         mock_gather.return_value = (
