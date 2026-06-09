@@ -30,7 +30,7 @@
   "enable_auto_email": false,
   "enable_gemini_discovery_terms": false,
   "enable_gemini_page_verify": false,
-  "enable_gemini_contact_extraction": true,
+  "enable_gemini_contact_extraction": false,
   "enable_gemini_row_cleanup": true,
   "gemini_discovery_max_rounds": 5,
   "gemini_discovery_terms_per_round": 12,

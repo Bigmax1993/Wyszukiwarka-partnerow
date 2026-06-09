@@ -3,7 +3,7 @@
 Wspólna konfiguracja dla wszystkich scraperów w „Automatyczna wyszukiwarka…”.
 
 Strony www: requests + BeautifulSoup; baner cookie — Playwright (DE: „Alle akzeptieren” itd.).
-Kontakty www: parse → Gemini → regex. Przed Excelem: Gemini row cleanup.
+Kontakty www: regex + mailto (bez Gemini przy ekstrakcji e-maili). Przed Excelem: Gemini row cleanup.
 """
 from __future__ import annotations
 

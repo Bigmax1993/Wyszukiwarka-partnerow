@@ -58,6 +58,17 @@ class GeminiContactExtractTest(unittest.TestCase):
     def test_normalize_phone_rejects_year(self):
         self.assertEqual(normalize_phone_contact("2024"), "")
 
+    def test_find_emails_uses_regex_only(self):
+        import de_gu_bauunternehmen_scraper as scraper
+        from unittest.mock import patch
+
+        with patch.object(scraper, "_ensure_gemini_page_contacts") as mock_gemini:
+            found = scraper.find_emails_in_text(
+                "Kontakt: info@beispiel-bau.de Impressum"
+            )
+            mock_gemini.assert_not_called()
+        self.assertIn("info@beispiel-bau.de", found)
+
 
 class GeminiPageVerifyTest(unittest.TestCase):
     def test_parse_json_response(self):

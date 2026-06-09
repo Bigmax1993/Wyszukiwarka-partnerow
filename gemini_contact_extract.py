@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Ekstrakcja kontaktów po parse HTML: Gemini z tekstu strony, potem regex w scraperze.
-Wyłącz ENABLE_GEMINI_CONTACT_EXTRACTION → sam regex (fallback).
+Moduł Gemini do opcjonalnej ekstrakcji kontaktów (wyłączone w GU — scraper używa regex).
 """
 from __future__ import annotations
 

@@ -35,8 +35,8 @@ from scraper_web_config import (
     ENABLE_PLAYWRIGHT_COOKIE_CONSENT,
 )
 
-# Kontakte www: parse → Gemini → regex (mailto:/tel: jako uzupełnienie po Gemini)
-ENABLE_GEMINI_CONTACT_EXTRACTION = True
+# Kontakte www: e-maile tylko regex + mailto: (bez Gemini — unikamy 429 przy backfillu)
+ENABLE_GEMINI_CONTACT_EXTRACTION = False
 GEMINI_CONTACT_EXTRACT_MAX_INPUT_CHARS = 10_000
 from playwright_cookie_consent import apply_playwright_cookie_fallback
 from de_gu_keywords import (
@@ -3823,25 +3823,13 @@ def find_emails_in_text(
     gemini_buf: dict | None = None,
 ) -> list[str]:
     """
-    Po parse: Gemini z tekstu strony, potem regex tylko gdy Gemini puste/wyłączone/429.
-    Ostateczny filter_commercial_emails w parse_contacts_from_html.
+    E-maile z tekstu strony — wyłącznie regex (deobfuskacja at/punkt).
+    mailto: osobno w parse_contacts_from_html; filter_commercial_emails na końcu.
     """
+    _ = logger, cache, page_url, website, gemini_buf
     if not text:
         return []
-    emails: list[str] = []
-    if ENABLE_GEMINI_CONTACT_EXTRACTION and logger is not None:
-        contacts = _ensure_gemini_page_contacts(
-            text,
-            logger=logger,
-            cache=cache,
-            page_url=page_url,
-            website=website,
-            gemini_buf=gemini_buf,
-        )
-        emails = list(contacts.get("emails") or [])
-    if not emails:
-        emails = _find_emails_in_text_regex(text)
-    return emails
+    return _find_emails_in_text_regex(text)
 
 
 _COMPANY_LEGAL_SUFFIX = _COMPANY_LEGAL_FORM_PATTERN
@@ -4593,8 +4581,8 @@ def parse_contacts_from_html(
     cache: dict | None = None,
 ) -> dict:
     """
-    Kontakty: 1) parse HTML→text  2) Gemini z tekstu  3) mailto/tel z DOM
-    4) regex/normalizacja (filter_commercial_emails) — ostatni krok.
+    Kontakty: 1) parse HTML→text  2) regex e-mail/tel z tekstu  3) mailto/tel z DOM
+    4) filter_commercial_emails — ostatni krok (bez Gemini).
     """
     soup = BeautifulSoup(html or "", "html.parser")
     page_text = extract_html_text_with_media_hints(soup)
@@ -6342,7 +6330,7 @@ def _run_smoke_tests() -> None:
     assert parsed_contacts["emails"] == ["info@example.de"]
     assert parsed_contacts["phones"]
     assert "GmbH" in parsed_contacts["company_name"]
-    assert ENABLE_GEMINI_CONTACT_EXTRACTION is True
+    assert ENABLE_GEMINI_CONTACT_EXTRACTION is False
     assert ENABLE_GEMINI_ROW_CLEANUP is True
     assert ENABLE_GEMINI_PAGE_VERIFY is False
     assert ENABLE_GEMINI_DISCOVERY_TERMS is False
