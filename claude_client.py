@@ -13,7 +13,8 @@ from scraper_env import get_anthropic_api_key, get_env_value
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+# claude-sonnet-4-20250514 wycofany ~15.06.2026 → 404 na API
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 CLAUDE_REQUEST_TIMEOUT = 120
 CLAUDE_MIN_INTERVAL_SECONDS = 1.2
 CLAUDE_DAILY_LIMIT = 3000
