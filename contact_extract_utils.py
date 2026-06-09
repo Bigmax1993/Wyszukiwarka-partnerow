@@ -21,6 +21,8 @@ def normalize_email_contact(raw: str) -> str:
     local, domain = local.strip(), domain.strip().rstrip(".")
     if not local or not domain or "." not in domain:
         return ""
+    if len(local) < 1 or len(local) > 50:
+        return ""
     return f"{local}@{domain}"
 
 

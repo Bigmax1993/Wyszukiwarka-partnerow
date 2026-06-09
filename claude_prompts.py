@@ -322,6 +322,7 @@ REGELN (streng)
 • mailto:-Links und sichtbare @-Adressen zählen.
 • Telefon: deutsche Nummern (+49 oder 0…), keine Fax-Zeilen wenn eine normale Tel.-Zeile existiert.
 • Keine Portale (11880, GelbeSeiten), keine noreply/no-reply, keine PDF-Viewer-Adressen.
+• Local-Part (vor @): 1–50 Zeichen — längere Adressen ignorieren.
 • Wenn nichts gefunden: leere Listen.
 
 OUTPUT (nur JSON, kein Markdown)

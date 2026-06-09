@@ -118,13 +118,16 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
         self.assertIn("OK GmbH", text)
         self.assertEqual(cache["claude_daily"]["2099-01-01"], cc.CLAUDE_DAILY_LIMIT)
 
-    def test_wide_email_regex_40_chars(self):
+    def test_wide_email_regex_50_chars_local(self):
         import de_gu_bauunternehmen_scraper as scraper
 
-        local = "a" * 40
+        local = "a" * 50
         email = f"{local}@example.de"
         found = scraper._find_emails_in_text_regex(f"Kontakt: {email}")
         self.assertIn(email.lower(), found)
+        too_long = f"{'b' * 51}@example.de"
+        found_long = scraper._find_emails_in_text_regex(f"Kontakt: {too_long}")
+        self.assertNotIn(too_long.lower(), found_long)
 
     def test_row_cleanup_claude_then_regex(self):
         import de_gu_bauunternehmen_scraper as scraper

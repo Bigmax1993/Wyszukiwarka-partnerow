@@ -3789,11 +3789,14 @@ def _normalize_href_phone(raw: str) -> str:
 
 
 CONTACT_DATA_TOKEN_MAX = 40
-CONTACT_EMAIL_TOKEN_MAX = CONTACT_DATA_TOKEN_MAX
+CONTACT_EMAIL_LOCAL_MIN = 1
+CONTACT_EMAIL_LOCAL_MAX = 50
+CONTACT_EMAIL_DOMAIN_LABEL_MAX = 50
+CONTACT_EMAIL_TOKEN_MAX = CONTACT_EMAIL_LOCAL_MAX
 _PAGE_EMAIL_RE = re.compile(
-    rf"[a-z0-9._%+\-]{{1,{CONTACT_DATA_TOKEN_MAX}}}@"
-    rf"[a-z0-9.\-]{{1,{CONTACT_DATA_TOKEN_MAX}}}\."
-    rf"[a-z0-9\-]{{2,{CONTACT_DATA_TOKEN_MAX}}}",
+    rf"[a-z0-9._%+\-]{{{CONTACT_EMAIL_LOCAL_MIN},{CONTACT_EMAIL_LOCAL_MAX}}}@"
+    rf"[a-z0-9.\-]{{1,{CONTACT_EMAIL_DOMAIN_LABEL_MAX}}}\."
+    rf"[a-z0-9\-]{{2,{CONTACT_EMAIL_DOMAIN_LABEL_MAX}}}",
     re.IGNORECASE,
 )
 _PHONE_TEXT_RE = re.compile(
@@ -3820,10 +3823,10 @@ def _email_within_contact_limits(email: str) -> bool:
     if not email or "@" not in email:
         return False
     local, _, domain = email.partition("@")
-    if len(local) > CONTACT_DATA_TOKEN_MAX:
+    if len(local) < CONTACT_EMAIL_LOCAL_MIN or len(local) > CONTACT_EMAIL_LOCAL_MAX:
         return False
     for label in domain.lower().split("."):
-        if not label or len(label) > CONTACT_DATA_TOKEN_MAX:
+        if not label or len(label) > CONTACT_EMAIL_DOMAIN_LABEL_MAX:
             return False
     return True
 
@@ -3864,7 +3867,7 @@ def _extract_mailto_tel_from_soup(soup: BeautifulSoup) -> tuple[list[str], list[
         href = (a.get("href") or "").strip()
         if href.startswith("mailto:"):
             email = _normalize_href_email(href.replace("mailto:", "", 1))
-            if email and email not in emails:
+            if email and _email_within_contact_limits(email) and email not in emails:
                 emails.append(email)
         elif href.startswith("tel:"):
             phone = _normalize_href_phone(href)
@@ -3884,7 +3887,7 @@ def _merge_contact_lists(primary: list[str], extra: list[str]) -> list[str]:
 def _apply_regex_contact_gate(
     emails: list[str], phones: list[str]
 ) -> tuple[list[str], list[str]]:
-    """Końcowa warstwa regex: normalizacja, limit 40 znaków, filter_commercial_emails."""
+    """Końcowa warstwa regex: normalizacja, e-mail local 1–50 znaków, filter_commercial_emails."""
     gated_emails = filter_commercial_emails(
         [
             norm
@@ -3926,7 +3929,7 @@ def _row_contact_text_blob(row: dict) -> str:
 
 def apply_regex_row_contact_cleanup(row: dict) -> dict:
     """
-    Po Claude row cleanup: regex na polach wiersza (e-mail/tel, segmenty do 40 znaków).
+    Po Claude row cleanup: regex na polach wiersza (e-mail local 1–50 znaków, tel do 40).
     """
     blob = _row_contact_text_blob(row)
     emails: list[str] = []
@@ -6344,7 +6347,9 @@ def _run_smoke_tests() -> None:
     assert CLAUDE_UNLIMITED is True
     assert ENABLE_CLAUDE_ROW_CLEANUP is True
     assert CONTACT_DATA_TOKEN_MAX == 40
-    assert CONTACT_EMAIL_TOKEN_MAX == 40
+    assert CONTACT_EMAIL_LOCAL_MIN == 1
+    assert CONTACT_EMAIL_LOCAL_MAX == 50
+    assert CONTACT_EMAIL_TOKEN_MAX == 50
     assert ENABLE_CLAUDE_DISCOVERY_TERMS is False
     assert ENABLE_REGION_PLZ_FILTER is False
     assert len(SERPER_DISCOVERY_TERMS) >= 20
