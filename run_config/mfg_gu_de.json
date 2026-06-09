@@ -28,17 +28,14 @@
   "serper_daily_limit": 3000,
   "serper_unlimited": false,
   "enable_auto_email": false,
-  "enable_gemini_discovery_terms": false,
-  "enable_gemini_page_verify": false,
-  "enable_gemini_contact_extraction": false,
-  "enable_gemini_row_cleanup": false,
+  "enable_claude_discovery_terms": false,
   "enable_claude_page_verify": true,
   "enable_claude_row_cleanup": true,
-  "gemini_discovery_max_rounds": 5,
-  "gemini_discovery_terms_per_round": 12,
+  "claude_discovery_max_rounds": 5,
+  "claude_discovery_terms_per_round": 12,
   "serper_discovery_reserve": 1000,
   "claude_daily_limit": 3000,
   "claude_discovery_reserve": 1000,
-  "gemini_discovery_min_gain": 1,
-  "gemini_discovery_cache_days": 7
+  "claude_discovery_min_gain": 1,
+  "claude_discovery_cache_days": 7
 }

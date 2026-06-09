@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Jedyny dozwolony tekst maila MFG (kampanie DE GU / Filialbau).
-Nie modyfikować przez Gemini ani szablony GUI — wyłącznie ten blok.
+Nie modyfikować przez LLM ani szablony GUI — wyłącznie ten blok.
 """
 
 

@@ -9,7 +9,6 @@ $Root = Split-Path $PSScriptRoot -Parent
 Set-Location $Root
 $env:KANBUD_PROJECT_ROOT = Join-Path $Root "libs"
 $env:PYTHONUTF8 = "1"
-$env:USE_GEMINI_REPLY_INTELLIGENCE = "0"
 
 $failed = @()
 $passed = @()

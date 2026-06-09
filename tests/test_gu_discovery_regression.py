@@ -81,13 +81,6 @@ class BundesweitRegression(unittest.TestCase):
         )
 
 
-class GeminiThrottleRegression(unittest.TestCase):
-    def test_gemini_api_delay_unified_at_15_seconds(self):
-        self.assertEqual(scraper.GEMINI_API_DELAY_SECONDS, 15)
-        self.assertEqual(scraper.GEMINI_INTER_MODEL_DELAY_SECONDS, 15)
-        self.assertEqual(scraper.GEMINI_MIN_SECONDS_BETWEEN_CALLS, 15)
-
-
 class SerperQuotaExhaustionRegression(unittest.TestCase):
     def test_detects_402_quota_error(self):
         class FakeResp:
@@ -764,7 +757,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             )
         )
 
-    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
+    @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_small_ladenbau_path_requires_gu(self, mock_gather):
         mock_gather.return_value = (
@@ -783,7 +776,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
         self.assertTrue(result["is_small_firm"])
         self.assertTrue(result["is_gu"])
 
-    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
+    @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_accepts_filialbau_with_chain_without_gu_word(self, mock_gather):
         mock_gather.return_value = (
@@ -800,7 +793,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
         self.assertTrue(result["is_gu"])
         self.assertIn("rewe", result.get("retail_chains") or [])
 
-    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
+    @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_rejects_ladenbau_without_gu(self, mock_gather):
         mock_gather.return_value = (
@@ -826,7 +819,7 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             ),
         )
 
-    @patch.object(scraper, "ENABLE_GEMINI_PAGE_VERIFY", False)
+    @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
     def test_verify_rejects_large_konzern(self, mock_gather):
         mock_gather.return_value = (

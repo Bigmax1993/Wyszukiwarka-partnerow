@@ -218,7 +218,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -Forc
 
 | `SERPER_API_KEY` | tak (discovery) | API Serper |
 
-| `GOOGLE_AI_STUDIO_API_KEY` | tak (discovery + backfill) | Gemini: frazy Serper + weryfikacja www |
+| `ANTHROPIC_API_KEY` | tak (discovery + backfill) | Claude: frazy Serper + weryfikacja www |
 
 | `MAIL_USER`, `MAIL_PASSWORD` | tak (pon+wt) | SMTP + IMAP |
 

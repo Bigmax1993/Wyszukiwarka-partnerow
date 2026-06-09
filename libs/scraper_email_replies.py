@@ -250,7 +250,7 @@ def filter_unknown_company_rows(rows: list[dict]) -> list[dict]:
 def purge_unknown_from_cache(cache: dict) -> int:
     """Usuwa wpisy „Nieznana firma” / „Unbekanntes Unternehmen” z cache."""
     removed = 0
-    for section in ("contacts", "gemini_row_enrichment"):
+    for section in ("contacts", "claude_row_enrichment", "gemini_row_enrichment"):
         bucket = cache.get(section)
         if not isinstance(bucket, dict):
             continue
@@ -1161,7 +1161,9 @@ def sync_replies_from_messages(
     repair_misassigned_replies(cache, logger)
     by_email, by_domain = build_email_lookup(cache)
     contacts = cache.setdefault("contacts", {})
-    gemini_cache = cache.setdefault("gemini_reply_extractions", {})
+    claude_cache = cache.setdefault("claude_reply_extractions", {})
+    if not claude_cache and isinstance(cache.get("gemini_reply_extractions"), dict):
+        claude_cache.update(cache.get("gemini_reply_extractions") or {})
     updated = 0
     uids_mark_unread: list[bytes] = []
     our_email = normalize_email(get_gmail_user())
@@ -1221,7 +1223,7 @@ def sync_replies_from_messages(
             pdf_text=pdf_text,
             pdf_source=pdf_source,
             lang=config.lang,
-            gemini_cache=gemini_cache,
+            gemini_cache=claude_cache,
             matched_by="email",
         )
         company = (
@@ -1912,9 +1914,11 @@ def verify_contact_reply_from_imap(
         pdf_text, pdf_source = extract_text_from_pdf_bytes(payload, logger)
         if pdf_text.strip():
             break
-    gemini_cache = None
+    claude_cache = None
     if cache is not None:
-        gemini_cache = cache.setdefault("gemini_reply_extractions", {})
+        claude_cache = cache.setdefault("claude_reply_extractions", {})
+        if not claude_cache and isinstance(cache.get("gemini_reply_extractions"), dict):
+            claude_cache.update(cache.get("gemini_reply_extractions") or {})
     apply_reply_to_contact(
         contact,
         reply_at=msg_dt,
@@ -1925,7 +1929,7 @@ def verify_contact_reply_from_imap(
         pdf_text=pdf_text,
         pdf_source=pdf_source,
         lang=config.lang,
-        gemini_cache=gemini_cache,
+        gemini_cache=claude_cache,
         matched_by="email",
     )
     if logger:

@@ -5,14 +5,14 @@ from __future__ import annotations
 from typing import Callable
 
 from claude_client import claude_generate_text
-from scraper_env import get_anthropic_api_key
-from gemini_page_verify import (
-    apply_gemini_page_verdict,
-    build_gemini_page_verify_prompt,
+from page_verify import (
+    apply_page_verdict,
+    build_page_verify_prompt,
     hard_reject_page_context,
-    parse_gemini_page_verify_response,
+    parse_page_verify_response,
 )
 from retail_store_builder_filter import is_generalunternehmer
+from scraper_env import get_anthropic_api_key
 
 
 def claude_verify_company_page(
@@ -33,6 +33,10 @@ def claude_verify_company_page(
         return None
 
     verify_cache = (cache or {}).setdefault("claude_page_verify", {})
+    if not verify_cache and cache_key:
+        legacy = (cache or {}).get("gemini_page_verify") or {}
+        if cache_key in legacy:
+            verify_cache[cache_key] = dict(legacy[cache_key])
     if cache_key and cache_key in verify_cache:
         return dict(verify_cache[cache_key])
 
@@ -50,18 +54,18 @@ def claude_verify_company_page(
             verify_cache[cache_key] = out
         return out
 
-    prompt = build_gemini_page_verify_prompt(company_name, website, page_text)
+    prompt = build_page_verify_prompt(company_name, website, page_text)
     try:
         text, model = claude_generate_text(
             prompt, logger, api_key, cache=cache, on_step=on_step
         )
         logger.info("Claude page verify, model=%s", model)
-        parsed = parse_gemini_page_verify_response(text)
+        parsed = parse_page_verify_response(text)
     except Exception as exc:
         logger.warning("Claude page verify: %s", exc)
         return None
 
-    verified, reason, chains = apply_gemini_page_verdict(
+    verified, reason, chains = apply_page_verdict(
         parsed,
         page_text=page_text,
         serper_blob=serper_blob,
@@ -72,7 +76,7 @@ def claude_verify_company_page(
     )
     out = {
         "verified": verified,
-        "verification_reason": reason.replace("gemini", "claude", 1) if reason.startswith("gemini") else f"claude:{reason}",
+        "verification_reason": reason,
         "retail_chains": chains,
         "is_gu": gu_ok,
         "gu_marker": gu_marker,

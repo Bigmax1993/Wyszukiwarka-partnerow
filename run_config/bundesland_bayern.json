@@ -6,12 +6,12 @@
   "min_contacts_target": 20,
   "require_generalunternehmer": true,
   "enable_auto_email": false,
-  "enable_gemini_discovery_terms": true,
-  "enable_gemini_page_verify": true,
-  "gemini_discovery_max_rounds": 3,
-  "gemini_discovery_terms_per_round": 8,
+  "enable_claude_discovery_terms": true,
+  "enable_claude_page_verify": true,
+  "claude_discovery_max_rounds": 3,
+  "claude_discovery_terms_per_round": 8,
   "serper_discovery_reserve": 1000,
   "claude_daily_limit": 3000,
   "claude_discovery_reserve": 1000,
-  "gemini_discovery_min_gain": 1
+  "claude_discovery_min_gain": 1
 }

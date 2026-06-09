@@ -277,7 +277,7 @@ def pick_best_email_from_website_scrape(
     return "", score
 
 
-def needs_gemini_email_arbitration(candidates: list[str], website_url: str) -> bool:
+def needs_llm_email_arbitration(candidates: list[str], website_url: str) -> bool:
     ranked = rank_email_candidates(candidates, website_url)
     viable = [
         (email, score)
@@ -294,7 +294,7 @@ def needs_gemini_email_arbitration(candidates: list[str], website_url: str) -> b
     return False
 
 
-def validate_gemini_email_choice(
+def validate_llm_email_choice(
     choice: str,
     candidates: list[str],
     website_url: str = "",

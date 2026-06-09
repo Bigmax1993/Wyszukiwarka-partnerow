@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Wspólny słownik kampanii GU / Filialbau — używany przez Serper, regex i Gemini.
+Wspólny słownik kampanii GU / Filialbau — używany przez Serper, regex i Claude.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from retail_store_builder_filter import (
     STRICT_GU_MARKERS,
 )
 
-# Role odrzucane w werdykcie Gemini (primary_role)
-GEMINI_REJECT_PRIMARY_ROLES = frozenset(
+# Role odrzucane w werdykcie LLM (primary_role)
+REJECT_PRIMARY_ROLES = frozenset(
     {
         "Betreiber",
         "Händler",

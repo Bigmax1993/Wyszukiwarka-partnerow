@@ -4,7 +4,7 @@ Serper API – DE bundesweit: Generalunternehmer (GU), którzy stawiają sklepy/
 lub robią przebudowy/umbau i modernizację filii (Rewe, Aldi, Kaufland, Netto, Penny, Edeka).
 Nicht: Einzelhandels-Märkte als Betreiber, keine Urzędy/Portale.
 E-mail MFG + PPTX nur in diesem Modul (send_email_de_gu).
-Discovery i kontakty: Serper + requests + BeautifulSoup. www: parse HTML → Gemini (kontakty) → regex/mailto na końcu. Przed Excel: Gemini row cleanup + reguły.
+Discovery i kontakty: Serper + requests + BeautifulSoup. www: parse HTML + regex/mailto na końcu. Przed Excel: Claude row cleanup + reguły.
 Bez Selenium / Google Maps. Baner cookie: Playwright (tylko „Akceptuj”).
 Jupyter Lab: komórka 1 = %pip install …, komórka 2 = ten plik, komórka 3 = run_in_jupyter(…).
 """
@@ -30,16 +30,13 @@ _paths = campaign_output_paths(_campaign, "de_gu_bauunternehmen")
 _DATA_ROOT = _paths["data_root"]
 
 from scraper_web_config import (
+    ENABLE_CLAUDE_DISCOVERY_TERMS,
     ENABLE_CLAUDE_PAGE_VERIFY,
     ENABLE_CLAUDE_ROW_CLEANUP,
-    ENABLE_GEMINI_CONTACT_EMAIL,
-    ENABLE_GEMINI_ROW_CLEANUP,
     ENABLE_PLAYWRIGHT_COOKIE_CONSENT,
 )
 
-# Kontakte www: e-maile tylko regex + mailto: (bez Gemini — unikamy 429 przy backfillu)
-ENABLE_GEMINI_CONTACT_EXTRACTION = False
-GEMINI_CONTACT_EXTRACT_MAX_INPUT_CHARS = 10_000
+# Kontakte www: e-maile tylko regex + mailto (bez LLM ekstrakcji).
 from playwright_cookie_consent import apply_playwright_cookie_fallback
 from de_gu_keywords import (
     DE_OST_PLACE_MARKERS,
@@ -76,7 +73,7 @@ CAMPAIGN_ACTIVE_BUNDESLAENDER = list(_KW_ACTIVE_BL)
 
 
 def apply_gu_run_config_extras(module, data: dict) -> None:
-    """run_config.json: landy, limity, Gemini discovery/verify."""
+    """run_config.json: landy, limity, Claude discovery/verify."""
     if data.get("active_bundeslaender"):
         lands = data["active_bundeslaender"]
         if isinstance(lands, str):
@@ -92,10 +89,7 @@ def apply_gu_run_config_extras(module, data: dict) -> None:
         module.ENABLE_DISTANCE_FROM_REGION_KM = False
         module.ENABLE_PLZ_PREFIX_REGION_MATCH = False
     _bool_keys = (
-        "enable_gemini_discovery_terms",
-        "enable_gemini_page_verify",
-        "enable_gemini_contact_extraction",
-        "enable_gemini_row_cleanup",
+        "enable_claude_discovery_terms",
         "enable_claude_page_verify",
         "enable_claude_row_cleanup",
         "require_generalunternehmer",
@@ -103,37 +97,41 @@ def apply_gu_run_config_extras(module, data: dict) -> None:
         "require_website_references_or_portfolio",
         "serper_unlimited",
     )
+    normalized_data = dict(data)
     for key in _bool_keys:
-        if key in data:
+        if key in normalized_data:
             attr = key.upper()
             if hasattr(module, attr):
-                setattr(module, attr, bool(data[key]))
+                setattr(module, attr, bool(normalized_data[key]))
     if "require_generalunternehmer" in data:
         rsf = getattr(module, "_retail_store_builder_filter", None)
         if rsf is not None:
             rsf.REQUIRE_GENERALUNTERNEHMER = bool(data["require_generalunternehmer"])
     _int_keys = (
         ("serper_daily_limit", "SERPER_DAILY_LIMIT"),
-        ("gemini_discovery_max_rounds", "GEMINI_DISCOVERY_MAX_ROUNDS"),
-        ("gemini_discovery_terms_per_round", "GEMINI_DISCOVERY_TERMS_PER_ROUND"),
+        ("claude_discovery_max_rounds", "CLAUDE_DISCOVERY_MAX_ROUNDS"),
+        ("claude_discovery_terms_per_round", "CLAUDE_DISCOVERY_TERMS_PER_ROUND"),
         ("serper_discovery_reserve", "SERPER_DISCOVERY_RESERVE"),
         ("claude_daily_limit", "CLAUDE_DAILY_LIMIT"),
         ("claude_discovery_reserve", "CLAUDE_DISCOVERY_RESERVE"),
-        ("gemini_discovery_min_gain", "GEMINI_DISCOVERY_MIN_GAIN"),
-        ("gemini_discovery_cache_days", "GEMINI_DISCOVERY_CACHE_DAYS"),
+        ("claude_discovery_min_gain", "CLAUDE_DISCOVERY_MIN_GAIN"),
+        ("claude_discovery_cache_days", "CLAUDE_DISCOVERY_CACHE_DAYS"),
     )
     for json_key, attr in _int_keys:
-        if json_key in data and hasattr(module, attr):
+        if json_key in normalized_data and hasattr(module, attr):
             try:
-                setattr(module, attr, int(data[json_key]))
+                setattr(module, attr, int(normalized_data[json_key]))
             except (TypeError, ValueError):
                 pass
-    if "claude_daily_limit" in data or "claude_discovery_reserve" in data:
+    if (
+        "claude_daily_limit" in normalized_data
+        or "claude_discovery_reserve" in normalized_data
+    ):
         from claude_client import configure_claude_limits
 
         configure_claude_limits(
-            daily_limit=data.get("claude_daily_limit"),
-            reserve=data.get("claude_discovery_reserve"),
+            daily_limit=normalized_data.get("claude_daily_limit"),
+            reserve=normalized_data.get("claude_discovery_reserve"),
         )
 
 
@@ -156,14 +154,11 @@ from polish_text import (
     setup_script_logging,
 )
 from scraper_env import (
-    ENV_GEMINI_MODEL,
-    ENV_GEMINI_MODELS,
     ENV_GMAIL_APP_PASSWORD,
     ENV_GMAIL_SENDER_NAME,
     ENV_GMAIL_USER,
     get_anthropic_api_key,
     get_env_value,
-    get_google_ai_studio_api_key,
     get_serper_api_key,
 )
 from scraper_email_replies import (
@@ -187,6 +182,7 @@ from commercial_contact_filter import (
     is_non_commercial_website,
     is_valid_commercial_company_contact,
 )
+from contact_extract_utils import normalize_email_contact, normalize_phone_contact
 from retail_store_builder_filter import (
     detect_required_retail_chains,
     has_retail_references_or_portfolio,
@@ -205,19 +201,17 @@ from retail_store_builder_filter import (
 )
 import retail_store_builder_filter as _retail_store_builder_filter
 
-# Przy zapisie cache: usuń urzędy/instytucje z contacts (+ serper/gemini powiązane)
+# Przy zapisie cache: usuń urzędy/instytucje z contacts (+ serper/LLM powiązane)
 ENABLE_CACHE_PURGE_INSTITUTIONS = True
 from email_targeting import (
     AGGREGATOR_EMAIL_DOMAINS,
     MIN_EMAIL_SCORE_FOR_SEND,
     get_registrable_domain,
     is_unsuitable_inquiry_email,
-    needs_gemini_email_arbitration,
     pick_best_email_for_inquiry,
     pick_best_email_from_website_scrape,
     rank_email_candidates,
     score_email_candidate,
-    validate_gemini_email_choice,
 )
 
 import requests
@@ -284,20 +278,10 @@ MAX_CONTACT_LINKS = 6
 MAX_IMPRESSUM_GUESS_FETCH = 6
 HTTP_RETRY_ATTEMPTS = 3
 HTTP_BACKOFF_SECONDS = 1.5
-GEMINI_MODEL = get_env_value(ENV_GEMINI_MODEL, "gemini-2.0-flash")
-GEMINI_MODELS = get_env_value(
-    ENV_GEMINI_MODELS,
-    "gemini-2.5-flash-lite,gemini-2.0-flash-lite",
-).strip()
-# Odstęp między kolejnymi zapytaniami Gemini oraz przed przełączeniem modelu (słowa kluczowe itd.)
-GEMINI_API_DELAY_SECONDS = 15
-GEMINI_INTER_MODEL_DELAY_SECONDS = GEMINI_API_DELAY_SECONDS
-GEMINI_MIN_SECONDS_BETWEEN_CALLS = GEMINI_API_DELAY_SECONDS
-GEMINI_RATE_LIMIT_COOLDOWN_SECONDS = 3600
 PAGE_SNIPPET_MAX_CHARS = 3500
 
 ENABLE_AUTO_EMAIL = True
-# Własny szablon z GUI (Gemini dopracowuje per firma); nie dotyczy przypomnień
+# Własny szablon z GUI (Claude dopracowuje per firma); nie dotyczy przypomnień
 CUSTOM_EMAIL_DRAFT = ""
 USE_CUSTOM_EMAIL_TEMPLATE = False
 CUSTOM_EMAIL_LANG = "de"
@@ -307,7 +291,7 @@ EMAIL_SUBJECT_TEMPLATE = (
     "Kooperationsanfrage / Fliesen- & Estricharbeiten für Lebensmittelmärkte "
     "(REWE, ALDI, NETTO etc.)"
 )
-# Obligatorischer Betreff (word-for-word; bez zmian przez Gemini)
+# Obligatorischer Betreff (word-for-word; bez zmian przez LLM)
 FIXED_EMAIL_SUBJECT_DE = EMAIL_SUBJECT_TEMPLATE
 EMAIL_SIGNATURE = (
     "Mit freundlichen Grüßen\n\n"
@@ -470,11 +454,8 @@ REQUIRE_MARKET_PROJECTS_IN_PORTFOLIO = True
 REQUIRE_SMALL_FIRM = True
 # Obowiązkowa wzmianka o Aldi, Rewe, Edeka, Lidl, Netto lub Penny na stronie
 REQUIRE_NAMED_RETAIL_CHAIN = True
-ENABLE_GEMINI_RETAIL_VERIFICATION = False
-ENABLE_GEMINI_PAGE_VERIFY = False
-ENABLE_GEMINI_DISCOVERY_TERMS = False
-GEMINI_DISCOVERY_MAX_ROUNDS = 3
-GEMINI_DISCOVERY_TERMS_PER_ROUND = 8
+CLAUDE_DISCOVERY_MAX_ROUNDS = 3
+CLAUDE_DISCOVERY_TERMS_PER_ROUND = 8
 SERPER_DISCOVERY_RESERVE = 1000
 CLAUDE_DAILY_LIMIT = 3000
 CLAUDE_DISCOVERY_RESERVE = 1000
@@ -501,8 +482,8 @@ def _sync_claude_limits_from_module() -> None:
 
 
 _sync_claude_limits_from_module()
-GEMINI_DISCOVERY_MIN_GAIN = 1
-GEMINI_DISCOVERY_CACHE_DAYS = 7
+CLAUDE_DISCOVERY_MIN_GAIN = 1
+CLAUDE_DISCOVERY_CACHE_DAYS = 7
 MAX_PAGES_FOR_RETAIL_VERIFICATION = 8
 ENABLE_SERPER_PLACES_ENDPOINT = True
 LARGE_COMPANY_DOMAINS = frozenset(
@@ -934,7 +915,7 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
             and cache is not None
             and is_row_llm_cleanup_enabled()
         ):
-            label = "Claude" if ENABLE_CLAUDE_ROW_CLEANUP else "Gemini"
+            label = "Claude"
             console_step(
                 f"{label}: Bereinigung vor Excel ({len(rows)} Zeilen)…"
             )
@@ -1130,41 +1111,6 @@ def handle_serper_api_failure(
     return False
 
 
-def is_gemini_rate_limited(cache: dict | None) -> bool:
-    if not cache:
-        return False
-    until = float(cache.get("gemini_rate_limit_until", 0) or 0)
-    return until > time.time()
-
-
-def mark_gemini_rate_limited(
-    cache: dict | None, logger: logging.Logger, cooldown_seconds: int | None = None
-) -> None:
-    if cache is None:
-        return
-    seconds = int(cooldown_seconds or GEMINI_RATE_LIMIT_COOLDOWN_SECONDS)
-    cache["gemini_rate_limit_until"] = time.time() + seconds
-    logger.warning(
-        f"Gemini Rate-Limit: Pause {seconds}s (keine weiteren API-Aufrufe bis Reset)."
-    )
-
-
-def wait_for_gemini_slot(cache: dict | None, *, reason: str = "") -> None:
-    if cache is None:
-        return
-    last = float(cache.get("gemini_last_call_at", 0) or 0)
-    wait = GEMINI_API_DELAY_SECONDS - (time.time() - last)
-    if wait > 0:
-        note = f" — {reason}" if reason else ""
-        console_step(f"Gemini: pauza {wait:.0f}s przed zapytaniem{note}")
-        time.sleep(wait)
-
-
-def touch_gemini_call(cache: dict | None) -> None:
-    if cache is not None:
-        cache["gemini_last_call_at"] = time.time()
-
-
 # Faza 6: e.K. / GbR — małe GU bez GmbH (bez fałszywego trafienia e.Kfm.)
 _COMPANY_LEGAL_FORM_PATTERN = (
     r"(?:GmbH|UG(?:\s*\(haftungsbeschränkt\))?|AG|"
@@ -1174,7 +1120,7 @@ _COMPANY_LEGAL_FORM_PATTERN = (
     r"KG|OHG|PartG|Co\.\s*KG|mbH|SE|SE\s*&\s*Co\.\s*KG)"
 )
 
-# Harte Ablehnung für Excel/Gemini — kein Firmenname (PDF, Portale, Städte, SEO, Software …)
+# Harte Ablehnung für Excel/LLM-Cleanup — kein Firmenname (PDF, Portale, Städte, SEO, Software …)
 _COMPANY_NAME_HARD_REJECT_MARKERS = (
     "[pdf]",
     "pdf]",
@@ -1317,20 +1263,20 @@ def is_rejected_company_name_for_export(
 
 
 def finalize_company_name_for_export(
-    gemini_name: str,
+    llm_name: str,
     *,
     fallback_raw: str,
     website: str = "",
     email: str = "",
 ) -> str:
-    """Nach Gemini: nur Name+Rechtsform, sonst Impressum/Domain-Fallback."""
+    """Nach LLM-Cleanup: nur Name+Rechtsform, sonst Impressum/Domain-Fallback."""
     website = website_base_url(website) if website else ""
     candidates: list[str] = []
     if should_prefer_domain_company_name(fallback_raw, website):
         candidates.append(derive_name_from_website(website))
     candidates.extend(
         (
-            sanitize_special_text(gemini_name or ""),
+            sanitize_special_text(llm_name or ""),
             clean_company_name(fallback_raw, website),
             derive_name_from_website(website),
         )
@@ -1344,7 +1290,7 @@ def finalize_company_name_for_export(
     return ""
 
 
-def build_gemini_row_cleanup_prompt(
+def build_claude_row_cleanup_prompt(
     *,
     company: str,
     address: str,
@@ -1401,7 +1347,7 @@ email_nur_info={email}
 """
 
 
-def gemini_fallback_enrichment(
+def row_cleanup_fallback(
     row: dict, company: str, address: str, phone: str, email: str, website: str
 ) -> dict:
     bundesland = extract_bundesland(row)
@@ -1416,27 +1362,25 @@ def gemini_fallback_enrichment(
     }
 
 
-def apply_gemini_enrichment_to_row(row: dict, gemini_result: dict) -> None:
-    """Gemini czyści nazwę/adres/telefon — e-mail zostaje z pick_best / gemini_pick kontaktów."""
-    company = gemini_result.get("company_name_clean") or row.get("nazwa") or ""
+def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
+    """LLM czyści nazwę/adres/telefon — e-mail zostaje z pick_best kontaktów."""
+    company = llm_result.get("company_name_clean") or row.get("nazwa") or ""
     row["company_name_clean"] = company
     row["nazwa"] = company
-    row["adres"] = gemini_result.get("address", row.get("adres", ""))
-    row["telefon"] = gemini_result.get("phone", row.get("telefon", ""))
-    row["official_website"] = gemini_result.get("website", row.get("official_website", ""))
-    row["bundesland"] = gemini_result.get("bundesland", row.get("bundesland", ""))
+    row["adres"] = llm_result.get("address", row.get("adres", ""))
+    row["telefon"] = llm_result.get("phone", row.get("telefon", ""))
+    row["official_website"] = llm_result.get("website", row.get("official_website", ""))
+    row["bundesland"] = llm_result.get("bundesland", row.get("bundesland", ""))
 
 
 def is_row_llm_cleanup_enabled() -> bool:
-    return bool(ENABLE_CLAUDE_ROW_CLEANUP or ENABLE_GEMINI_ROW_CLEANUP)
+    return bool(ENABLE_CLAUDE_ROW_CLEANUP)
 
 
 def enrich_row_with_llm_cleanup(
     row: dict, logger: logging.Logger, cache: dict
 ) -> dict:
-    if ENABLE_CLAUDE_ROW_CLEANUP:
-        return enrich_row_with_claude_cleanup(row, logger, cache)
-    return enrich_row_with_gemini_cleanup(row, logger, cache)
+    return enrich_row_with_claude_cleanup(row, logger, cache)
 
 
 def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dict) -> dict:
@@ -1453,7 +1397,13 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         row.get("company_name_clean") or row.get("nazwa") or row.get("company_name_raw") or ""
     )
     if cache_key and cache_key in claude_cache:
-        apply_gemini_enrichment_to_row(row, claude_cache[cache_key])
+        apply_row_enrichment_to_row(row, claude_cache[cache_key])
+        return row
+    if cache_key and cache_key in (cache.get("gemini_row_enrichment") or {}):
+        legacy = (cache.get("gemini_row_enrichment") or {}).get(cache_key)
+        if isinstance(legacy, dict):
+            claude_cache[cache_key] = dict(legacy)
+            apply_row_enrichment_to_row(row, claude_cache[cache_key])
         return row
 
     row["company_name_clean"] = company
@@ -1470,14 +1420,14 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     from claude_row_cleanup import claude_cleanup_row_fields
 
     if not api_key:
-        fallback = gemini_fallback_enrichment(row, company, address, phone, email, website)
-        apply_gemini_enrichment_to_row(row, fallback)
+        fallback = row_cleanup_fallback(row, company, address, phone, email, website)
+        apply_row_enrichment_to_row(row, fallback)
         if cache_key:
             claude_cache[cache_key] = fallback
         return row
 
     states = ", ".join(GERMAN_STATES)
-    prompt = build_gemini_row_cleanup_prompt(
+    prompt = build_claude_row_cleanup_prompt(
         company=company,
         address=address,
         phone=phone,
@@ -1487,8 +1437,8 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     )
     parsed = claude_cleanup_row_fields(prompt, logger, cache)
     if not parsed:
-        fallback = gemini_fallback_enrichment(row, company, address, phone, email, website)
-        apply_gemini_enrichment_to_row(row, fallback)
+        fallback = row_cleanup_fallback(row, company, address, phone, email, website)
+        apply_row_enrichment_to_row(row, fallback)
         if cache_key:
             claude_cache[cache_key] = fallback
         return row
@@ -1508,86 +1458,9 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     }
     if claude_result["bundesland"] not in GERMAN_STATES:
         claude_result["bundesland"] = extract_bundesland(row)
-    apply_gemini_enrichment_to_row(row, claude_result)
+    apply_row_enrichment_to_row(row, claude_result)
     if cache_key:
         claude_cache[cache_key] = claude_result
-    return row
-
-
-def enrich_row_with_gemini_cleanup(row: dict, logger: logging.Logger, cache: dict) -> dict:
-    gemini_cache = cache.setdefault("gemini_row_enrichment", {})
-    cache_key = (
-        (row.get("url") or "").strip()
-        or f"{(row.get('nazwa') or '').strip()}|{(row.get('www') or '').strip()}"
-    )
-    address = sanitize_special_text(row.get("full_address") or row.get("adres") or "")
-    phone = sanitize_special_text(row.get("phones_found") or row.get("telefon") or "")
-    # E-mail nie przechodzi przez sanitize_special_text (usuwałby znaki / łamał listę)
-    email = (row.get("email_target") or "").strip()
-    website = sanitize_special_text(row.get("official_website") or row.get("www") or "")
-    company = sanitize_special_text(
-        row.get("company_name_clean") or row.get("nazwa") or row.get("company_name_raw") or ""
-    )
-    if cache_key and cache_key in gemini_cache:
-        apply_gemini_enrichment_to_row(row, gemini_cache[cache_key])
-        return row
-
-    row["company_name_clean"] = company
-    row["nazwa"] = company
-    row["adres"] = address
-    row["telefon"] = phone
-    row["official_website"] = website
-
-    if not ENABLE_GEMINI_ROW_CLEANUP:
-        row["bundesland"] = extract_bundesland(row)
-        return row
-
-    api_key = get_google_ai_studio_api_key()
-    if not api_key or is_gemini_rate_limited(cache):
-        fallback = gemini_fallback_enrichment(row, company, address, phone, email, website)
-        apply_gemini_enrichment_to_row(row, fallback)
-        if cache_key:
-            gemini_cache[cache_key] = fallback
-        return row
-
-    states = ", ".join(GERMAN_STATES)
-    prompt = build_gemini_row_cleanup_prompt(
-        company=company,
-        address=address,
-        phone=phone,
-        email=email,
-        website=website,
-        states=states,
-    )
-    try:
-        text, used_model = gemini_generate_text(prompt, logger, api_key, cache=cache)
-        console_step(f"Gemini-Bereinigung Modell: {used_model}")
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        parsed = json.loads(match.group(0) if match else text)
-        cleaned_name = finalize_company_name_for_export(
-            parsed.get("company_name_clean", ""),
-            fallback_raw=company,
-            website=website,
-            email=email,
-        )
-        gemini_result = {
-            "company_name_clean": cleaned_name,
-            "address": sanitize_special_text(parsed.get("address", address)) or address,
-            "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
-            "website": sanitize_special_text(parsed.get("website", website)) or website,
-            "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
-        }
-        if gemini_result["bundesland"] not in GERMAN_STATES:
-            gemini_result["bundesland"] = extract_bundesland(row)
-        apply_gemini_enrichment_to_row(row, gemini_result)
-        if cache_key:
-            gemini_cache[cache_key] = gemini_result
-    except Exception as e:
-        logger.warning(f"Gemini / województwo fallback ({cache_key}): {e}")
-        fallback = gemini_fallback_enrichment(row, company, address, phone, email, website)
-        apply_gemini_enrichment_to_row(row, fallback)
-        if cache_key:
-            gemini_cache[cache_key] = fallback
     return row
 
 
@@ -1889,20 +1762,20 @@ def _empty_cache() -> dict:
         "email_sent_targets": {},
         "email_domain_daily": {},
         "email_suppression": {},
-        "gemini_row_enrichment": {},
-        "gemini_contact_extract": {},
-        "gemini_disabled_models": {},
+        "claude_row_enrichment": {},
+        "claude_contact_extract": {},
+        "claude_disabled_models": {},
         "serper_discovery": {},
         "serper_term_stats": {},
         "serper_limit_reached": {},
         "serper_api_exhausted": {},
-        "gemini_discovery_terms": {},
-        "gemini_page_verify": {},
+        "claude_discovery_terms": {},
+        "claude_page_verify": {},
     }
 
 
 def reset_pipeline_cache() -> dict:
-    """Pełny reset cache JSON (Serper, kontakty, Gemini, maile)."""
+    """Pełny reset cache JSON (Serper, kontakty, Claude, maile)."""
     return _empty_cache()
 
 
@@ -2048,11 +1921,35 @@ def load_cache(logger: logging.Logger) -> dict:
             "email_sent_targets",
             "email_domain_daily",
             "email_suppression",
-            "gemini_row_enrichment",
-            "gemini_disabled_models",
+            "claude_row_enrichment",
+            "claude_disabled_models",
+            "claude_contact_extract",
+            "claude_discovery_terms",
+            "claude_page_verify",
         ):
             if k not in cache:
                 cache[k] = {}
+        # Legacy migration (read-only fallback buckets from Gemini naming).
+        if (
+            not cache.get("claude_row_enrichment")
+            and isinstance(cache.get("gemini_row_enrichment"), dict)
+        ):
+            cache["claude_row_enrichment"] = dict(cache.get("gemini_row_enrichment") or {})
+        if (
+            not cache.get("claude_contact_extract")
+            and isinstance(cache.get("gemini_contact_extract"), dict)
+        ):
+            cache["claude_contact_extract"] = dict(cache.get("gemini_contact_extract") or {})
+        if (
+            not cache.get("claude_discovery_terms")
+            and isinstance(cache.get("gemini_discovery_terms"), dict)
+        ):
+            cache["claude_discovery_terms"] = dict(cache.get("gemini_discovery_terms") or {})
+        if (
+            not cache.get("claude_page_verify")
+            and isinstance(cache.get("gemini_page_verify"), dict)
+        ):
+            cache["claude_page_verify"] = dict(cache.get("gemini_page_verify") or {})
         logger.info(
             "Cache geladen: places=%s, contacts=%s",
             len(cache.get("places", {})),
@@ -2107,6 +2004,8 @@ def purge_institutions_from_cache(
 
     for url in removed_urls:
         for bucket in (
+            "claude_row_enrichment",
+            "claude_contact_extract",
             "gemini_row_enrichment",
             "gemini_contact_extract",
         ):
@@ -2117,7 +2016,7 @@ def purge_institutions_from_cache(
                 if url in key or key in url:
                     sub.pop(key, None)
         # Stare kopie enrichment po URL jako klucz
-        row_enrich = cache.get("gemini_row_enrichment")
+        row_enrich = cache.get("claude_row_enrichment") or cache.get("gemini_row_enrichment")
         if isinstance(row_enrich, dict):
             row_enrich.pop(url, None)
 
@@ -2601,8 +2500,8 @@ def new_discovery_funnel() -> dict:
         "filtered_large_serper": 0,
         "pending_saved": 0,
         "rejected_excel": 0,
-        "gemini_rounds": 0,
-        "gemini_terms": 0,
+        "claude_rounds": 0,
+        "claude_terms": 0,
     }
 
 
@@ -2628,8 +2527,8 @@ def log_discovery_funnel(funnel: dict, logger: logging.Logger) -> None:
         "[LEjek] serper_queries={serper_queries} | api_zero={api_zero_terms} | "
         "raw_hits={raw_hits} | filtered_serper={filtered_serper} | "
         "filtered_large={filtered_large_serper} | pending_saved={pending_saved} | "
-        "rejected_excel={rejected_excel} | gemini_rounds={gemini_rounds} | "
-        "gemini_terms={gemini_terms}"
+        "rejected_excel={rejected_excel} | claude_rounds={claude_rounds} | "
+        "claude_terms={claude_terms}"
     ).format(**funnel)
     console_step(msg)
     logger.info(msg)
@@ -3134,72 +3033,7 @@ def gather_website_text_for_verification(
     return " ".join(parts), list(visited)
 
 
-def gemini_verify_retail_small_company(
-    company_name: str,
-    website: str,
-    page_text: str,
-    logger: logging.Logger,
-    cache: dict | None,
-    *,
-    cache_key: str = "",
-) -> dict:
-    """Gemini: czy firma to mały/średni GU z referencjami sklepów dyskontowych."""
-    out = {
-        "verified": False,
-        "is_small_firm": False,
-        "retail_chains": [],
-        "reason": "gemini_off",
-    }
-    if not ENABLE_GEMINI_RETAIL_VERIFICATION:
-        return out
-    api_key = get_google_ai_studio_api_key()
-    if not api_key or is_gemini_rate_limited(cache):
-        return out
-
-    verify_cache = (cache or {}).setdefault("gemini_retail_verify", {})
-    if cache_key and cache_key in verify_cache:
-        return dict(verify_cache[cache_key])
-
-    snippet = _truncate_page_snippet(page_text, max_chars=5000)
-    chains_list = ", ".join(RETAIL_CHAIN_KEYWORDS)
-    prompt = (
-        "Du bist Analyst für B2B-Bau. Prüfe den Website-Auszug.\n"
-        "Fragen:\n"
-        f"1) Baut/realisiert die Firma Filialen oder Märkte von Discountern/Supermärkten "
-        f"({chains_list}) als Bauunternehmen oder Generalunternehmer?\n"
-        "2) Ist es eher ein kleines oder mittelständisches regionales Unternehmen "
-        "(KEIN internationaler Konzern wie STRABAG, Hochtief, Bilfinger)?\n"
-        "Antwort NUR als JSON:\n"
-        '{"verified":true/false,"is_small_firm":true/false,'
-        '"retail_chains":["aldi",...],"reason":"kurz DE"}\n'
-        "verified=true nur wenn klare Hinweise auf Ladenbau/Filialbau/Referenzprojekte "
-        "für genannte Handelsketten.\n"
-        f"Firma: {company_name}\nWebseite: {website}\n\nAuszug:\n{snippet or '(leer)'}"
-    )
-    try:
-        text, used_model = gemini_generate_text(prompt, logger, api_key, cache=cache)
-        console_step(f"Gemini WWW-Prüfung Ladenbau, Modell: {used_model}")
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        parsed = json.loads(match.group(0) if match else text)
-        out = {
-            "verified": bool(parsed.get("verified")),
-            "is_small_firm": bool(parsed.get("is_small_firm")),
-            "retail_chains": [
-                str(c).lower()
-                for c in (parsed.get("retail_chains") or [])
-                if str(c).strip()
-            ],
-            "reason": str(parsed.get("reason") or "gemini"),
-        }
-        if cache_key:
-            verify_cache[cache_key] = out
-    except Exception as e:
-        logger.warning(f"Gemini WWW-Prüfung: {e}")
-        out["reason"] = f"gemini_error:{e}"
-    return out
-
-
-def _needs_gemini_discovery_supplement(
+def _needs_claude_discovery_supplement(
     all_rows: list,
     cache: dict,
     rotation_land: str | None,
@@ -3219,7 +3053,7 @@ def _needs_gemini_discovery_supplement(
     )
 
 
-def _run_gemini_discovery_supplement(
+def _run_claude_discovery_supplement(
     all_rows: list,
     cache: dict,
     logger: logging.Logger,
@@ -3227,28 +3061,22 @@ def _run_gemini_discovery_supplement(
     serper_kw: dict,
     funnel: dict | None,
 ) -> tuple[int, bool]:
-    from gemini_discovery_terms import generate_gemini_discovery_terms
+    from claude_discovery_terms import generate_claude_discovery_terms
 
     total_new_rows = int(serper_kw.get("total_new_rows") or 0)
     stop_requested = bool(serper_kw.get("stop_requested"))
     rotate_mode = bool(serper_kw.get("rotate_mode"))
     serper_only = bool(serper_kw.get("serper_only"))
-    api_key = get_google_ai_studio_api_key()
-
-    if not ENABLE_GEMINI_DISCOVERY_TERMS or not api_key or is_gemini_rate_limited(cache):
+    if not ENABLE_CLAUDE_DISCOVERY_TERMS:
         return total_new_rows, stop_requested
 
     lands = [rotation_land] if rotation_land else list(CAMPAIGN_ACTIVE_BUNDESLAENDER)
     used_terms: list[str] = []
 
-    for round_n in range(1, GEMINI_DISCOVERY_MAX_ROUNDS + 1):
+    for round_n in range(1, CLAUDE_DISCOVERY_MAX_ROUNDS + 1):
         if stop_requested:
             break
-        if round_n > 1:
-            wait_for_gemini_slot(
-                cache, reason=f"Gemini discovery runda {round_n}"
-            )
-        if not _needs_gemini_discovery_supplement(
+        if not _needs_claude_discovery_supplement(
             all_rows,
             cache,
             rotation_land,
@@ -3258,11 +3086,12 @@ def _run_gemini_discovery_supplement(
         ):
             break
 
+        remaining = SERPER_DISCOVERY_RESERVE + CLAUDE_DISCOVERY_TERMS_PER_ROUND
         if not is_serper_unlimited():
             _, _, remaining = get_remaining_daily_serper_limit(cache)
             if remaining <= SERPER_DISCOVERY_RESERVE:
                 console_step(
-                    f"Gemini discovery: rezerwa Serper ({remaining} <= "
+                    f"Claude discovery: rezerwa Serper ({remaining} <= "
                     f"{SERPER_DISCOVERY_RESERVE})"
                 )
                 break
@@ -3271,24 +3100,22 @@ def _run_gemini_discovery_supplement(
             all_rows, cache, rotation_land or ""
         )
 
-        terms = generate_gemini_discovery_terms(
+        terms = generate_claude_discovery_terms(
             cache,
             logger,
             [l for l in lands if l],
-            gemini_generate_text=gemini_generate_text,
-            api_key=api_key,
-            terms_requested=GEMINI_DISCOVERY_TERMS_PER_ROUND,
-            cache_days=GEMINI_DISCOVERY_CACHE_DAYS,
+            terms_requested=CLAUDE_DISCOVERY_TERMS_PER_ROUND,
+            cache_days=CLAUDE_DISCOVERY_CACHE_DAYS,
             use_cache=(round_n == 1),
             exclude_terms=used_terms,
         )
         if not terms:
-            console_step("Gemini discovery: brak nowych fraz po walidacji")
+            console_step("Claude discovery: brak nowych fraz po walidacji")
             break
 
         budget = min(
             len(terms),
-            GEMINI_DISCOVERY_TERMS_PER_ROUND,
+            CLAUDE_DISCOVERY_TERMS_PER_ROUND,
             max(0, remaining - SERPER_DISCOVERY_RESERVE),
         )
         if budget <= 0:
@@ -3297,11 +3124,11 @@ def _run_gemini_discovery_supplement(
         batch = terms[:budget]
         used_terms.extend(batch)
         if funnel is not None:
-            funnel["gemini_rounds"] = funnel.get("gemini_rounds", 0) + 1
-            funnel["gemini_terms"] = funnel.get("gemini_terms", 0) + len(batch)
+            funnel["claude_rounds"] = funnel.get("claude_rounds", 0) + 1
+            funnel["claude_terms"] = funnel.get("claude_terms", 0) + len(batch)
 
         console_step(
-            f"Gemini discovery runda {round_n}: {len(batch)} fraz → Serper"
+            f"Claude discovery runda {round_n}: {len(batch)} fraz → Serper"
         )
         proc_kw = {
             k: v
@@ -3310,7 +3137,7 @@ def _run_gemini_discovery_supplement(
         }
         total_new_rows, stop_requested = _process_serper_terms(
             batch,
-            f"gemini-r{round_n}",
+            f"claude-r{round_n}",
             apply_distance_filter=False,
             funnel=funnel,
             total_new_rows=total_new_rows,
@@ -3324,10 +3151,10 @@ def _run_gemini_discovery_supplement(
             all_rows, cache, rotation_land or ""
         )
         gain = pending_after - pending_before
-        console_step(f"Gemini discovery runda {round_n}: +{gain} pending")
-        if gain < GEMINI_DISCOVERY_MIN_GAIN:
+        console_step(f"Claude discovery runda {round_n}: +{gain} pending")
+        if gain < CLAUDE_DISCOVERY_MIN_GAIN:
             console_step(
-                f"Gemini discovery: zysk +{gain} < {GEMINI_DISCOVERY_MIN_GAIN}, stop"
+                f"Claude discovery: zysk +{gain} < {CLAUDE_DISCOVERY_MIN_GAIN}, stop"
             )
             break
 
@@ -3425,43 +3252,6 @@ def verify_company_on_website(
                         "page_snippet": _truncate_page_snippet(page_text),
                         "is_gu": claude.get("is_gu", False),
                         "gu_marker": claude.get("gu_marker", ""),
-                    },
-                    blob,
-                )
-
-    if ENABLE_GEMINI_PAGE_VERIFY:
-        from gemini_page_verify import gemini_verify_company_page
-
-        api_key = get_google_ai_studio_api_key()
-        if api_key and not is_gemini_rate_limited(cache):
-            gem = gemini_verify_company_page(
-                company_name,
-                website,
-                page_text,
-                logger,
-                cache,
-                gemini_generate_text=gemini_generate_text,
-                api_key=api_key,
-                cache_key=cache_key or website,
-                serper_blob=serper_blob,
-                require_generalunternehmer=REQUIRE_GENERALUNTERNEHMER,
-            )
-            if gem is not None:
-                small_hint = any(m in blob.lower() for m in SMALL_COMPANY_PAGE_MARKERS)
-                is_small = resolve_is_small_firm(
-                    blob, large=large, small_hint=small_hint
-                )
-                return _finalize_verification_result(
-                    {
-                        "verified": gem.get("verified", False),
-                        "is_small_firm": is_small,
-                        "retail_chains": gem.get("retail_chains") or [],
-                        "verification_reason": gem.get("verification_reason", "gemini"),
-                        "verification_method": "gemini_profile",
-                        "pages_checked": pages_checked,
-                        "page_snippet": _truncate_page_snippet(page_text),
-                        "is_gu": gem.get("is_gu", False),
-                        "gu_marker": gem.get("gu_marker", ""),
                     },
                     blob,
                 )
@@ -3765,96 +3555,13 @@ def ensure_ssl_cert_env(logger=None) -> None:
             logger.warning(f"certifi SSL nicht gesetzt: {e}")
 
 
-def get_gemini_model_candidates() -> list[str]:
-    models = []
-    for raw in (GEMINI_MODELS or "").split(","):
-        model = raw.strip()
-        if model and model not in models:
-            models.append(model)
-    if not models and GEMINI_MODEL:
-        models.append(GEMINI_MODEL)
-    return models
-
-
-def get_disabled_gemini_models(cache: dict | None) -> set[str]:
-    if cache is None:
-        return set()
-    disabled = cache.setdefault("gemini_disabled_models", {})
-    return {m for m, meta in disabled.items() if isinstance(meta, dict) and meta.get("disabled")}
-
-
-def mark_gemini_model_disabled(cache: dict | None, model: str, reason: str) -> None:
-    if cache is None or not model:
-        return
-    disabled = cache.setdefault("gemini_disabled_models", {})
-    disabled[model] = {"disabled": True, "reason": reason, "date": date.today().isoformat()}
-
-
-def gemini_generate_text(prompt: str, logger: logging.Logger, api_key: str, cache=None):
-    if is_gemini_rate_limited(cache):
-        raise RuntimeError("Gemini API pausiert (Rate-Limit-Cooldown aktiv).")
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    last_err = None
-    disabled_models = get_disabled_gemini_models(cache)
-    seen_active_model = False
-    for model in get_gemini_model_candidates():
-        if model in disabled_models:
-            continue
-        if seen_active_model:
-            console_step(
-                f"Gemini: pauza {GEMINI_INTER_MODEL_DELAY_SECONDS}s przed modelem {model}"
-            )
-            time.sleep(GEMINI_INTER_MODEL_DELAY_SECONDS)
-        else:
-            wait_for_gemini_slot(cache, reason="generateContent")
-        seen_active_model = True
-        endpoint = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={api_key}"
-        )
-        try:
-            touch_gemini_call(cache)
-            resp = request_with_retry(
-                requests.post,
-                endpoint,
-                logger,
-                json=payload,
-                timeout=REQUEST_TIMEOUT,
-                retry_on_rate_limit=False,
-            )
-            data = resp.json()
-            text = (
-                data.get("candidates", [{}])[0]
-                .get("content", {})
-                .get("parts", [{}])[0]
-                .get("text", "")
-            )
-            if text:
-                return text, model
-        except Exception as e:
-            last_err = e
-            logger.warning(f"Gemini Modell {model} fehlgeschlagen: {e}")
-            err_text = str(e).lower()
-            if "404" in err_text or "not found" in err_text:
-                mark_gemini_model_disabled(cache, model, str(e))
-            if _is_rate_limit_error(e):
-                mark_gemini_rate_limited(cache, logger)
-                break
-            continue
-    raise last_err or RuntimeError("Keine Gemini-Antwort für alle Modelle.")
-
-
 def _normalize_href_email(raw: str) -> str:
     """mailto:-Links aus HTML — keine Regex auf Seitentext."""
-    from gemini_contact_extract import _normalize_email
-
     low = unquote((raw or "").strip()).lower().replace("%40", "@")
-    return _normalize_email(low)
+    return normalize_email_contact(low)
 
 
 def _normalize_href_phone(raw: str) -> str:
-    from gemini_contact_extract import normalize_phone_contact
-
     return normalize_phone_contact((raw or "").replace("tel:", "", 1))
 
 
@@ -3947,43 +3654,6 @@ def _apply_regex_contact_gate(
     return gated_emails, gated_phones
 
 
-def _ensure_gemini_page_contacts(
-    text: str,
-    *,
-    logger: logging.Logger | None = None,
-    cache: dict | None = None,
-    page_url: str = "",
-    website: str = "",
-    gemini_buf: dict | None = None,
-) -> dict:
-    """Ein Gemini-Aufruf pro Seite — E-Mails, Telefone, Firmenname."""
-    empty = {"emails": [], "phones": [], "company_names": [], "company_name": ""}
-    if gemini_buf is not None and "contacts" in gemini_buf:
-        return gemini_buf["contacts"]
-    if not ENABLE_GEMINI_CONTACT_EXTRACTION or not (text or "").strip() or logger is None:
-        if gemini_buf is not None:
-            gemini_buf["contacts"] = empty
-        return empty
-    from gemini_contact_extract import gemini_extract_contacts_from_page
-
-    api_key = get_google_ai_studio_api_key()
-    contacts = gemini_extract_contacts_from_page(
-        text,
-        page_url,
-        logger,
-        cache,
-        gemini_generate_text=gemini_generate_text,
-        api_key=api_key or "",
-        website=website or page_url,
-        max_input_chars=GEMINI_CONTACT_EXTRACT_MAX_INPUT_CHARS,
-        is_rate_limited=is_gemini_rate_limited,
-        on_step=console_step,
-    )
-    if gemini_buf is not None:
-        gemini_buf["contacts"] = contacts
-    return contacts
-
-
 def find_emails_in_text(
     text: str,
     *,
@@ -3991,13 +3661,12 @@ def find_emails_in_text(
     cache: dict | None = None,
     page_url: str = "",
     website: str = "",
-    gemini_buf: dict | None = None,
 ) -> list[str]:
     """
     E-maile z tekstu strony — wyłącznie regex (deobfuskacja at/punkt).
     mailto: osobno w parse_contacts_from_html; filter_commercial_emails na końcu.
     """
-    _ = logger, cache, page_url, website, gemini_buf
+    _ = logger, cache, page_url, website
     if not text:
         return []
     return _find_emails_in_text_regex(text)
@@ -4045,20 +3714,9 @@ def find_company_names_in_text(
     cache: dict | None = None,
     page_url: str = "",
     website: str = "",
-    gemini_buf: dict | None = None,
 ) -> list[str]:
-    """Optional Gemini; sonst leer (Firmennamen aus HTML-Meta/h1)."""
-    if not text or not ENABLE_GEMINI_CONTACT_EXTRACTION:
-        return []
-    contacts = _ensure_gemini_page_contacts(
-        text,
-        logger=logger,
-        cache=cache,
-        page_url=page_url,
-        website=website,
-        gemini_buf=gemini_buf,
-    )
-    return list(contacts.get("company_names") or [])
+    _ = text, logger, cache, page_url, website
+    return []
 
 
 def find_company_name_in_text(
@@ -4068,7 +3726,6 @@ def find_company_name_in_text(
     cache: dict | None = None,
     page_url: str = "",
     website: str = "",
-    gemini_buf: dict | None = None,
 ) -> str:
     candidates = find_company_names_in_text(
         text,
@@ -4076,7 +3733,6 @@ def find_company_name_in_text(
         cache=cache,
         page_url=page_url,
         website=website,
-        gemini_buf=gemini_buf,
     )
     return _pick_best_company_name(candidates, website, "")
 
@@ -4088,25 +3744,12 @@ def find_phones_in_text(
     cache: dict | None = None,
     page_url: str = "",
     website: str = "",
-    gemini_buf: dict | None = None,
 ) -> list[str]:
-    """Po parse: Gemini, potem regex fallback. tel: w parse_contacts_from_html po Gemini."""
+    """Telefony z tekstu strony — wyłącznie regex."""
+    _ = logger, cache, page_url, website
     if not text:
         return []
-    phones: list[str] = []
-    if ENABLE_GEMINI_CONTACT_EXTRACTION and logger is not None:
-        contacts = _ensure_gemini_page_contacts(
-            text,
-            logger=logger,
-            cache=cache,
-            page_url=page_url,
-            website=website,
-            gemini_buf=gemini_buf,
-        )
-        phones = list(contacts.get("phones") or [])
-    if not phones:
-        phones = _find_phones_in_text_regex(text)
-    return phones
+    return _find_phones_in_text_regex(text)
 
 
 def _extract_company_names_from_html(soup: BeautifulSoup, base_url: str) -> list[str]:
@@ -4753,18 +4396,16 @@ def parse_contacts_from_html(
 ) -> dict:
     """
     Kontakty: 1) parse HTML→text  2) regex e-mail/tel z tekstu  3) mailto/tel z DOM
-    4) filter_commercial_emails — ostatni krok (bez Gemini).
+    4) filter_commercial_emails — ostatni krok (bez LLM).
     """
     soup = BeautifulSoup(html or "", "html.parser")
     page_text = extract_html_text_with_media_hints(soup)
-    gemini_buf: dict = {}
     emails = find_emails_in_text(
         page_text,
         logger=logger,
         cache=cache,
         page_url=base_url,
         website=base_url,
-        gemini_buf=gemini_buf,
     )
     phones = find_phones_in_text(
         page_text,
@@ -4772,7 +4413,6 @@ def parse_contacts_from_html(
         cache=cache,
         page_url=base_url,
         website=base_url,
-        gemini_buf=gemini_buf,
     )
     mailto_emails, tel_phones = _extract_mailto_tel_from_soup(soup)
     emails = _merge_contact_lists(emails, mailto_emails)
@@ -4786,7 +4426,6 @@ def parse_contacts_from_html(
             cache=cache,
             page_url=base_url,
             website=base_url,
-            gemini_buf=gemini_buf,
         )
     )
     company_name = _pick_best_company_name(company_candidates, base_url, "")
@@ -5119,77 +4758,6 @@ def verify_pending_contacts(
     return stats
 
 
-def gemini_pick_inquiry_email_from_page(
-    company_name: str,
-    website_url: str,
-    candidates: list[str],
-    page_snippet: str,
-    logger: logging.Logger,
-    cache: dict | None,
-    *,
-    cache_key: str = "",
-) -> str:
-    """
-    Gemini wybiera WYŁĄCZNIE jeden adres z listy kandydatów znalezionych w HTML.
-    """
-    if not ENABLE_GEMINI_CONTACT_EMAIL:
-        return ""
-    api_key = get_google_ai_studio_api_key()
-    if not api_key or is_gemini_rate_limited(cache):
-        return ""
-    normalized = [(c or "").strip().lower() for c in candidates if (c or "").strip()]
-    if not normalized:
-        return ""
-
-    pick_cache = (cache or {}).setdefault("gemini_email_pick", {})
-    if cache_key and cache_key in pick_cache:
-        cached = (pick_cache[cache_key] or "").strip().lower()
-        return validate_gemini_email_choice(cached, normalized, website_url)
-
-    ranked = rank_email_candidates(normalized, website_url)
-    ranked_lines = "\n".join(
-        f"- {e} (wynik_reguł={sc})" for e, sc in ranked[:12]
-    )
-    snippet = _truncate_page_snippet(page_snippet)
-    candidates_json = json.dumps(normalized, ensure_ascii=False)
-
-    prompt = (
-        "Du bist B2B-Assistent. Wähle EINE E-Mail für eine Anfrage an einen Generalunternehmer "
-        f"im Einzelhandelsbau ({RETAIL_CHAINS_DE}) in {INQUIRY_REGION_DE}.\n"
-        "Nur JSON: {\"email\":\"...\",\"reason\":\"...\"}\n\n"
-        f"Firma: {company_name}\n"
-        f"Webseite: {website_url}\n\n"
-        "Kandidaten — nur eine Adresse aus dieser Liste (exakt, Kleinbuchstaben):\n"
-        f"{candidates_json}\n\n"
-        "Regel-Ranking (Hinweis):\n"
-        f"{ranked_lines or '(keine)'}\n\n"
-        "VERBOTEN: datenschutz, privacy, GDPR, newsletter, HR, karriere, presse, rechnung, noreply.\n"
-        "BEVORZUGT: info, kontakt, anfrage, projekt, bau, gu, vertrieb, geschaeftsleitung.\n"
-        "Wenn keiner passt: {\"email\":\"\",\"reason\":\"...\"}.\n"
-        "Keine neue Adresse erfinden.\n\n"
-        "Seitenauszug:\n"
-        f"{snippet or '(kein Text)'}"
-    )
-    try:
-        text, used_model = gemini_generate_text(prompt, logger, api_key, cache=cache)
-        console_step(f"Gemini wybór e-mail kontaktowy, model: {used_model}")
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        parsed = json.loads(match.group(0) if match else text)
-        raw_choice = (parsed.get("email") or "").strip().lower()
-        validated = validate_gemini_email_choice(raw_choice, normalized, website_url)
-        if validated:
-            if cache_key:
-                pick_cache[cache_key] = validated
-            return validated
-        if raw_choice:
-            logger.info(
-                "Gemini e-mail odrzucony (spoza listy lub RODO): %s", raw_choice
-            )
-    except Exception as e:
-        logger.warning(f"Gemini wybór e-mail: {e}")
-    return ""
-
-
 def pick_email_with_impressum_priority(
     all_emails: list[str],
     impressum_emails: list[str],
@@ -5231,7 +4799,7 @@ def resolve_inquiry_email_target(
 ) -> tuple[str, int, str]:
     """
     Zwraca (email_target, score, metoda).
-    metoda: impressum | impressum_rules | rules | website_inbox | gemini_arbitration | none
+    metoda: impressum | impressum_rules | rules | website_inbox | none
     """
     candidates = filter_commercial_emails(list(collected.get("emails") or []))
     impressum_candidates = filter_commercial_emails(
@@ -5258,34 +4826,6 @@ def resolve_inquiry_email_target(
             note=f"odrzucono={target}",
         )
         return "", score, "blocked_not_store_builder"
-
-    use_gemini = ENABLE_GEMINI_CONTACT_EMAIL and needs_gemini_email_arbitration(
-        candidates, site
-    )
-    if use_gemini:
-        gemini_email = gemini_pick_inquiry_email_from_page(
-            company_name,
-            site,
-            candidates,
-            snippet,
-            logger,
-            cache,
-            cache_key=cache_key,
-        )
-        if gemini_email:
-            g_score = score_email_candidate(gemini_email, site)
-            if g_score >= MIN_EMAIL_SCORE_FOR_SEND:
-                log_email_pick_decision(
-                    logger,
-                    place_url=cache_key,
-                    company_name=company_name,
-                    website=site,
-                    candidates=candidates,
-                    target=gemini_email,
-                    score=g_score,
-                    method="gemini_arbitration",
-                )
-                return gemini_email, g_score, "gemini_arbitration"
 
     log_email_pick_decision(
         logger,
@@ -5380,13 +4920,13 @@ def collect_contacts_from_website(
 
 
 def _assemble_inquiry_email_body(company_name: str, opening: str = "") -> str:
-    """Fester Block FIXED_GU_INQUIRY_DE (ohne Gemini-Fließtext)."""
+    """Fester Block FIXED_GU_INQUIRY_DE."""
     _ = company_name, opening  # zachowane dla kompatybilności wywołań
     return FIXED_GU_INQUIRY_DE.strip()
 
 
-def generate_email_content_gemini(company_name: str, logger: logging.Logger, cache=None):
-    """Wyłącznie stały tekst z mfg_gu_inquiry_email_de — bez Gemini i bez szablonu GUI."""
+def generate_email_content(company_name: str, logger: logging.Logger, cache=None):
+    """Wyłącznie stały tekst z mfg_gu_inquiry_email_de."""
     _ = company_name, logger, cache
     console_step("E-Mail: fester MFG-Text (mfg_gu_inquiry_email_de)")
     return FIXED_EMAIL_SUBJECT_DE, FIXED_GU_INQUIRY_DE.strip()
@@ -5621,7 +5161,7 @@ def _process_email_jobs(
             continue
         if force_resend:
             cache.setdefault("email_suppression", {}).pop(target.lower(), None)
-        subject, body = generate_email_content_gemini(
+        subject, body = generate_email_content(
             mail.get("company_name", "Firma"), logger, cache=cache
         )
         if dry_run_email:
@@ -6307,8 +5847,8 @@ def run_scraper(
                 )
             if (
                 not stop_requested
-                and ENABLE_GEMINI_DISCOVERY_TERMS
-                and _needs_gemini_discovery_supplement(
+                and ENABLE_CLAUDE_DISCOVERY_TERMS
+                and _needs_claude_discovery_supplement(
                     all_rows,
                     cache,
                     rotation_land,
@@ -6318,11 +5858,11 @@ def run_scraper(
                 )
             ):
                 console_step(
-                    "Za mało wyników po szablonach — uzupełnienie Gemini → Serper"
+                    "Za mało wyników po szablonach — uzupełnienie Claude → Serper"
                 )
                 serper_kw["total_new_rows"] = total_new_rows
                 serper_kw["stop_requested"] = stop_requested
-                total_new_rows, stop_requested = _run_gemini_discovery_supplement(
+                total_new_rows, stop_requested = _run_claude_discovery_supplement(
                     all_rows,
                     cache,
                     logger,
@@ -6508,22 +6048,19 @@ def _run_smoke_tests() -> None:
     assert "Mit freundlichen Grüßen" in cleaned
     assert "Kurzer Test" not in body
     assert is_germany_de_candidate("https://firma.de/kontakt", "GU Leipzig", "")
-    from gemini_contact_extract import parse_gemini_contact_extract_response
+    from contact_extract_utils import parse_contact_extract_response
 
-    parsed_contacts = parse_gemini_contact_extract_response(
+    parsed_contacts = parse_contact_extract_response(
         '{"company_name":"Muster Bau GmbH","emails":["info@example.de"],'
         '"phones":["+49 341 1234567"],"reason":"ok"}'
     )
     assert parsed_contacts["emails"] == ["info@example.de"]
     assert parsed_contacts["phones"]
     assert "GmbH" in parsed_contacts["company_name"]
-    assert ENABLE_GEMINI_CONTACT_EXTRACTION is False
     assert ENABLE_CLAUDE_PAGE_VERIFY is True
     assert ENABLE_CLAUDE_ROW_CLEANUP is True
-    assert ENABLE_GEMINI_ROW_CLEANUP is False
-    assert ENABLE_GEMINI_PAGE_VERIFY is False
     assert CONTACT_EMAIL_TOKEN_MAX == 40
-    assert ENABLE_GEMINI_DISCOVERY_TERMS is False
+    assert ENABLE_CLAUDE_DISCOVERY_TERMS is False
     assert ENABLE_REGION_PLZ_FILTER is False
     assert len(SERPER_DISCOVERY_TERMS) >= 20
     from gu_bundesland_rotation import (

@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Gemini: generowanie fraz Serper (uzupełnienie) gdy szablony dały za mało wyników.
-"""
+"""Claude: generowanie fraz Serper (uzupełnienie) gdy szablony dały za mało wyników."""
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta
-from typing import Callable
 
 from campaign_keyword_profile import (
     SERPER_TEMPLATE_PATTERNS,
@@ -15,19 +11,17 @@ from campaign_keyword_profile import (
     negative_keywords_sample,
     retail_context_keywords_sample,
 )
+from claude_client import claude_generate_text, is_claude_limit_reached_today
 from de_gu_keywords import BUNDESLAND_CONFIG
-from retail_store_builder_filter import (
-    STRICT_GU_MARKERS,
-    is_generalunternehmer,
-)
+from retail_store_builder_filter import STRICT_GU_MARKERS, is_generalunternehmer
+from scraper_env import get_anthropic_api_key
 
-GEMINI_DISCOVERY_MAX_TERM_LEN = 55
-GEMINI_DISCOVERY_MIN_TERM_LEN = 12
-
+DISCOVERY_MAX_TERM_LEN = 55
+DISCOVERY_MIN_TERM_LEN = 12
 _PARSE_LINE_RE = re.compile(r"^\s*(?:\d+[\.\)]\s*)?(.+?)\s*$")
 
 
-def parse_gemini_term_lines(text: str) -> list[str]:
+def parse_discovery_term_lines(text: str) -> list[str]:
     lines: list[str] = []
     for raw in (text or "").splitlines():
         line = raw.strip()
@@ -42,12 +36,14 @@ def parse_gemini_term_lines(text: str) -> list[str]:
 
 def validate_discovery_term(term: str) -> bool:
     t = (term or "").strip()
-    if len(t) < GEMINI_DISCOVERY_MIN_TERM_LEN or len(t) > GEMINI_DISCOVERY_MAX_TERM_LEN:
+    if len(t) < DISCOVERY_MIN_TERM_LEN or len(t) > DISCOVERY_MAX_TERM_LEN:
         return False
     low = t.lower()
     if not is_generalunternehmer(low)[0]:
         return False
-    if "bauunternehmen" in low and not any(m.strip() in low for m in STRICT_GU_MARKERS if m.strip()):
+    if "bauunternehmen" in low and not any(
+        m.strip() in low for m in STRICT_GU_MARKERS if m.strip()
+    ):
         return False
     from de_gu_keywords import SERPER_NEGATIVE_TERMS
 
@@ -68,7 +64,7 @@ def _cities_for_lands(lands: list[str], *, max_cities: int = 8) -> list[str]:
     return cities
 
 
-def build_gemini_discovery_prompt(
+def build_discovery_terms_prompt(
     lands: list[str],
     *,
     cities: list[str] | None = None,
@@ -97,7 +93,7 @@ def build_gemini_discovery_prompt(
         f"- Jede Zeile MUSS eines enthalten: {', '.join(gu_required_keywords_sample(max_items=6))}\n"
         f"- Retail-Kontext erwünscht: {', '.join(retail_context_keywords_sample(max_items=8))}\n"
         f"- NICHT: {', '.join(negative_keywords_sample(max_items=8))}\n"
-        f"- Max {GEMINI_DISCOVERY_MAX_TERM_LEN} Zeichen pro Zeile\n"
+        f"- Max {DISCOVERY_MAX_TERM_LEN} Zeichen pro Zeile\n"
         "- Deutsch, keine Nummerierung, keine Anführungszeichen\n"
         "- Kein reines Ladenbau/Bauunternehmen ohne GU\n"
         f"{exclude_block}\n\n"
@@ -106,16 +102,21 @@ def build_gemini_discovery_prompt(
 
 
 def _cache_bucket(cache: dict) -> dict:
-    return cache.setdefault("gemini_discovery_terms", {})
+    return cache.setdefault("claude_discovery_terms", {})
 
 
-def get_cached_gemini_terms(
+def get_cached_discovery_terms(
     cache: dict,
     land: str,
     *,
     cache_days: int,
 ) -> list[str] | None:
-    entry = _cache_bucket(cache).get((land or "").strip())
+    bucket = _cache_bucket(cache)
+    entry = bucket.get((land or "").strip())
+    if entry is None:
+        legacy = (cache.get("gemini_discovery_terms") or {}).get((land or "").strip())
+        if isinstance(legacy, dict):
+            entry = legacy
     if not isinstance(entry, dict):
         return None
     at_raw = entry.get("at") or ""
@@ -131,7 +132,7 @@ def get_cached_gemini_terms(
     return None
 
 
-def store_cached_gemini_terms(cache: dict, land: str, terms: list[str]) -> None:
+def store_cached_discovery_terms(cache: dict, land: str, terms: list[str]) -> None:
     land_key = (land or "").strip() or "Deutschland"
     _cache_bucket(cache)[land_key] = {
         "at": datetime.now().isoformat(),
@@ -139,13 +140,11 @@ def store_cached_gemini_terms(cache: dict, land: str, terms: list[str]) -> None:
     }
 
 
-def generate_gemini_discovery_terms(
+def generate_claude_discovery_terms(
     cache: dict,
     logger,
     lands: list[str],
     *,
-    gemini_generate_text: Callable,
-    api_key: str,
     terms_requested: int = 10,
     cache_days: int = 7,
     use_cache: bool = True,
@@ -154,35 +153,39 @@ def generate_gemini_discovery_terms(
     """Zwraca zwalidowane frazy Serper (max terms_requested)."""
     land_key = (lands[0] if lands else "").strip() or "Deutschland"
     if use_cache:
-        cached = get_cached_gemini_terms(cache, land_key, cache_days=cache_days)
+        cached = get_cached_discovery_terms(cache, land_key, cache_days=cache_days)
         if cached:
-            logger.info("Gemini discovery: cache %s (%s fraz)", land_key, len(cached))
+            logger.info("Claude discovery: cache %s (%s fraz)", land_key, len(cached))
             return cached[:terms_requested]
 
+    api_key = get_anthropic_api_key()
     if not api_key:
-        logger.warning("Gemini discovery: brak GOOGLE_AI_STUDIO_API_KEY")
+        logger.warning("Claude discovery: brak ANTHROPIC_API_KEY")
+        return []
+    if is_claude_limit_reached_today(cache):
+        logger.warning("Claude discovery: dzienny limit / rezerwa")
         return []
 
-    prompt = build_gemini_discovery_prompt(
+    prompt = build_discovery_terms_prompt(
         lands,
         terms_requested=terms_requested,
         exclude_terms=exclude_terms,
     )
     try:
-        logger.info("Gemini discovery: generowanie %s fraz", terms_requested)
-        text, model = gemini_generate_text(prompt, logger, api_key, cache=cache)
-        logger.info("Gemini discovery terms, model=%s", model)
+        logger.info("Claude discovery: generowanie %s fraz", terms_requested)
+        text, model = claude_generate_text(prompt, logger, api_key, cache=cache)
+        logger.info("Claude discovery terms, model=%s", model)
     except Exception as exc:
-        logger.warning("Gemini discovery terms: %s", exc)
+        logger.warning("Claude discovery terms: %s", exc)
         return []
 
     validated: list[str] = []
-    for line in parse_gemini_term_lines(text):
+    for line in parse_discovery_term_lines(text):
         if validate_discovery_term(line) and line not in validated:
             validated.append(line)
         if len(validated) >= terms_requested:
             break
 
     if validated and use_cache:
-        store_cached_gemini_terms(cache, land_key, validated)
+        store_cached_discovery_terms(cache, land_key, validated)
     return validated

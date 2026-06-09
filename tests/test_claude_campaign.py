@@ -31,7 +31,7 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
     def test_claude_verify_accepts_gu_retail(self):
         from claude_page_verify import claude_verify_company_page
 
-        gemini_json = (
+        response_json = (
             '{"is_gu": true, "has_retail_context": true, '
             '"primary_role": "Generalunternehmer", '
             '"matched_gu_keywords": ["generalunternehmer"], '
@@ -43,7 +43,7 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
         with patch("claude_page_verify.get_anthropic_api_key", return_value="test-key"):
             with patch(
                 "claude_page_verify.claude_generate_text",
-                return_value=(gemini_json, "claude-sonnet-test"),
+                return_value=(response_json, "claude-sonnet-test"),
             ):
                 result = claude_verify_company_page(
                     "Test Bau GmbH",
