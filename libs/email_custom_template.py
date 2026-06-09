@@ -11,6 +11,10 @@ import re
 from typing import Any
 
 from claude_client import claude_generate_text
+from claude_prompts import (
+    build_custom_email_prompt_de,
+    build_custom_email_prompt_pl,
+)
 from scraper_env import get_anthropic_api_key
 
 
@@ -24,35 +28,17 @@ def build_custom_draft_prompt(
 ) -> str:
     draft = (draft or "").strip()
     if lang == "de":
-        return (
-            "Du bist B2B-Assistent. Der Nutzer hat eine E-Mail-Vorlage für eine Preisanfrage geliefert.\n"
-            f"Empfängerfirma: {company_name}.\n"
-            f"{f'Projektstadt: {city_name}. ' if city_name else ''}"
-            f"{f'Lieferadresse (unverändert lassen): {delivery_address}. ' if delivery_address else ''}"
-            "Aufgabe: Passe die Vorlage minimal an diese Firma an (1–2 Sätze Kontext), "
-            "verbessere Formulierung und Lesbarkeit, behalte aber ALLE Fakten exakt "
-            "(Mengen, Daten, Adressen, Fraktionen, Telefon, Firmennamen, Signaturblock).\n"
-            "Die Signatur am Ende muss inhaltlich identisch bleiben (gleiche Person/Firma/Telefon).\n"
-            "Antworte NUR mit JSON: {\"subject\":\"...\",\"body\":\"...\"}\n"
-            "subject: max 78 Zeichen, konkret, ohne Re:/Erinnerung.\n"
-            "body: vollständige sendefertige E-Mail auf Deutsch.\n"
-            "Keine erfundenen Preise. Keine Wörter: kostenlos, Sonderangebot, dringend.\n\n"
-            f"VORLAGE DES NUTZERS:\n{draft}"
+        return build_custom_email_prompt_de(
+            draft,
+            company_name,
+            city_name=city_name,
+            delivery_address=delivery_address,
         )
-    return (
-        "Jesteś asystentem B2B. Użytkownik wkleił szablon maila z zapytaniem ofertowym.\n"
-        f"Firma adresat: {company_name}.\n"
-        f"{f'Miasto/inwestycja: {city_name}. ' if city_name else ''}"
-        f"{f'Adres dostawy (bez zmian merytorycznych): {delivery_address}. ' if delivery_address else ''}"
-        "Zadanie: lekko spersonalizuj szablon pod tę firmę (1–2 zdania kontekstu), "
-        "uporządkuj styl i popraw język, ale zachowaj WSZYSTKIE fakty dokładnie "
-        "(ilości, daty, adresy, frakcje, telefony, nazwy firm, blok podpisu).\n"
-        "Stopka/podpis na końcu musi pozostać merytorycznie taka sama (ta sama osoba/firma/telefon).\n"
-        "Odpowiedz WYŁĄCZNIE JSON: {\"subject\":\"...\",\"body\":\"...\"}\n"
-        "subject: max 78 znaków, konkretny, bez Re:/Przypomnienie.\n"
-        "body: pełny gotowy do wysyłki mail (plain text).\n"
-        "Nie wymyślaj cen. Bez słów: gratis, promocja, pilne, kliknij.\n\n"
-        f"SZABLON UŻYTKOWNIKA:\n{draft}"
+    return build_custom_email_prompt_pl(
+        draft,
+        company_name,
+        city_name=city_name,
+        delivery_address=delivery_address,
     )
 
 

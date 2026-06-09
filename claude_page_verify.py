@@ -25,6 +25,7 @@ def claude_verify_company_page(
     cache_key: str = "",
     serper_blob: str = "",
     require_generalunternehmer: bool = True,
+    require_small_firm: bool = True,
     on_step: Callable[[str], None] | None = None,
 ) -> dict | None:
     """Czyta stronę (tekst) i zwraca werdykt JSON; None przy braku API lub błędzie."""
@@ -70,6 +71,7 @@ def claude_verify_company_page(
         page_text=page_text,
         serper_blob=serper_blob,
         require_generalunternehmer=require_generalunternehmer,
+        require_small_firm=require_small_firm,
     )
     gu_ok, gu_marker = is_generalunternehmer(
         " ".join([page_text, serper_blob, " ".join(parsed.get("matched_gu_keywords") or [])])
@@ -80,6 +82,7 @@ def claude_verify_company_page(
         "retail_chains": chains,
         "is_gu": gu_ok,
         "gu_marker": gu_marker,
+        "is_small_firm": bool(parsed.get("is_small_firm")),
         "claude": parsed,
     }
     if cache_key:

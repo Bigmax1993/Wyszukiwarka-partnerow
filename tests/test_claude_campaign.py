@@ -38,6 +38,7 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
             '"matched_retail_keywords": ["filialbau"], '
             '"matched_chains": ["rewe"], '
             '"matched_negative_keywords": [], '
+            '"is_small_firm": true, '
             '"reason": "GU mit Filialbau"}'
         )
         with patch("claude_page_verify.get_anthropic_api_key", return_value="test-key"):
@@ -48,13 +49,45 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
                 result = claude_verify_company_page(
                     "Test Bau GmbH",
                     "https://test-bau.de",
-                    "Wir sind Generalunternehmer für Filialbau und Rewe Projekte.",
+                    "Wir sind Generalunternehmer für Filialbau und Rewe Projekte. "
+                    "Familienunternehmen mit 40 Mitarbeitern.",
                     logger=MagicMock(),
                     cache={},
                 )
         self.assertIsNotNone(result)
         self.assertTrue(result["verified"])
+        self.assertTrue(result["is_small_firm"])
         self.assertIn("rewe", result["retail_chains"])
+
+    def test_claude_verify_rejects_konzern_not_small(self):
+        from claude_page_verify import claude_verify_company_page
+
+        response_json = (
+            '{"is_gu": true, "has_retail_context": true, '
+            '"primary_role": "Generalunternehmer", '
+            '"matched_gu_keywords": ["generalunternehmer"], '
+            '"matched_retail_keywords": ["filialbau"], '
+            '"matched_chains": ["rewe"], '
+            '"matched_negative_keywords": [], '
+            '"is_small_firm": false, '
+            '"reason": "Weltkonzern"}'
+        )
+        with patch("claude_page_verify.get_anthropic_api_key", return_value="test-key"):
+            with patch(
+                "claude_page_verify.claude_generate_text",
+                return_value=(response_json, "claude-sonnet-test"),
+            ):
+                result = claude_verify_company_page(
+                    "STRABAG SE",
+                    "https://www.strabag.com",
+                    "STRABAG SE weltweit tätig. Rewe Filialbau Referenz.",
+                    logger=MagicMock(),
+                    cache={},
+                )
+        self.assertIsNotNone(result)
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["is_small_firm"])
+        self.assertIn("kleinunternehmen", result["verification_reason"])
 
     def test_claude_reserve_blocks_api_at_buffer(self):
         from claude_client import (
@@ -106,6 +139,40 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
         email = f"{local}@example.de"
         found = scraper._find_emails_in_text_regex(f"Kontakt: {email}")
         self.assertIn(email.lower(), found)
+
+    def test_row_cleanup_claude_then_regex(self):
+        import de_gu_bauunternehmen_scraper as scraper
+
+        row = {
+            "url": "https://beispiel-bau.de",
+            "nazwa": "Beispiel Bau",
+            "page_snippet": "Impressum info@beispiel-bau.de Tel +49 341 1234567",
+            "email_target": "",
+            "telefon": "",
+        }
+        with patch(
+            "claude_row_cleanup.claude_cleanup_row_fields",
+            return_value={
+                "company_name_clean": "Beispiel Bau GmbH",
+                "address": "Hauptstr. 1, 04109 Leipzig",
+                "phone": "",
+                "website": "https://beispiel-bau.de",
+                "bundesland": "Sachsen",
+                "handelsketten": "rewe, aldi",
+                "url": "https://beispiel-bau.de",
+            },
+        ):
+            with patch.object(scraper, "get_anthropic_api_key", return_value="key"):
+                out = scraper.enrich_row_with_claude_cleanup(
+                    dict(row), MagicMock(), {}
+                )
+        self.assertEqual(out["company_name_clean"], "Beispiel Bau GmbH")
+        self.assertEqual(out["email_target"], "info@beispiel-bau.de")
+        self.assertIn("+49", out["telefon"])
+        self.assertEqual(out["retail_chains_found"], "rewe, aldi")
+        excel = scraper.row_to_excel_kontakte_columns(out)
+        self.assertEqual(excel["Nazwa firmy"], "Beispiel Bau GmbH")
+        self.assertEqual(excel["Handelsketten"], "rewe, aldi")
 
 
 if __name__ == "__main__":

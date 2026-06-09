@@ -5,12 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from campaign_keyword_profile import (
-    SERPER_TEMPLATE_PATTERNS,
-    gu_required_keywords_sample,
-    negative_keywords_sample,
-    retail_context_keywords_sample,
-)
+from claude_prompts import build_discovery_terms_prompt as _build_discovery_terms_prompt
 from claude_client import claude_generate_text, is_claude_limit_reached_today
 from de_gu_keywords import BUNDESLAND_CONFIG
 from retail_store_builder_filter import STRICT_GU_MARKERS, is_generalunternehmer
@@ -74,30 +69,19 @@ def build_discovery_terms_prompt(
     city_list = cities or _cities_for_lands(lands)
     land_str = ", ".join(lands) if lands else "Deutschland"
     city_str = ", ".join(city_list[:8]) if city_list else "—"
-    templates = "\n".join(f"- {t}" for t in SERPER_TEMPLATE_PATTERNS[:10])
     exclude_block = ""
     if exclude_terms:
         exclude_block = (
             "\nBereits verwendet (nicht wiederholen):\n"
             + "\n".join(f"- {t}" for t in exclude_terms[:20])
         )
-    return (
-        "Du bist Assistent für B2B-Prospecting in Deutschland.\n"
-        "Ziel: kurze Google-Suchanfragen (Serper) für Generalunternehmer (GU) "
-        "im Filialbau / Supermarktbau / Gewerbebau für Einzelhandel.\n\n"
-        f"Bundesland: {land_str}\n"
-        f"Städte: {city_str}\n\n"
-        "Vorlagen (jede neue Zeile = Variante davon, {city} durch Stadt ersetzen):\n"
-        f"{templates}\n\n"
-        "STRICT:\n"
-        f"- Jede Zeile MUSS eines enthalten: {', '.join(gu_required_keywords_sample(max_items=6))}\n"
-        f"- Retail-Kontext erwünscht: {', '.join(retail_context_keywords_sample(max_items=8))}\n"
-        f"- NICHT: {', '.join(negative_keywords_sample(max_items=8))}\n"
-        f"- Max {DISCOVERY_MAX_TERM_LEN} Zeichen pro Zeile\n"
-        "- Deutsch, keine Nummerierung, keine Anführungszeichen\n"
-        "- Kein reines Ladenbau/Bauunternehmen ohne GU\n"
-        f"{exclude_block}\n\n"
-        f"Genau {terms_requested} Zeilen, eine Anfrage pro Zeile, sonst nichts."
+    return _build_discovery_terms_prompt(
+        lands,
+        city_str=city_str,
+        land_str=land_str,
+        terms_requested=terms_requested,
+        exclude_block=exclude_block,
+        max_term_len=DISCOVERY_MAX_TERM_LEN,
     )
 
 

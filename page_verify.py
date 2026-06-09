@@ -5,21 +5,18 @@ from __future__ import annotations
 import json
 import re
 
-from campaign_keyword_profile import (
-    REJECT_PRIMARY_ROLES,
-    gu_required_keywords_sample,
-    negative_keywords_sample,
-    retail_chain_keywords_sample,
-    retail_context_keywords_sample,
-)
+from campaign_keyword_profile import REJECT_PRIMARY_ROLES
+from claude_prompts import build_page_verify_prompt as _build_page_verify_prompt
 from retail_store_builder_filter import (
     REQUIRED_RETAIL_CHAIN_KEYWORDS,
     detect_required_retail_chains,
+    has_market_project_evidence_on_website,
     has_required_retail_chain_mention,
     is_excluded_non_gu_role,
     is_generalunternehmer,
     is_media_publisher_contact,
     is_retail_store_operator_contact,
+    qualifies_as_gu_for_campaign,
 )
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -50,28 +47,8 @@ def build_page_verify_prompt(
     *,
     max_chars: int = 8000,
 ) -> str:
-    snippet = (page_text or "")[:max_chars]
-    return (
-        "Du bist strenger Prüfer für B2B-Outreach an Generalunternehmer (GU) "
-        "im Filialbau / Supermarktbau in Deutschland.\n\n"
-        "Bewerte den Website-Auszug anhand dieser Kampagnen-Schlüsselwörter:\n\n"
-        f"[WYMAGANE GU]\n{', '.join(gu_required_keywords_sample())}\n\n"
-        f"[KONTEKST RETAIL / FILIALBAU]\n{', '.join(retail_context_keywords_sample())}\n\n"
-        f"[SIECI HANDLOWE — Projekte]\n{', '.join(retail_chain_keywords_sample())}\n\n"
-        f"[ODRZUĆ jeśli dominiert]\n{', '.join(negative_keywords_sample())}\n\n"
-        f"Firma: {company_name}\nWebseite: {website}\n\n"
-        "Antwort NUR als JSON (kein Markdown):\n"
-        "{\n"
-        '  "matched_gu_keywords": ["generalunternehmer"],\n'
-        '  "matched_retail_keywords": ["filialbau"],\n'
-        '  "matched_chains": ["rewe"],\n'
-        '  "matched_negative_keywords": [],\n'
-        '  "is_gu": true,\n'
-        '  "has_retail_context": true,\n'
-        '  "primary_role": "Generalunternehmer",\n'
-        '  "reason": "kurz DE max 2 Sätze"\n'
-        "}\n\n"
-        f"Auszug:\n{snippet or '(leer)'}"
+    return _build_page_verify_prompt(
+        company_name, website, page_text, max_chars=max_chars
     )
 
 
@@ -96,6 +73,7 @@ def parse_page_verify_response(text: str) -> dict:
         "matched_negative_keywords": _list("matched_negative_keywords"),
         "is_gu": bool(data.get("is_gu")),
         "has_retail_context": bool(data.get("has_retail_context")),
+        "is_small_firm": bool(data.get("is_small_firm")),
         "primary_role": str(data.get("primary_role") or "").strip(),
         "reason": str(data.get("reason") or "").strip(),
     }
@@ -107,6 +85,7 @@ def apply_page_verdict(
     page_text: str,
     serper_blob: str = "",
     require_generalunternehmer: bool = True,
+    require_small_firm: bool = True,
 ) -> tuple[bool, str, list[str]]:
     """Werdykt z JSON Claude + guardrails na tekście strony."""
     blob = " ".join([page_text or "", serper_blob or ""]).lower()
@@ -122,16 +101,20 @@ def apply_page_verdict(
     if role and role.lower() in _REJECT_ROLES_NORMALIZED:
         return False, f"claude_role:{role}", llm.get("matched_chains") or []
 
-    if not llm.get("is_gu"):
+    gu_campaign_ok, _gu_marker = qualifies_as_gu_for_campaign(blob)
+    if not llm.get("is_gu") and not gu_campaign_ok:
         return False, "claude_kein_gu", llm.get("matched_chains") or []
 
     if require_generalunternehmer:
         gu_text, _ = is_generalunternehmer(blob)
         gu_json = bool(llm.get("matched_gu_keywords"))
-        if not gu_text and not gu_json:
+        if not gu_text and not gu_json and not gu_campaign_ok:
             return False, "kein_generalunternehmer", llm.get("matched_chains") or []
 
-    if not llm.get("has_retail_context"):
+    has_retail = bool(llm.get("has_retail_context")) or has_market_project_evidence_on_website(
+        blob
+    )
+    if not has_retail:
         return False, "claude_kein_retail", llm.get("matched_chains") or []
 
     required_set = set(REQUIRED_RETAIL_CHAIN_KEYWORDS)
@@ -144,6 +127,9 @@ def apply_page_verdict(
     chains = list(dict.fromkeys(llm_chains + blob_chains))
     if not chains and not has_required_retail_chain_mention(blob):
         return False, "keine_handelskette", []
+
+    if require_small_firm and not llm.get("is_small_firm"):
+        return False, "claude_kein_kleinunternehmen", chains
 
     reason = (llm.get("reason") or "claude_gu_retail").strip()
     return True, f"claude:{reason[:120]}", chains

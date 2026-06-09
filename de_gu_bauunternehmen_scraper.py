@@ -1298,53 +1298,21 @@ def build_claude_row_cleanup_prompt(
     email: str,
     website: str,
     states: str,
+    handelsketten: str = "",
+    url: str = "",
 ) -> str:
-    return f"""Du bist ein EXTREM strenger Datenprüfer für B2B-Outreach an Generalunternehmer (GU) /
-Bauunternehmen, die Lebensmittelmärkte und Filialen NEU BAUEN oder UMBAUEN. Auf der Website muss ein
-Nachweis von MARKT-Projekten sichtbar sein: Referenzen/Portfolio ODER Fotos/Galerie (z. B. Aldi, Rewe,
-Supermarkt, Filiale) — eine eigene Rubrik „Portfolio“ ist nicht zwingend.
-Keine Einzelhandels-Märkte als Betreiber.
-Deine einzige Aufgabe: Felder bereinigen.
+    from claude_prompts import build_row_cleanup_prompt
 
-═══ AUSGABE ═══
-Gib AUSSCHLIESSLICH ein einziges gültiges JSON-Objekt zurück (kein Markdown, kein Kommentar).
-Schema exakt:
-{{"company_name_clean":"","address":"","phone":"","website":"","bundesland":""}}
-
-═══ company_name_clean — HÖCHSTE PRIORITÄT (KILLER-REGELN) ═══
-Zulässig NUR: offizieller Firmenname + Rechtsform in EINER Zeile.
-Beispiele OK: "Max Wiessner Baugeschäft GmbH", "Müller Ladenbau GmbH", "SuS Bau GmbH" (mit Filialbau-Kontext).
-NICHT OK: reine Bausanierung ohne Filialbau, REWE/Aldi-Markt als Betreiber, keine Bau-GU.
-Format: <Name> <Rechtsform> — Rechtsform MUSS vorkommen: GmbH, UG, AG, GbR, e.K., KG, OHG, PartG, Co. KG, SE.
-
-STRENG VERBOTEN — bei jedem Treffer company_name_clean = "" (leerer String):
-• PDF/Dokumente: alles mit [PDF], PDF, Dokument, Bebauungsplan, Anlage, Auswirkungsanalyse, Seite X von Y
-• Software/IT (NIEMALS als Bauunternehmen): PDF-XChange, PDF XChange, Tracker, Adobe, Microsoft, xchange, shop@pdf-*
-• Portale/Kataloge/News ohne GU: Vergabemarktplatz, Ausschreibung, 11880, GelbeSeiten, Wikipedia, Nexxt-Change,
-  "Top 100", "10 beste", Referenzen-Listen, Katalog, Mitgliedsunternehmen, IHK-Listen, Stadtverwaltung, Dezernat
-• Nur Stadt/Region/Projekt: "Erfurt", "Leipzig", "Potsdam", "Gewerbebau", "Generalunternehmer", "Gewerbeflächen",
-  "ALDI in Borna", "Penny Neubau", "Kaufland in …", Zeitungsüberschriften, Bauprojekt-Titel ohne Firma
-• URLs, E-Mail-Adressen, Emojis, Marketing-Slogans, Doppelpunkte am Ende ("Firma XYZ:")
-• Branchenportale, Wirtschaftsförderung, Tourismus (visitberlin, thueringen-entdecken, forst.thueringen …)
-
-Wenn der Eingabe-Name Müll ist, aber Website/Impressum-Kontext eindeutig eine echte Baufirma mit Rechtsform erlauben —
-nur dann den echten Namen aus dem Kontext ableiten. NIEMALS erfinden.
-Wenn unsicher oder keine Rechtsform ableitbar: company_name_clean = "".
-
-═══ Weitere Felder ═══
-• address: Straße + PLZ + Ort (Deutschland) oder ""
-• phone: eine deutsche Rufnummer (+49/0…) oder ""
-• website: kanonische Firmen-https-URL (kein Verzeichnis, kein PDF-Link) oder ""
-• bundesland: genau ein Wert aus [{states}] oder ""
-• E-Mail aus Eingabe NICHT ändern/übernehmen (nur zur Plausibilitätsprüfung).
-
-═══ Eingabe ═══
-name={company}
-address={address}
-phone={phone}
-website={website}
-email_nur_info={email}
-"""
+    return build_row_cleanup_prompt(
+        company=company,
+        address=address,
+        phone=phone,
+        email=email,
+        website=website,
+        states=states,
+        handelsketten=handelsketten,
+        url=url,
+    )
 
 
 def row_cleanup_fallback(
@@ -1368,9 +1336,82 @@ def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
     row["company_name_clean"] = company
     row["nazwa"] = company
     row["adres"] = llm_result.get("address", row.get("adres", ""))
+    row["full_address"] = row["adres"]
     row["telefon"] = llm_result.get("phone", row.get("telefon", ""))
-    row["official_website"] = llm_result.get("website", row.get("official_website", ""))
+    website = llm_result.get("website", row.get("official_website", ""))
+    row["official_website"] = website
+    row["www"] = normalize_website(website) or row.get("www", "")
     row["bundesland"] = llm_result.get("bundesland", row.get("bundesland", ""))
+    if llm_result.get("handelsketten"):
+        row["retail_chains_found"] = format_handelsketten_for_excel(
+            llm_result.get("handelsketten")
+        )
+    if llm_result.get("url"):
+        row["url"] = website_base_url(llm_result.get("url")) or row.get("url", "")
+
+
+def format_handelsketten_for_excel(raw: str) -> str:
+    parts: list[str] = []
+    for item in re.split(r"[,;/|]+", raw or ""):
+        chain = item.strip().lower()
+        if chain and chain not in parts:
+            parts.append(chain)
+    return ", ".join(parts)
+
+
+def finalize_row_for_excel_tables(row: dict) -> dict:
+    """Po Claude + regex: spójne pola pod arkusze Kontakte i Wojewodztwa."""
+    website = normalize_website(
+        (row.get("official_website") or row.get("www") or "").strip()
+    )
+    if website:
+        row["official_website"] = website
+        row["www"] = website
+    url = website_base_url((row.get("url") or website or "").strip())
+    if url:
+        row["url"] = url
+    row["adres"] = sanitize_special_text(row.get("adres") or row.get("full_address") or "")
+    row["full_address"] = row["adres"]
+    phone = (row.get("telefon") or "").strip()
+    if "," in phone:
+        phone = phone.split(",", 1)[0].strip()
+    norm_phone = _normalize_href_phone(phone)
+    row["telefon"] = norm_phone or phone
+    row["retail_chains_found"] = format_handelsketten_for_excel(
+        row.get("retail_chains_found") or ""
+    )
+    if row.get("bundesland") not in GERMAN_STATES:
+        row["bundesland"] = extract_bundesland(row)
+    return row
+
+
+def row_to_excel_kontakte_columns(row: dict, email: str = "") -> dict:
+    """Mapuje wiersz pipeline na kolumny arkusza Kontakte."""
+    row = finalize_row_for_excel_tables(dict(row))
+    mail = (email or row.get("email_target") or "").strip()
+    website = (row.get("official_website") or row.get("www") or "").strip()
+    return {
+        "Nazwa firmy": (row.get("company_name_clean") or row.get("nazwa") or "").strip(),
+        "Adres": (row.get("adres") or row.get("full_address") or "").strip(),
+        "Bundesland": (row.get("bundesland") or "").strip(),
+        "Telefon": (row.get("telefon") or "").strip(),
+        "E-mail": mail,
+        "Strona www": website,
+        "URL": (row.get("url") or website_base_url(website) or "").strip(),
+        "Handelsketten": (row.get("retail_chains_found") or "").strip(),
+    }
+
+
+def row_to_excel_wojewodztwa_columns(row: dict) -> dict:
+    """Mapuje wiersz pipeline na kolumny arkusza Wojewodztwa."""
+    row = finalize_row_for_excel_tables(dict(row))
+    return {
+        "Nazwa firmy": (row.get("company_name_clean") or row.get("nazwa") or "").strip(),
+        "Bundesland": (row.get("bundesland") or "").strip(),
+        "Adres": (row.get("adres") or row.get("full_address") or "").strip(),
+        "Strona www": (row.get("official_website") or row.get("www") or "").strip(),
+        "URL": (row.get("url") or "").strip(),
+    }
 
 
 def is_row_llm_cleanup_enabled() -> bool:
@@ -1398,13 +1439,15 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     )
     if cache_key and cache_key in claude_cache:
         apply_row_enrichment_to_row(row, claude_cache[cache_key])
-        return row
+        row = apply_regex_row_contact_cleanup(row)
+        return finalize_row_for_excel_tables(row)
     if cache_key and cache_key in (cache.get("gemini_row_enrichment") or {}):
         legacy = (cache.get("gemini_row_enrichment") or {}).get(cache_key)
         if isinstance(legacy, dict):
             claude_cache[cache_key] = dict(legacy)
             apply_row_enrichment_to_row(row, claude_cache[cache_key])
-        return row
+        row = apply_regex_row_contact_cleanup(row)
+        return finalize_row_for_excel_tables(row)
 
     row["company_name_clean"] = company
     row["nazwa"] = company
@@ -1414,7 +1457,8 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
 
     if not ENABLE_CLAUDE_ROW_CLEANUP:
         row["bundesland"] = extract_bundesland(row)
-        return row
+        row = apply_regex_row_contact_cleanup(row)
+        return finalize_row_for_excel_tables(row)
 
     api_key = get_anthropic_api_key()
     from claude_row_cleanup import claude_cleanup_row_fields
@@ -1424,7 +1468,8 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         apply_row_enrichment_to_row(row, fallback)
         if cache_key:
             claude_cache[cache_key] = fallback
-        return row
+        row = apply_regex_row_contact_cleanup(row)
+        return finalize_row_for_excel_tables(row)
 
     states = ", ".join(GERMAN_STATES)
     prompt = build_claude_row_cleanup_prompt(
@@ -1434,6 +1479,8 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         email=email,
         website=website,
         states=states,
+        handelsketten=(row.get("retail_chains_found") or "").strip(),
+        url=(row.get("url") or website or "").strip(),
     )
     parsed = claude_cleanup_row_fields(prompt, logger, cache)
     if not parsed:
@@ -1441,7 +1488,8 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         apply_row_enrichment_to_row(row, fallback)
         if cache_key:
             claude_cache[cache_key] = fallback
-        return row
+        row = apply_regex_row_contact_cleanup(row)
+        return finalize_row_for_excel_tables(row)
 
     cleaned_name = finalize_company_name_for_export(
         parsed.get("company_name_clean", ""),
@@ -1455,13 +1503,18 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
         "website": sanitize_special_text(parsed.get("website", website)) or website,
         "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
+        "handelsketten": format_handelsketten_for_excel(
+            parsed.get("handelsketten") or row.get("retail_chains_found") or ""
+        ),
+        "url": sanitize_special_text(parsed.get("url", row.get("url") or website)),
     }
     if claude_result["bundesland"] not in GERMAN_STATES:
         claude_result["bundesland"] = extract_bundesland(row)
     apply_row_enrichment_to_row(row, claude_result)
     if cache_key:
         claude_cache[cache_key] = claude_result
-    return row
+    row = apply_regex_row_contact_cleanup(row)
+    return finalize_row_for_excel_tables(row)
 
 
 def _contact_context_text(row: dict) -> str:
@@ -1578,22 +1631,11 @@ def build_export_rows(rows, logger=None, cache=None):
                 row.get("phones_found") or row.get("telefon") or ""
             )
             row["bundesland"] = extract_bundesland(row)
-        website = (row.get("official_website") or row.get("www") or "").strip()
-        address = (row.get("full_address") or row.get("adres") or "").strip()
-        phone = (row.get("phones_found") or row.get("telefon") or "").strip()
-        if "," in phone:
-            phone = phone.split(",", 1)[0].strip()
+            table_cols = row_to_excel_kontakte_columns(row, email)
+        else:
+            table_cols = row_to_excel_kontakte_columns(row, email)
         base = {
-            "Nazwa firmy": (
-                row.get("company_name_clean") or row.get("nazwa") or ""
-            ).strip(),
-            "Adres": address,
-            "Bundesland": (row.get("bundesland") or extract_bundesland(row)).strip(),
-            "Telefon": phone,
-            "E-mail": email,
-            "Strona www": website,
-            "URL": (row.get("url") or "").strip(),
-            "Handelsketten": (row.get("retail_chains_found") or "").strip(),
+            **table_cols,
             "WWW_geprueft": "ja" if row.get("retail_verified") else "nein",
             "Kleinunternehmen": "ja" if row.get("is_small_firm") else "nein",
             "GU": "ja" if row.get("is_gu") or _row_has_gu_signal(row) else "nein",
@@ -1620,28 +1662,18 @@ def build_bundesland_rows(rows):
     seen = set()
     for row in rows:
         row = normalize_row_company_name(row)
-        row_url = (row.get("url") or "").strip()
-        row_name = (row.get("company_name_clean") or row.get("nazwa") or "").strip()
+        table = row_to_excel_wojewodztwa_columns(row)
+        row_name = (table.get("Nazwa firmy") or "").strip()
+        row_url = (table.get("URL") or "").strip()
         if row_name.lower() == "nieznana firma" and not row_url:
             continue
-        row_state = (row.get("bundesland") or extract_bundesland(row)).strip()
-        row_address = sanitize_special_text(row.get("full_address") or row.get("adres") or "")
-        row_website = sanitize_special_text(
-            row.get("official_website") or row.get("www") or ""
-        )
+        row_state = (table.get("Bundesland") or "").strip()
+        row_address = (table.get("Adres") or "").strip()
         dedupe_key = row_url or f"{row_name}|{row_state}|{row_address}"
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        state_rows.append(
-            {
-                "Nazwa firmy": row_name,
-                "Bundesland": row_state,
-                "Adres": row_address,
-                "Strona www": row_website,
-                "URL": row_url,
-            }
-        )
+        state_rows.append(table)
     return state_rows
 
 
@@ -3198,22 +3230,6 @@ def verify_company_on_website(
     """
     page_text, pages_checked = gather_website_text_for_verification(website, logger)
     blob = " ".join([page_text, serper_blob])
-    large, large_reason = is_likely_large_company(
-        company_name, website, page_text, serper_blob
-    )
-    if large:
-        return _finalize_verification_result(
-            {
-                "verified": False,
-                "is_small_firm": False,
-                "retail_chains": [],
-                "verification_reason": large_reason,
-                "verification_method": "rules",
-                "pages_checked": pages_checked,
-                "page_snippet": _truncate_page_snippet(page_text),
-            },
-            blob,
-        )
 
     if ENABLE_CLAUDE_PAGE_VERIFY:
         from claude_client import is_claude_limit_reached_today, is_claude_rate_limited
@@ -3233,16 +3249,13 @@ def verify_company_on_website(
                 cache_key=cache_key or website,
                 serper_blob=serper_blob,
                 require_generalunternehmer=REQUIRE_GENERALUNTERNEHMER,
+                require_small_firm=REQUIRE_SMALL_FIRM,
             )
             if claude is not None:
-                small_hint = any(m in blob.lower() for m in SMALL_COMPANY_PAGE_MARKERS)
-                is_small = resolve_is_small_firm(
-                    blob, large=large, small_hint=small_hint
-                )
                 return _finalize_verification_result(
                     {
                         "verified": claude.get("verified", False),
-                        "is_small_firm": is_small,
+                        "is_small_firm": claude.get("is_small_firm", False),
                         "retail_chains": claude.get("retail_chains") or [],
                         "verification_reason": claude.get(
                             "verification_reason", "claude"
@@ -3255,6 +3268,23 @@ def verify_company_on_website(
                     },
                     blob,
                 )
+
+    large, large_reason = is_likely_large_company(
+        company_name, website, page_text, serper_blob
+    )
+    if large:
+        return _finalize_verification_result(
+            {
+                "verified": False,
+                "is_small_firm": False,
+                "retail_chains": [],
+                "verification_reason": large_reason,
+                "verification_method": "rules",
+                "pages_checked": pages_checked,
+                "page_snippet": _truncate_page_snippet(page_text),
+            },
+            blob,
+        )
 
     if _is_small_ladenbau_specialist(company_name, website, page_text):
         chains = detect_retail_chains_in_text(page_text)
@@ -3565,15 +3595,16 @@ def _normalize_href_phone(raw: str) -> str:
     return normalize_phone_contact((raw or "").replace("tel:", "", 1))
 
 
-CONTACT_EMAIL_TOKEN_MAX = 40
+CONTACT_DATA_TOKEN_MAX = 40
+CONTACT_EMAIL_TOKEN_MAX = CONTACT_DATA_TOKEN_MAX
 _PAGE_EMAIL_RE = re.compile(
-    rf"[a-z0-9._%+\-]{{1,{CONTACT_EMAIL_TOKEN_MAX}}}@"
-    rf"[a-z0-9.\-]{{1,{CONTACT_EMAIL_TOKEN_MAX}}}\."
-    rf"[a-z0-9\-]{{2,{CONTACT_EMAIL_TOKEN_MAX}}}",
+    rf"[a-z0-9._%+\-]{{1,{CONTACT_DATA_TOKEN_MAX}}}@"
+    rf"[a-z0-9.\-]{{1,{CONTACT_DATA_TOKEN_MAX}}}\."
+    rf"[a-z0-9\-]{{2,{CONTACT_DATA_TOKEN_MAX}}}",
     re.IGNORECASE,
 )
 _PHONE_TEXT_RE = re.compile(
-    r"(?:\+49|0049|0)[\s\-/]?(?:\(?\d{2,5}\)?[\s\-/]?)?[\d\s\-/]{5,16}\d"
+    rf"(?:\+49|0049|0)[\s\-/]?(?:\(?\d{{1,5}}\)?[\s\-/]?)?[\d\s\-/]{{1,{CONTACT_DATA_TOKEN_MAX}}}\d"
 )
 
 
@@ -3592,13 +3623,29 @@ def _deobfuscate_contact_text(text: str) -> str:
     return out
 
 
+def _email_within_contact_limits(email: str) -> bool:
+    if not email or "@" not in email:
+        return False
+    local, _, domain = email.partition("@")
+    if len(local) > CONTACT_DATA_TOKEN_MAX:
+        return False
+    for label in domain.lower().split("."):
+        if not label or len(label) > CONTACT_DATA_TOKEN_MAX:
+            return False
+    return True
+
+
+def _phone_raw_within_contact_limits(raw: str) -> bool:
+    return len((raw or "").strip()) <= CONTACT_DATA_TOKEN_MAX
+
+
 def _find_emails_in_text_regex(text: str) -> list[str]:
     if not text:
         return []
     emails: list[str] = []
     for raw in _PAGE_EMAIL_RE.findall(_deobfuscate_contact_text(text)):
         norm = _normalize_href_email(raw)
-        if norm and norm not in emails:
+        if norm and _email_within_contact_limits(norm) and norm not in emails:
             emails.append(norm)
     return filter_commercial_emails(emails)
 
@@ -3608,8 +3655,10 @@ def _find_phones_in_text_regex(text: str) -> list[str]:
         return []
     phones: list[str] = []
     for raw in _PHONE_TEXT_RE.findall(text):
+        if not _phone_raw_within_contact_limits(raw):
+            continue
         norm = _normalize_href_phone(raw)
-        if norm and norm not in phones:
+        if norm and len(norm) <= CONTACT_DATA_TOKEN_MAX and norm not in phones:
             phones.append(norm)
     return phones
 
@@ -3642,16 +3691,87 @@ def _merge_contact_lists(primary: list[str], extra: list[str]) -> list[str]:
 def _apply_regex_contact_gate(
     emails: list[str], phones: list[str]
 ) -> tuple[list[str], list[str]]:
-    """Końcowa warstwa: normalizacja + filter_commercial_emails (werdykt deterministyczny)."""
+    """Końcowa warstwa regex: normalizacja, limit 40 znaków, filter_commercial_emails."""
     gated_emails = filter_commercial_emails(
-        [_normalize_href_email(e) for e in emails if _normalize_href_email(e)]
+        [
+            norm
+            for e in emails
+            if (norm := _normalize_href_email(e))
+            and _email_within_contact_limits(norm)
+        ]
     )
     gated_phones: list[str] = []
     for raw in phones:
         norm = _normalize_href_phone(raw)
-        if norm and norm not in gated_phones:
+        if (
+            norm
+            and len(norm) <= CONTACT_DATA_TOKEN_MAX
+            and norm not in gated_phones
+        ):
             gated_phones.append(norm)
     return gated_emails, gated_phones
+
+
+def _row_contact_text_blob(row: dict) -> str:
+    return " ".join(
+        str(row.get(k) or "")
+        for k in (
+            "adres",
+            "full_address",
+            "telefon",
+            "phones_found",
+            "emails_found",
+            "email_target",
+            "page_snippet",
+            "company_name_clean",
+            "nazwa",
+            "official_website",
+            "www",
+        )
+    )
+
+
+def apply_regex_row_contact_cleanup(row: dict) -> dict:
+    """
+    Po Claude row cleanup: regex na polach wiersza (e-mail/tel, segmenty do 40 znaków).
+    """
+    blob = _row_contact_text_blob(row)
+    emails: list[str] = []
+    for part in (blob, row.get("emails_found") or "", row.get("email_target") or ""):
+        emails = _merge_contact_lists(emails, _find_emails_in_text_regex(str(part)))
+    phones: list[str] = []
+    for part in (blob, row.get("phones_found") or "", row.get("telefon") or ""):
+        phones = _merge_contact_lists(phones, _find_phones_in_text_regex(str(part)))
+    emails, phones = _apply_regex_contact_gate(emails, phones)
+
+    website = (row.get("official_website") or row.get("www") or "").strip()
+    if emails:
+        row["emails_found"] = ", ".join(emails)
+        current = _normalize_href_email((row.get("email_target") or "").strip())
+        if current and current in emails:
+            row["email_target"] = current
+        else:
+            best, _ = pick_best_email_for_inquiry(emails, website)
+            row["email_target"] = best or ""
+    else:
+        current = _normalize_href_email((row.get("email_target") or "").strip())
+        if not current or not _email_within_contact_limits(current):
+            row["email_target"] = ""
+
+    if phones:
+        row["phones_found"] = ", ".join(phones)
+        current_p = _normalize_href_phone((row.get("telefon") or "").strip())
+        row["telefon"] = (
+            current_p
+            if current_p and current_p in phones
+            else phones[0]
+        )
+    else:
+        current_p = _normalize_href_phone((row.get("telefon") or "").strip())
+        if not current_p or len(current_p) > CONTACT_DATA_TOKEN_MAX:
+            row["telefon"] = ""
+
+    return row
 
 
 def find_emails_in_text(
@@ -6059,6 +6179,7 @@ def _run_smoke_tests() -> None:
     assert "GmbH" in parsed_contacts["company_name"]
     assert ENABLE_CLAUDE_PAGE_VERIFY is True
     assert ENABLE_CLAUDE_ROW_CLEANUP is True
+    assert CONTACT_DATA_TOKEN_MAX == 40
     assert CONTACT_EMAIL_TOKEN_MAX == 40
     assert ENABLE_CLAUDE_DISCOVERY_TERMS is False
     assert ENABLE_REGION_PLZ_FILTER is False

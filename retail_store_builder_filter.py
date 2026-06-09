@@ -683,7 +683,8 @@ def _has_market_projects_evidence(low: str) -> bool:
             or "referenzen" in evidence_blob
             or "referenzprojekt" in evidence_blob
             or _has_market_photo_gallery_context(low)
-            or is_gu_or_retail_build_specialist(low)
+            or is_generalunternehmer(low)[0]
+            or any(m in low for m in FILIALBAU_SPECIALIST_MARKERS)
         ):
             return True
     if _has_market_photo_gallery_context(low):

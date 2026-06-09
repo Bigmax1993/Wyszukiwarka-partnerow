@@ -63,6 +63,7 @@ class PageVerifyTest(unittest.TestCase):
             '"matched_retail_keywords": ["filialbau"], '
             '"matched_chains": ["rewe"], '
             '"matched_negative_keywords": [], '
+            '"is_small_firm": true, '
             '"reason": "GU mit Filialbau"}'
         )
         parsed = parse_page_verify_response(text)
@@ -78,6 +79,7 @@ class PageVerifyTest(unittest.TestCase):
             "matched_retail_keywords": ["filialbau"],
             "matched_chains": ["rewe"],
             "matched_negative_keywords": [],
+            "is_small_firm": True,
             "reason": "OK",
         }
         ok, reason, chains = apply_page_verdict(
@@ -87,6 +89,74 @@ class PageVerifyTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("claude", reason)
         self.assertIn("rewe", chains)
+
+    def test_apply_verdict_accepts_filialbau_references_without_gu_word(self):
+        llm = {
+            "is_gu": True,
+            "has_retail_context": True,
+            "primary_role": "Filialbauer",
+            "matched_gu_keywords": [],
+            "matched_retail_keywords": ["filialbau", "referenz"],
+            "matched_chains": ["rewe"],
+            "matched_negative_keywords": [],
+            "is_small_firm": True,
+            "reason": "Referenz Rewe Neubau mit Fotos",
+        }
+        page = (
+            "Filialbau GmbH — unsere Projekte. Referenz: Rewe Neubau Leipzig. "
+            "Bild: /images/rewe-filiale-aussen.jpg alt=Rewe Filiale nach Umbau"
+        )
+        ok, reason, chains = apply_page_verdict(
+            llm,
+            page_text=page,
+            require_generalunternehmer=True,
+        )
+        self.assertTrue(ok)
+        self.assertIn("rewe", chains)
+
+    def test_apply_verdict_accepts_when_claude_missed_gu_but_page_has_evidence(self):
+        llm = {
+            "is_gu": False,
+            "has_retail_context": False,
+            "primary_role": "Bauunternehmen",
+            "matched_gu_keywords": [],
+            "matched_retail_keywords": [],
+            "matched_chains": [],
+            "matched_negative_keywords": [],
+            "is_small_firm": True,
+            "reason": "unsicher",
+        }
+        page = (
+            "Wir sind Filialbau-Spezialist. Referenzprojekt Aldi Neubau Dresden. "
+            "Supermarktbau und Filialumbau."
+        )
+        ok, reason, chains = apply_page_verdict(
+            llm,
+            page_text=page,
+            require_generalunternehmer=True,
+        )
+        self.assertTrue(ok)
+        self.assertIn("aldi", chains)
+
+    def test_apply_verdict_rejects_large_firm_when_claude_says_not_small(self):
+        llm = {
+            "is_gu": True,
+            "has_retail_context": True,
+            "is_small_firm": False,
+            "primary_role": "Generalunternehmer",
+            "matched_gu_keywords": ["generalunternehmer"],
+            "matched_retail_keywords": ["filialbau"],
+            "matched_chains": ["rewe"],
+            "matched_negative_keywords": [],
+            "reason": "Konzern",
+        }
+        ok, reason, _ = apply_page_verdict(
+            llm,
+            page_text="STRABAG SE — weltweit tätig, über 77.000 Mitarbeiter. Rewe Projekt.",
+            require_small_firm=True,
+        )
+        self.assertFalse(ok)
+        self.assertIn("kleinunternehmen", reason)
 
     def test_apply_verdict_rejects_operator_context(self):
         llm = {

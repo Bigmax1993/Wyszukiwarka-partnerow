@@ -25,6 +25,8 @@ def parse_claude_row_cleanup_response(text: str) -> dict:
         "phone": str(data.get("phone") or "").strip(),
         "website": str(data.get("website") or "").strip(),
         "bundesland": str(data.get("bundesland") or "").strip(),
+        "handelsketten": str(data.get("handelsketten") or "").strip(),
+        "url": str(data.get("url") or "").strip(),
     }
 
 

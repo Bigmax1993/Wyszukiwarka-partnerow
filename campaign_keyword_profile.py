@@ -63,6 +63,40 @@ def retail_chain_keywords_sample(*, max_items: int = 12) -> list[str]:
     return list(RETAIL_CHAIN_KEYWORDS)[:max_items]
 
 
+def small_company_markers_sample(*, max_items: int = 10) -> list[str]:
+    return [
+        "familienunternehmen",
+        "familienbetrieb",
+        "inhabergeführt",
+        "meisterbetrieb",
+        "mittelständisch",
+        "regional tätig",
+        "vor ort",
+        "kleinunternehmen",
+        "handwerksbetrieb",
+        "ortsansässig",
+    ][:max_items]
+
+
+def large_company_markers_sample(*, max_items: int = 14) -> list[str]:
+    return [
+        "konzern",
+        "holding",
+        "weltweit tätig",
+        "börsennotiert",
+        "global player",
+        "über 500 mitarbeiter",
+        "über 1.000 mitarbeiter",
+        "STRABAG",
+        "Hochtief",
+        "Goldbeck",
+        "Implenia",
+        "PORR",
+        "Zech Group",
+        "Bilfinger",
+    ][:max_items]
+
+
 def negative_keywords_sample(*, max_items: int = 14) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
