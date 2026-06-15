@@ -4,7 +4,7 @@ Pobiera artefakt GU (ta sama kolejnosc co sync-google-drive.yml) i wgrywa na Goo
 
   powershell -ExecutionPolicy Bypass -File scripts\upload_wyniki_to_drive.ps1
 
-Priorytet artefaktow: thu (backfill) -> wed -> mon -> tue -> fri
+Priorytet artefaktow: thu (backfill) -> mon -> tue -> fri
 Bez OAuth Desktop JSON otworzy folder na Pulpicie + link do Drive (reczny drag-drop).
 #>
 $ErrorActionPreference = "Stop"
@@ -16,13 +16,12 @@ $DriveFolder = "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
 # Ta sama kolejnosc co .github/workflows/sync-google-drive.yml
 $ArtifactOrder = @(
     "de-gu-wyniki-thu",
-    "de-gu-wyniki-wed",
     "de-gu-wyniki-mon",
     "de-gu-wyniki-tue",
     "de-gu-wyniki-fri"
 )
 
-Write-Host "=== Szukam artefaktu GU (thu -> wed -> mon -> tue -> fri) ===" -ForegroundColor Cyan
+Write-Host "=== Szukam artefaktu GU (thu -> mon -> tue -> fri) ===" -ForegroundColor Cyan
 $artifactName = $null
 $runId = $null
 foreach ($name in $ArtifactOrder) {
@@ -35,7 +34,7 @@ foreach ($name in $ArtifactOrder) {
     }
 }
 if (-not $runId) {
-    throw "Brak artefaktu GU (thu/wed/mon/tue/fri) — uruchom backfill lub discovery"
+    throw "Brak artefaktu GU (thu/mon/tue/fri) — uruchom backfill lub discovery"
 }
 Write-Host "Pobieram $artifactName z run $runId" -ForegroundColor Cyan
 

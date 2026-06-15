@@ -18,8 +18,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 | **CI Deploy** | `ci-deploy.yml` | push | smoke + walidacja secretów + dry-run maili |
 
-| **GU piatek discovery** | `de_gu_pi.yml` | cron, ręcznie | Discovery część 1 (max 6 h) → `de-gu-wyniki-pi` |
-| **GU sobota discovery** | `de_gu_wed.yml` | cron, ręcznie | Część 2 jeśli Serper w piątek nie wyczerpany → `de-gu-wyniki-wed` |
+| **GU piatek discovery** | `de_gu_pi.yml` | cron, ręcznie | Discovery (max 12 h) → `de-gu-wyniki-pi` |
 
 | **GU niedziela backfill** | `de_gu_thu.yml` | cron, ręcznie | Backfill + Excel → `de-gu-wyniki-thu` |
 
@@ -41,8 +40,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 |-------|----------|----------|-----------|
 
-| **Piątek** | discovery część 1 | `0 18 * * 5` | **20:00** |
-| **Sobota** | discovery część 2 | `10 18 * * 6` | **20:10** (pomijane gdy piątek wyczerpał Serper) |
+| **Piątek** | discovery | `0 20 * * 5` (Europe/Warsaw) | **20:00** |
 
 | **Niedziela** | backfill | `30 3 * * 0` | **05:30** |
 
@@ -56,7 +54,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 
 
-Zimą (CET): piątek discovery `0 19 * * 5`, sobota `10 19 * * 6`, send 1 `0 11 * * 1`, sync Drive `0 5 * * 1`.
+Zimą (CET): send 1 `0 7 * * 1` (Europe/Warsaw), sync Drive `0 6 * * 1` (Europe/Warsaw).
 
 
 
@@ -74,7 +72,7 @@ Wysyłka w oknie **8–18** czasu berlińskiego (bez `DISABLE_SEND_WINDOW` w wor
 
 | `SERPER_API_KEY` | discovery | API Serper |
 
-| `ANTHROPIC_API_KEY` | discovery + backfill | Claude: frazy Serper (sobota) + weryfikacja www (niedziela) |
+| `ANTHROPIC_API_KEY` | discovery + backfill | Claude: frazy Serper (piątek) + weryfikacja www (niedziela) |
 
 | `MAIL_USER` | pon+wt send | Login SMTP |
 
@@ -100,15 +98,15 @@ Setup OAuth: `python scripts/gdrive_oauth_setup.py` — szczegóły w [`GOOGLE_D
 
 ```
 
-piatek → pi → sobota → wed (opcjonalnie) → niedziela → thu → sync Drive → pon prep → mon → pon send → tue → wt send → fri
+piatek → pi → niedziela → thu → sync Drive → pon prep → mon → pon send → tue → wt send → fri
 
 ```
 
 
 
-Piątek discovery: `de-gu-wyniki-fri` → `de-gu-wyniki-pi`. Sobota: kontynuacja z `pi` (`--respect-cache`) tylko gdy w piątek nie wyczerpano limitu Serper; wynik → `de-gu-wyniki-wed`. Niedziela backfill: najnowszy `wed` lub `pi`.
+Piątek discovery: `de-gu-wyniki-fri` → `de-gu-wyniki-pi`. Niedziela backfill: najnowszy `de-gu-wyniki-pi`.
 
-**Sync Drive** (pon 06:00 PL) pobiera **`de-gu-wyniki-thu`** z niedzielnego backfillu — kolejność: `thu` → `wed` → `mon` → `tue` → `fri`. Nie używa `fri`/`tue` z poprzedniej wysyłki, dopóki istnieje `thu`.
+**Sync Drive** (pon 06:00 PL) pobiera **`de-gu-wyniki-thu`** z niedzielnego backfillu — kolejność: `thu` → `mon` → `tue` → `fri`. Nie używa `fri`/`tue` z poprzedniej wysyłki, dopóki istnieje `thu`.
 
 
 
@@ -133,7 +131,7 @@ Przed wysyłką workflow **pobiera świeży PPTX** ze Slides (`scripts/export_mf
 
 
 
-Pełny cykl (PC, czeka na każdy krok). Przy **timeout 360 min** discovery (status failure) skrypt **kontynuuje**, jeśli run zapisał artefakt `de-gu-wyniki-pi` lub `de-gu-wyniki-wed` (`-StrictDiscovery` = stare zachowanie, przerwij):
+Pełny cykl (PC, czeka na każdy krok). Przy **timeout 720 min** discovery (status failure) skrypt **kontynuuje**, jeśli run zapisał artefakt `de-gu-wyniki-pi` (`-StrictDiscovery` = stare zachowanie, przerwij):
 
 
 
@@ -151,7 +149,8 @@ Pojedyncze kroki (`gh`):
 
 ```powershell
 
-gh workflow run "GU sobota discovery" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "GU piatek discovery" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "GU piatek discovery" -R Bigmax1993/Wyszukiwarka-partnerow -f resume_artifact_run_id=RUN_ID
 
 gh workflow run "GU niedziela backfill" -R Bigmax1993/Wyszukiwarka-partnerow
 

@@ -4988,7 +4988,7 @@ def verify_pending_contacts(
     all_rows: list | None = None,
     reverify_all: bool = False,
 ) -> dict:
-    """WWW-verify: pending po sobotnim Serper lub ponownie cały cache (--reverify-all-contacts)."""
+    """WWW-verify: pending po piatkowym Serper lub ponownie cały cache (--reverify-all-contacts)."""
     contacts = cache.setdefault("contacts", {})
     pending_urls = collect_urls_for_www_reverify(
         cache, all_rows, reverify_all=reverify_all

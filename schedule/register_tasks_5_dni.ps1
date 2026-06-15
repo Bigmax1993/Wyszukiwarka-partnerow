@@ -1,4 +1,4 @@
-# Rejestracja zadan Harmonogramu Windows (plan 5 dni: sob-nd-pon-wt).
+# Rejestracja zadan Harmonogramu Windows (plan: piatek-nd-pon-wt).
 # Uruchom PowerShell jako administrator.
 
 param(
@@ -23,10 +23,10 @@ function Register-WeekdayTask {
 }
 
 $tasks = @(
-    @{ Name = "Kanbud_GU_Sobota_Discovery"; Script = Join-Path $ScheduleDir "run_sroda.ps1"; Day = "Saturday"; Time = "20:10" }
+    @{ Name = "Kanbud_GU_Piatek_Discovery"; Script = Join-Path $ScheduleDir "run_piatek_discovery.ps1"; Day = "Friday"; Time = "20:00" }
     @{ Name = "Kanbud_GU_Niedziela_Backfill"; Script = Join-Path $ScheduleDir "run_czwartek.ps1"; Day = "Sunday"; Time = "06:00" }
     @{ Name = "Kanbud_GU_Poniedzialek_Prep"; Script = Join-Path $ScheduleDir "run_poniedzialek_prep.ps1"; Day = "Monday"; Time = "08:00" }
-    @{ Name = "Kanbud_GU_Poniedzialek_Send"; Script = Join-Path $ScheduleDir "run_poniedzialek_send.ps1"; Day = "Monday"; Time = "12:00" }
+    @{ Name = "Kanbud_GU_Poniedzialek_Send"; Script = Join-Path $ScheduleDir "run_poniedzialek_send.ps1"; Day = "Monday"; Time = "07:00" }
     @{ Name = "Kanbud_GU_Wtorek_Send"; Script = Join-Path $ScheduleDir "run_wtorek.ps1"; Day = "Tuesday"; Time = "09:00" }
 )
 
@@ -36,6 +36,7 @@ if ($Unregister) {
         Write-Host "Usunieto: $($t.Name)"
     }
     foreach ($legacy in @(
+            "Kanbud_GU_Sobota_Discovery",
             "Kanbud_GU_Sroda_Discovery",
             "Kanbud_GU_Czwartek_Backfill",
             "Kanbud_GU_Piatek_Send",
@@ -52,4 +53,4 @@ foreach ($t in $tasks) {
 }
 
 Write-Host "Gotowe. Sprawdz taskschd.msc (Kanbud_GU_*)"
-Write-Host "Plan: sob discovery | nd backfill | pon prep 8:00 + send 12:00 | wt send 9:00"
+Write-Host "Plan: piatek discovery 20:00 | nd backfill | pon prep 8:00 + send 7:00 | wt send 9:00"

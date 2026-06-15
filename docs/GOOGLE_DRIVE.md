@@ -40,9 +40,9 @@ Skrypt ustawi secrets `GDRIVE_OAUTH_*` i uruchomi sync. Kolejne runy CI uploaduj
 | Reguła | Wartość |
 |--------|---------|
 | **Kiedy** | **Poniedziałek 06:00** (Europe/Warsaw); ręcznie: `gh workflow run "Sync wyniki Google Drive"` |
-| **Cron UTC** | `0 4 * * 1` (CEST); zimą CET: `0 5 * * 1` |
+| **Cron** | `0 6 * * 1` (Europe/Warsaw) |
 | **Źródło danych** | Artefakt **`de-gu-wyniki-thu`** (niedzielny backfill) — priorytet nad wysyłkami |
-| **Kolejność fallback** | `thu` → `wed` → `mon` → `tue` → `fri` (pierwszy nie-wygasły) |
+| **Kolejność fallback** | `thu` → `mon` → `tue` → `fri` (pierwszy nie-wygasły) |
 | **Trigger** | Tylko `schedule` + `workflow_dispatch` (bez auto-sync po wtorku) |
 
 Po niedzielnym backfillu na Drive trafia **świeży Excel** (np. 20 firm), zanim w poniedziałek o 08:00 ruszy prep. Lokalny skrypt `scripts/upload_wyniki_to_drive.ps1` używa **tej samej** kolejności artefaktów co workflow CI.

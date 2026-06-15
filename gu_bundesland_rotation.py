@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Rotacja Bundesländer — jeden land na cykl discovery (np. sobota).
+Rotacja Bundesländer — jeden land na cykl discovery (np. piątek).
 
 Stan: Wyniki/de_gu_bundeslaender_rotation.json
 """

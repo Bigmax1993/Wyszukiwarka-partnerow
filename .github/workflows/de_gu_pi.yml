@@ -2,9 +2,14 @@ name: GU piatek discovery
 
 on:
   schedule:
-    # 18:00 UTC = 20:00 Europe/Warsaw (CEST); zimą (CET) ustaw 19:00 UTC
-    - cron: "0 18 * * 5"
+    - cron: "0 20 * * 5"
+      timezone: Europe/Warsaw
   workflow_dispatch:
+    inputs:
+      resume_artifact_run_id:
+        description: "Wznow discovery z artefaktu pi (run ID). Puste = nowy run z fri."
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -20,7 +25,7 @@ env:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 720
     env:
       SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -35,16 +40,26 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
 
-      - name: Resolve artifact run (poprzedni wtorek send)
+      - name: Resolve artifact run (wznowienie pi lub poprzedni wtorek send)
         id: prev_run
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          RESUME="${{ github.event_name == 'workflow_dispatch' && inputs.resume_artifact_run_id || '' }}"
+          if [ -n "$RESUME" ]; then
+            echo "run-id=$RESUME" >> "$GITHUB_OUTPUT"
+            echo "artifact-name=de-gu-wyniki-pi" >> "$GITHUB_OUTPUT"
+            echo "resume=1" >> "$GITHUB_OUTPUT"
+            echo "Wznowienie discovery z de-gu-wyniki-pi (run $RESUME)"
+            exit 0
+          fi
           RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
             --paginate --jq '.artifacts[] | select(.name=="de-gu-wyniki-fri" and .expired==false) | .workflow_run.id' | head -1)
           if [ -n "$RUN_ID" ]; then
             echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "artifact-name=de-gu-wyniki-fri" >> "$GITHUB_OUTPUT"
+            echo "resume=0" >> "$GITHUB_OUTPUT"
             echo "Kumuluje cache z de-gu-wyniki-fri (run $RUN_ID)"
           else
             echo "Brak poprzedniego artefaktu — pierwszy cykl"
@@ -54,17 +69,19 @@ jobs:
         if: steps.prev_run.outputs.run-id != ''
         uses: actions/download-artifact@v4
         with:
-          name: de-gu-wyniki-fri
+          name: ${{ steps.prev_run.outputs.artifact-name || 'de-gu-wyniki-fri' }}
           github-token: ${{ github.token }}
           run-id: ${{ steps.prev_run.outputs.run-id }}
           path: .
 
-      - name: Discovery czesc 1 (piatek, serper-only)
+      - name: Discovery (piatek, serper-only)
         run: |
-          python de_gu_bauunternehmen_scraper.py \
-            --run-config run_config/mfg_gu_de.json \
-            --serper-only-discovery \
-            --no-auto-email
+          ARGS="--run-config run_config/mfg_gu_de.json --serper-only-discovery --no-auto-email"
+          if [ "${{ steps.prev_run.outputs.resume }}" = "1" ]; then
+            ARGS="$ARGS --respect-cache"
+            echo "Wznowienie: --respect-cache"
+          fi
+          python de_gu_bauunternehmen_scraper.py $ARGS
 
       - name: Upload Wyniki artifact (piatek)
         if: always()

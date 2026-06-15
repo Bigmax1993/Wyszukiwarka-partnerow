@@ -1,6 +1,6 @@
 # CZWARTEK — dzień 2: backfill e-maili + przebudowa Excela (bez Serpera, bez wysyłki).
 # Task Scheduler: niedziela 06:00
-# Jeśli sobota nie skończyła discovery — najpierw dokończ: run_sroda.ps1, potem ten skrypt.
+# Jeśli piatek nie skończył discovery — najpierw dokończ: run_piatek_discovery.ps1, potem ten skrypt.
 
 . "$PSScriptRoot\_common.ps1"
 Enter-GuCampaign
@@ -8,11 +8,11 @@ Enter-GuCampaign
 $env:SCRAPER_TIMEZONE = "Europe/Warsaw"
 Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
 
-Write-Host "[CZWARTEK] Weryfikacja www (pending z soboty)..."
+Write-Host "[NIEDZIELA] Weryfikacja www (pending z piatku)..."
 python de_gu_bauunternehmen_scraper.py --verify-pending-contacts
 
-Write-Host "[CZWARTEK] Backfill e-maili z cache..."
+Write-Host "[NIEDZIELA] Backfill e-maili z cache..."
 python de_gu_bauunternehmen_scraper.py --backfill-emails-from-cache
 
-Write-Host "[CZWARTEK] Rebuild Excel z cache..."
+Write-Host "[NIEDZIELA] Rebuild Excel z cache..."
 python de_gu_bauunternehmen_scraper.py --rebuild-from-cache

@@ -1,20 +1,20 @@
 name: GU reprocess cache bez Serper
 
-# Kroki 0–6 bez Serper API: pobierz wybrany artefakt wed → verify www → backfill → rebuild → Drive.
-# Nie uruchamiaj GU sobota discovery (kasuje serper_discovery i wymaga API).
+# Kroki 0–6 bez Serper API: pobierz wybrany artefakt pi → verify www → backfill → rebuild → Drive.
+# Nie uruchamiaj discovery z Serper (wymaga API i resetuje cache).
 
 on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: "Run ID GU sobota discovery z danymi (np. 27140798115)"
+        description: "Run ID GU piatek discovery z danymi (np. 27439840768)"
         required: false
-        default: "27140798115"
+        default: "27439840768"
         type: string
       artifact_name:
         description: "Nazwa artefaktu źródłowego"
         required: false
-        default: "de-gu-wyniki-wed"
+        default: "de-gu-wyniki-pi"
         type: string
       sync_drive:
         description: "Upload Excel na Google Drive po zakończeniu"
@@ -74,7 +74,7 @@ jobs:
           echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
           echo "Pobieram ${ARTIFACT} z run ${RUN_ID}"
 
-      - name: Download cache from sobota (krok 1–2)
+      - name: Download cache from piatek (krok 1–2)
         uses: actions/download-artifact@v4
         with:
           name: ${{ steps.artifact_run.outputs.artifact }}

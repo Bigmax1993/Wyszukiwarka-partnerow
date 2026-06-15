@@ -1,19 +1,5 @@
-# ŚRODA — dzień 1: discovery (Serper + www), bez wysyłki maili.
-# Task Scheduler: sobota 20:10
+# [Legacy] Przekierowanie na run_piatek_discovery.ps1 (piatek 20:00).
 
 . "$PSScriptRoot\_common.ps1"
-Enter-GuCampaign
-
-$env:SCRAPER_TIMEZONE = "Europe/Warsaw"
-Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
-Remove-Item Env:SCRAPER_IGNORE_SEND_WINDOW -ErrorAction SilentlyContinue
-
-if ($args.Count -gt 0 -and $args[0] -like "run_config\*") {
-    $config = $args[0]
-    $rest = @($args | Select-Object -Skip 1)
-    Write-Host "[SOBOTA] Discovery (reczny run_config): $config"
-    python de_gu_bauunternehmen_scraper.py --run-config $config @rest
-} else {
-    Write-Host "[SOBOTA] Discovery: całe Niemcy (serper-only, bundesweit)"
-    python de_gu_bauunternehmen_scraper.py --run-config run_config\mfg_gu_de.json --serper-only-discovery --no-auto-email @args
-}
+Write-Warning "run_sroda.ps1 jest legacy — uzyj run_piatek_discovery.ps1 (piatek 20:00)."
+& (Join-Path $PSScriptRoot "run_piatek_discovery.ps1") @args

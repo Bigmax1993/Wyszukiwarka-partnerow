@@ -2,7 +2,7 @@ name: Sync wyniki Google Drive
 
 # Stała reguła kampanii GU:
 # - Harmonogram: poniedziałek 06:00 Europe/Warsaw (cron + timezone).
-# - Źródło danych: pierwszy dostępny artefakt thu → wed → mon → tue → fri
+# - Źródło danych: pierwszy dostępny artefakt thu → mon → tue → fri
 #   (Excel po niedzielnym backfillu; NIE fri/tue z poprzedniej wysyłki).
 # - Tylko workflow_dispatch + schedule (bez auto-triggera po wysyłce).
 # - Excel (.xlsx): kopia z datą + nadpisanie de_gu_bauunternehmen_kontakte.xlsx (aktualny).
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_name:
-        description: "Opcjonalnie wymus artefakt (np. de-gu-wyniki-wed)"
+        description: "Opcjonalnie wymus artefakt (np. de-gu-wyniki-thu)"
         required: false
         type: string
   schedule:
@@ -40,7 +40,7 @@ jobs:
 
       - run: pip install -r requirements.txt -r requirements-drive.txt
 
-      - name: Resolve artifact (najnowszy thu/wed/mon/tue/fri)
+      - name: Resolve artifact (najnowszy thu/mon/tue/fri)
         id: artifact_run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,12 +51,12 @@ jobs:
               --paginate --jq "[.artifacts[] | select(.expired==false) | select(.name==\"$FORCED\")] | sort_by(.created_at) | reverse | .[0] // empty")
           else
             PICK=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
-              --paginate --jq '[.artifacts[] | select(.expired==false) | select(.name=="de-gu-wyniki-thu" or .name=="de-gu-wyniki-wed" or .name=="de-gu-wyniki-mon" or .name=="de-gu-wyniki-tue" or .name=="de-gu-wyniki-fri")] | sort_by(.created_at) | reverse | .[0] // empty')
+              --paginate --jq '[.artifacts[] | select(.expired==false) | select(.name=="de-gu-wyniki-thu" or .name=="de-gu-wyniki-mon" or .name=="de-gu-wyniki-tue" or .name=="de-gu-wyniki-fri")] | sort_by(.created_at) | reverse | .[0] // empty')
           fi
           ARTIFACT=$(echo "$PICK" | jq -r '.name // empty')
           RUN_ID=$(echo "$PICK" | jq -r '.workflow_run.id // empty')
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "::warning::Brak artefaktu (thu/wed/mon/tue/fri) — upload tylko jesli Wyniki/ w repo"
+            echo "::warning::Brak artefaktu (thu/mon/tue/fri) — upload tylko jesli Wyniki/ w repo"
             echo "artifact=" >> "$GITHUB_OUTPUT"
             echo "run-id=" >> "$GITHUB_OUTPUT"
             exit 0

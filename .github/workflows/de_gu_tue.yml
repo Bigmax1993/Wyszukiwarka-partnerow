@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: "Opcjonalnie run ID zrodla (np. 27202109139 = wczorajszy wed). Puste = najnowszy mon."
+        description: "Opcjonalnie run ID zrodla (np. prep z poniedzialku). Puste = najnowszy mon."
         required: false
         type: string
       artifact_name:
-        description: "Nazwa artefaktu zrodla (de-gu-wyniki-mon lub de-gu-wyniki-wed)"
+        description: "Nazwa artefaktu zrodla (domyslnie de-gu-wyniki-mon)"
         required: false
         type: string
         default: "de-gu-wyniki-mon"

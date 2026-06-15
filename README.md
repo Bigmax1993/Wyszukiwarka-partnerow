@@ -110,7 +110,7 @@ python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only
 
 
 
-### Rotacja Bundesland (domyślnie — 1 land / sobota)
+### Rotacja Bundesland (domyślnie — 1 land / piątek)
 
 
 
@@ -152,7 +152,7 @@ python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.j
 
 | E-mail | 300 / dzień kalendarzowy, 2 / domena / dzień (pon 300 + wt 300) |
 
-| 1 Bundesland / tydzień | ~40–60 fraz Serper (mieści się w 1 sobotę) |
+| 1 Bundesland / tydzień | ~40–60 fraz Serper (mieści się w 1 piątek) |
 
 
 
@@ -168,7 +168,7 @@ Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
 
 |-------|--------------|-----|----------------|
 
-| **Sobota** | 20:10 | `run_sroda.ps1` | `GU sobota discovery` |
+| **Piątek** | 20:00 | `run_piatek_discovery.ps1` | `GU piatek discovery` |
 
 | **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` |
 
