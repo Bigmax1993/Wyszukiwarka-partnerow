@@ -40,27 +40,44 @@ jobs:
 
       - run: pip install -r requirements.txt -r requirements-drive.txt
 
-      - name: Resolve artifact (najnowszy thu/mon/tue/fri)
+      - name: Resolve artifact (thu → wed → mon → tue → fri)
         id: artifact_run
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           FORCED="${{ github.event.inputs.artifact_name }}"
+          # --paginate + jq per page zwraca wiele JSON-ow; scalamy strony, potem wybieramy jeden artefakt.
+          ALL=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+            --paginate --jq '.artifacts[] | select(.expired==false)')
+
+          pick_latest() {
+            local name="$1"
+            echo "$ALL" | jq -s --arg n "$name" \
+              '[.[] | select(.name == $n)] | sort_by(.created_at) | reverse | .[0] // empty'
+          }
+
+          PICK=""
           if [ -n "$FORCED" ]; then
-            PICK=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
-              --paginate --jq "[.artifacts[] | select(.expired==false) | select(.name==\"$FORCED\")] | sort_by(.created_at) | reverse | .[0] // empty")
+            PICK=$(pick_latest "$FORCED")
           else
-            PICK=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
-              --paginate --jq '[.artifacts[] | select(.expired==false) | select(.name=="de-gu-wyniki-thu" or .name=="de-gu-wyniki-mon" or .name=="de-gu-wyniki-tue" or .name=="de-gu-wyniki-fri")] | sort_by(.created_at) | reverse | .[0] // empty')
+            for NAME in de-gu-wyniki-thu de-gu-wyniki-wed de-gu-wyniki-mon de-gu-wyniki-tue de-gu-wyniki-fri; do
+              CAND=$(pick_latest "$NAME")
+              if [ -n "$CAND" ] && [ "$CAND" != "null" ]; then
+                PICK="$CAND"
+                break
+              fi
+            done
           fi
-          ARTIFACT=$(echo "$PICK" | jq -r '.name // empty')
-          RUN_ID=$(echo "$PICK" | jq -r '.workflow_run.id // empty')
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "::warning::Brak artefaktu (thu/mon/tue/fri) — upload tylko jesli Wyniki/ w repo"
+
+          if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
+            echo "::warning::Brak artefaktu (thu/wed/mon/tue/fri) — upload tylko jesli Wyniki/ w repo"
             echo "artifact=" >> "$GITHUB_OUTPUT"
             echo "run-id=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          ARTIFACT=$(echo "$PICK" | jq -r '.name')
+          RUN_ID=$(echo "$PICK" | jq -r '.workflow_run.id')
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
           echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "Pobieram $ARTIFACT z run $RUN_ID"
