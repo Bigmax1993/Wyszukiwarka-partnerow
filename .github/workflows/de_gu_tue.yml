@@ -1,9 +1,7 @@
 name: GU poniedzialek send
 
+# Pipeline wylaczony na GitHub Actions — uruchamiaj lokalnie (schedule/register_tasks_5_dni.ps1).
 on:
-  schedule:
-    - cron: "0 9 * * 1"
-      timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
       artifact_run_id:
@@ -43,6 +41,7 @@ env:
 
 jobs:
   send:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

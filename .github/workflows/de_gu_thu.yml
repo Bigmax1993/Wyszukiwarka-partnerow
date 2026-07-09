@@ -1,9 +1,7 @@
 name: GU niedziela backfill
 
+# Pipeline wylaczony na GitHub Actions — uruchamiaj lokalnie (schedule/register_tasks_5_dni.ps1).
 on:
-  schedule:
-    - cron: "30 5 * * 0"
-      timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
       artifact_run_id:
@@ -27,6 +25,7 @@ env:
 
 jobs:
   backfill:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:

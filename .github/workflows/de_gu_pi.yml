@@ -1,17 +1,7 @@
 name: GU discovery
 
+# Pipeline wylaczony na GitHub Actions — uruchamiaj lokalnie (schedule/register_tasks_5_dni.ps1).
 on:
-  schedule:
-    - cron: "0 17 * * 1"
-      timezone: Europe/Warsaw
-    - cron: "0 15 * * 2"
-      timezone: Europe/Warsaw
-    - cron: "0 19 * * 3"
-      timezone: Europe/Warsaw
-    - cron: "0 20 * * 4"
-      timezone: Europe/Warsaw
-    - cron: "0 16 * * 5"
-      timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
       discovery_phase:
@@ -49,6 +39,7 @@ env:
 
 jobs:
   discover:
+    if: false
     runs-on: ubuntu-latest
     # setup ~15 min + scraper do 4h + upload — 270 min ubijało job w trakcie (marnowanie minut)
     timeout-minutes: 310

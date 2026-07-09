@@ -34,6 +34,10 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 ## Harmonogram cron (Europe/Warsaw)
 
+**Wyłączony na GitHub Actions** (od 2026-07-09). Pipeline GU uruchamiaj lokalnie: `schedule/register_tasks_5_dni.ps1` i skrypty w `schedule/`.
+
+Poniższy harmonogram obowiązuje tylko dla uruchomień lokalnych (Task Scheduler):
+
 
 
 | Dzień | Workflow | Cron | Godzina PL |
