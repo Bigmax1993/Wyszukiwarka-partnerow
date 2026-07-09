@@ -79,14 +79,19 @@ jobs:
           run-id: ${{ steps.artifact_run.outputs.run-id }}
           path: .
 
-      - name: Pobierz aktualny PPTX ze Slides
+      - name: Pobierz aktualny PPTX ze Slides (fallback: bundled)
         env:
           GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
           GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
           GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
         run: |
           pip install -r requirements-drive.txt
-          python scripts/export_mfg_slides_attachment.py
+          if python scripts/export_mfg_slides_attachment.py; then
+            echo "OK: PPTX ze Slides"
+          else
+            echo "UWAGA: Slides niedostepne (OAuth) - uzywam PPTX z repo"
+          fi
+          test -f assets/campaign/MFG_Referenzliste_Einzelhandel.pptx
 
       - name: Send emails partia 1 (do 300/dzien, okno 8-18 Berlin)
         env:
