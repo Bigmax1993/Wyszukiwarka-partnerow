@@ -102,7 +102,7 @@ jobs:
       - name: Podglad kolejki mailowej
         run: python scripts/analyze_mail_jobs.py
 
-      - name: Pobierz aktualny PPTX ze Slides (fallback: bundled)
+      - name: "Pobierz aktualny PPTX ze Slides (fallback bundled)"
         env:
           GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
           GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
