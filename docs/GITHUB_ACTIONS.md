@@ -34,9 +34,9 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 ## Harmonogram cron (Europe/Warsaw)
 
-**Wyłączony na GitHub Actions** (od 2026-07-09). Pipeline GU uruchamiaj lokalnie: `schedule/register_tasks_5_dni.ps1` i skrypty w `schedule/`.
+**Tymczasowo włączony na GitHub Actions** w oknie **13.07–21.07.2026** (cron + `GU_GHA_SCHEDULED` w workflowach). Po 21.07 harmonogram GHA pomija joby (uruchomienia `workflow_dispatch` i łańcuchy `gha_chain_workflow.sh` nadal działają). Poza tym oknem — lokalnie: `schedule/register_tasks_5_dni.ps1`.
 
-Poniższy harmonogram obowiązuje tylko dla uruchomień lokalnych (Task Scheduler):
+Harmonogram (Europe/Warsaw):
 
 
 
