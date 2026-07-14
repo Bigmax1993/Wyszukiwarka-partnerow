@@ -7,6 +7,14 @@ on:
       timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
+      artifact_run_id:
+        description: "Opcjonalnie run ID zrodla cache. Puste = najnowszy artefakt pipeline."
+        required: false
+        type: string
+      artifact_name:
+        description: "Nazwa artefaktu (np. de-gu-wyniki-pi). Puste = auto (najnowszy)."
+        required: false
+        type: string
       force_resend:
         description: Ponowna wysylka (ignoruj suppression i sent)
         type: boolean
@@ -47,24 +55,48 @@ jobs:
 
       - uses: ./.github/actions/setup-scraper
 
-      - name: Resolve artifact run (poniedzialek send)
+      - name: Resolve artifact run (najnowszy cache pipeline)
         id: artifact_run
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-            --jq '[.artifacts[] | select(.name=="de-gu-wyniki-tue" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::Brak artefaktu de-gu-wyniki-tue (uruchom najpierw GU poniedzialek send)"
+          FORCED_RUN="${{ github.event_name == 'workflow_dispatch' && inputs.artifact_run_id || '' }}"
+          FORCED_NAME="${{ github.event_name == 'workflow_dispatch' && inputs.artifact_name || '' }}"
+
+          if [ -n "$FORCED_RUN" ]; then
+            echo "run-id=$FORCED_RUN" >> "$GITHUB_OUTPUT"
+            echo "artifact=${FORCED_NAME:-de-gu-wyniki-pi}" >> "$GITHUB_OUTPUT"
+            echo "Pobieram ${FORCED_NAME:-de-gu-wyniki-pi} z run $FORCED_RUN (wymuszone)"
+            exit 0
+          fi
+
+          ALL=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+            --paginate --jq '.artifacts[] | select(.expired==false)')
+
+          if [ -n "$FORCED_NAME" ]; then
+            PICK=$(echo "$ALL" | jq -s --arg n "$FORCED_NAME" \
+              '[.[] | select(.name == $n)] | sort_by(.created_at) | reverse | .[0] // empty')
+          else
+            PICK=$(echo "$ALL" | jq -s \
+              '[.[] | select(.name | test("^de-gu-wyniki-(thu|wed|mon|tue|fri|pi)$"))] | sort_by(.created_at) | reverse | .[0] // empty')
+          fi
+
+          if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
+            echo "::error::Brak artefaktu pipeline (thu/mon/tue/fri/pi) — uruchom discovery lub backfill"
             exit 1
           fi
-          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "Pobieram de-gu-wyniki-tue z run $RUN_ID"
 
-      - name: Download cache from poniedzialek send
+          ARTIFACT=$(echo "$PICK" | jq -r '.name')
+          RUN_ID=$(echo "$PICK" | jq -r '.workflow_run.id')
+          CREATED=$(echo "$PICK" | jq -r '.created_at')
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          echo "Pobieram $ARTIFACT z run $RUN_ID ($CREATED)"
+
+      - name: Download cache from zrodla
         uses: actions/download-artifact@v4
         with:
-          name: de-gu-wyniki-tue
+          name: ${{ steps.artifact_run.outputs.artifact }}
           github-token: ${{ github.token }}
           run-id: ${{ steps.artifact_run.outputs.run-id }}
           path: .
@@ -83,7 +115,7 @@ jobs:
           fi
           test -f assets/campaign/MFG_Referenzliste_Einzelhandel.pptx
 
-      - name: Send emails partia 2 (reszta backlogu, do 300/dzien)
+      - name: Send emails partia 2 (niewyslane z cache, do 300/dzien)
         env:
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
