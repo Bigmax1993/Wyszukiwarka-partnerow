@@ -6447,6 +6447,9 @@ def _run_smoke_tests() -> None:
     assert is_excluded_kontrahent(
         name="NEULA GmbH", url="https://neula.de", email="info@neula.de"
     )[0]
+    assert is_excluded_kontrahent(
+        name="Gieske Bauunternehmung GmbH", url="https://gieske-bau.de", email="info@gieske-bau.de"
+    )[0]
     assert _company_name_has_legal_form("Kultbau GmbH")
     assert _company_name_has_legal_form("Müller Filialbau e.K.")
     assert _company_name_has_legal_form("Weber Bau GbR")
