@@ -118,9 +118,3 @@ jobs:
           path: |
             Wyniki/
             wyslane/
-
-      - name: Chain — wtorek send
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/gha_chain_workflow.sh "GU wtorek send"

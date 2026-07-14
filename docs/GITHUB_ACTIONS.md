@@ -26,7 +26,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 | **GU poniedzialek send** | `de_gu_tue.yml` | cron, ręcznie | Wysyłka partia 1 (do 300) → `de-gu-wyniki-tue` |
 
-| **GU wtorek send** | `de_gu_fri.yml` | cron, ręcznie | Wysyłka partia 2 → `de-gu-wyniki-fri` |
+| **GU wtorek send** | `de_gu_fri.yml` | ręcznie (pominięty cron/chain) | Wysyłka partia 2 → `de-gu-wyniki-fri` |
 
 | **Sync wyniki Google Drive** | `sync-google-drive.yml` | cron pon 06:00 PL, ręcznie | Upload `Wyniki/` na Drive |
 
@@ -51,7 +51,7 @@ Harmonogram (Europe/Warsaw):
 | **Poniedziałek** | sync Drive | `0 6 * * 1` | **06:00** |
 | **Poniedziałek** | prep | `0 7 * * 1` | **07:00** |
 | **Poniedziałek** | send 1 | `0 9 * * 1` | **09:00** |
-| **Wtorek** | send 2 | `0 9 * * 2` | **09:00** |
+| ~~**Wtorek**~~ | ~~send 2~~ | — | **pominięty** |
 
 
 
