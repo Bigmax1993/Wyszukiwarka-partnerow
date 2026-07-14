@@ -1,6 +1,6 @@
 name: GU poniedzialek send
 
-# Harmonogram GHA aktywny tylko 13.07–21.07.2026 (Europe/Warsaw); poza tym oknem — lokalnie.
+# Harmonogram GHA aktywny tylko 14.07–21.07.2026 (Europe/Warsaw); poza tym oknem — lokalnie.
 on:
   schedule:
     - cron: "0 9 * * 1"
@@ -41,15 +41,14 @@ env:
   IMAP_PORT: "993"
   IMAP_SSL: "1"
   MAIL_ARCHIVE_IMAP: "1"
-  GU_GHA_SCHEDULED: >-
-    ${{ github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'schedule' &&
-         github.run_started_at >= '2026-07-12T22:00:00Z' &&
-         github.run_started_at < '2026-07-21T22:00:00Z') }}
 
 jobs:
   send:
-    if: env.GU_GHA_SCHEDULED == 'true'
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'schedule' &&
+           github.run_started_at >= '2026-07-13T22:00:00Z' &&
+           github.run_started_at < '2026-07-21T22:00:00Z') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
