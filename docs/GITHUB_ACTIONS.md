@@ -34,7 +34,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 ## Harmonogram cron (Europe/Warsaw)
 
-**Tymczasowo włączony na GitHub Actions** w oknie **14.07–21.07.2026** (cron + warunek daty w `jobs.*.if`). Po 21.07 harmonogram GHA pomija joby (uruchomienia `workflow_dispatch` i łańcuchy `gha_chain_workflow.sh` nadal działają). Poza tym oknem — lokalnie: `schedule/register_tasks_5_dni.ps1`.
+**Tymczasowo włączony na GitHub Actions** w oknie **14.07–21.07.2026** (sprawdzane w jobie `guard` przez `gu-gha-window-guard`, nie `github.run_started_at` w `if`). Po 21.07 harmonogram GHA pomija joby (uruchomienia `workflow_dispatch` i łańcuchy `gha_chain_workflow.sh` nadal działają). Poza tym oknem — lokalnie: `schedule/register_tasks_5_dni.ps1`.
 
 Harmonogram (Europe/Warsaw):
 
