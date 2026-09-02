@@ -62,7 +62,7 @@ def get_smtp_host() -> str:
         return host
     if _is_gmail_address(_mail_address()):
         return "smtp.gmail.com"
-    return _DEFAULT_HOMEPL_SMTP
+    return ""
 
 
 def get_imap_host() -> str:
