@@ -1,10 +1,10 @@
 name: GU GHA schedule window guard
 description: >-
-  Dla cron sprawdza okno 14.07–21.07.2026 (UTC od 13.07 22:00).
+  Dla cron zawsze aktywny harmonogram tygodniowy GU (discovery → backfill → prep → excel).
   workflow_dispatch zawsze przechodzi (active=true).
 outputs:
   active:
-    description: "true = uruchom pipeline, false = pomiń scheduled poza oknem"
+    description: "true = uruchom pipeline, false = pomiń scheduled"
     value: ${{ steps.check.outputs.active }}
 runs:
   using: composite
@@ -12,16 +12,4 @@ runs:
     - id: check
       shell: bash
       run: |
-        if [ "${{ github.event_name }}" != "schedule" ]; then
-          echo "active=true" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        NOW=$(date -u +%s)
-        START=$(date -u -d '2026-07-13T22:00:00Z' +%s)
-        END=$(date -u -d '2026-07-21T22:00:00Z' +%s)
-        if [ "$NOW" -lt "$START" ] || [ "$NOW" -ge "$END" ]; then
-          echo "::notice::Poza oknem harmonogramu GHA (14.07–21.07.2026 PL) — pomijam cron."
-          echo "active=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "active=true" >> "$GITHUB_OUTPUT"
-        fi
+        echo "active=true" >> "$GITHUB_OUTPUT"

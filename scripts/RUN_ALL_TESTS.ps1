@@ -1,14 +1,33 @@
 #Requires -Version 5.1
 <#
-Pelna bateria testow lokalnych (jak CI + rozszerzenia).
+Pelna bateria testow: jednostkowe, integracyjne, regresyjne, API live.
 
   powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1 -SkipApiLive
 #>
+param(
+    [switch]$SkipApiLive
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path $PSScriptRoot -Parent
 Set-Location $Root
 $env:KANBUD_PROJECT_ROOT = Join-Path $Root "libs"
 $env:PYTHONUTF8 = "1"
+$env:USE_GEMINI_REPLY_INTELLIGENCE = "0"
+
+# Klucze z PowerShell User env (jesli brak w sesji)
+foreach ($pair in @(
+    @{ Dst = "SERPER_API_KEY"; Src = "SERPER_API_KEY" },
+    @{ Dst = "ANTHROPIC_API_KEY"; Src = "ANTHROPIC_API_KEY" },
+    @{ Dst = "MAIL_USER"; Src = "GMAIL_USER" },
+    @{ Dst = "MAIL_PASSWORD"; Src = "GMAIL_APP_PASSWORD" }
+)) {
+    if (-not (Get-Item -Path "Env:$($pair.Dst)" -ErrorAction SilentlyContinue)) {
+        $val = [Environment]::GetEnvironmentVariable($pair.Src, "User")
+        if ($val) { Set-Item -Path "Env:$($pair.Dst)" -Value $val }
+    }
+}
 
 $failed = @()
 $passed = @()
@@ -36,83 +55,40 @@ Test-Step "py_compile (wszystkie .py)" {
         }
 }
 
-Test-Step "smoke --test" { python de_gu_bauunternehmen_scraper.py --test }
+Test-Step "pytest: jednostkowe (unit)" {
+    python -m pytest tests/unit -m unit -v --tb=short
+}
 
-Test-Step "regresja discovery GU" {
+Test-Step "pytest: integracyjne (bez api_live)" {
+    python -m pytest tests/integration -m "integration and not api_live" -v --tb=short
+}
+
+Test-Step "regresja discovery GU (unittest)" {
     python -m unittest tests.test_gu_discovery_regression -v
 }
 
-Test-Step "gu_bundesland_rotation" {
-    python -c @"
-from pathlib import Path
-import tempfile
-from gu_bundesland_rotation import (
-    load_rotation_state, peek_next_bundesland, commit_rotation_after_run,
-    rotation_state_path, BUNDESLAND_ROTATION_ORDER,
-)
-d = Path(tempfile.mkdtemp())
-p = rotation_state_path(d)
-s = load_rotation_state(p)
-land = peek_next_bundesland(s)
-assert land in BUNDESLAND_ROTATION_ORDER
-commit_rotation_after_run(p, s, land)
-"@
+Test-Step "regresja Excel append + Gmail (unittest)" {
+    python -m unittest tests.test_excel_append tests.test_send_excel_gmail -v
 }
 
-Test-Step "mfg_mail_recipients (bez office Cc)" {
-    python -c @"
-from mfg_mail_recipients import merge_mfg_campaign_cc
-cc = merge_mfg_campaign_cc('kontakt@firma.de', '')
-assert 'office@mfg-fliesen.de' not in [a.lower() for a in cc]
-"@
+Test-Step "smoke scraper (--test)" {
+    python de_gu_bauunternehmen_scraper.py --test
 }
 
-Test-Step "mfg_gu_email_attachment (ID Slides)" {
-    python -c @"
-from mfg_gu_email_attachment import GOOGLE_SLIDES_PRESENTATION_ID
-assert GOOGLE_SLIDES_PRESENTATION_ID == '1kBnp5x0pdgXZSPzVte9e92IUgn2A5gSe'
-"@
-}
-
-Test-Step "de_gu_keywords Sachsen" {
-    python -c @"
-from de_gu_keywords import build_discovery_terms
-terms = build_discovery_terms(['Sachsen'], max_terms=96)
-assert len(terms) >= 10
-"@
-}
-
-Test-Step "run_config JSON" {
-    python -c @"
-from pathlib import Path
-from scraper_run_config import load_run_config_file
-for cfg in ['run_config/welle_nrw_by_bw.json','run_config/bundesland_nrw.json']:
-    d = load_run_config_file(cfg, Path('.'))
-    assert d['config_type'] == 'de_gu_filialbau'
-"@
-}
-
-Test-Step "mfg_gu_inquiry_email_de (tylko DE)" {
-    python -c @"
-from mfg_gu_inquiry_email_de import FIXED_GU_INQUIRY_DE
-for w in ('Wspolpraca', 'dziekuje', 'pozdrawiam'):
-    assert w.lower() not in FIXED_GU_INQUIRY_DE.lower()
-assert 'Sehr geehrte' in FIXED_GU_INQUIRY_DE
-"@
-}
-
-Test-Step "dry-run wysylki" {
-    python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only | Out-Null
-}
-
-if (Test-Path "Wyniki\de_gu_bauunternehmen_cache.json") {
-    Test-Step "rebuild-from-cache" {
-        python de_gu_bauunternehmen_scraper.py --rebuild-from-cache | Out-Null
+Test-Step "send_excel_gmail --dry-run (jesli jest Excel)" {
+    if (Test-Path "Wyniki\de_gu_bauunternehmen_kontakte.xlsx") {
+        python scripts/send_excel_gmail.py --dry-run
+    } else {
+        Write-Host "(pominieto - brak Wyniki\de_gu_bauunternehmen_kontakte.xlsx)" -ForegroundColor Yellow
     }
 }
 
-Test-Step "gdrive_upload_wyniki --help" {
-    python scripts/gdrive_upload_wyniki.py --help | Out-Null
+if (-not $SkipApiLive) {
+    Test-Step "pytest: API live (Serper + Anthropic)" {
+        python -m pytest tests/integration/test_api_keys.py -m api_live -v --tb=short
+    }
+} else {
+    Write-Host "`n>> API live - pominieto (-SkipApiLive)" -ForegroundColor Yellow
 }
 
 Write-Host "`n======== PODSUMOWANIE ========" -ForegroundColor Yellow

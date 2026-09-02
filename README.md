@@ -1,4 +1,4 @@
-﻿# Wyszukiwarka partnerów — kampania GU (bundesweit)
+# Wyszukiwarka partnerów — kampania GU (bundesweit)
 
 
 
@@ -54,7 +54,18 @@ Pełna bateria testów:
 
 powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1
 
+powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1 -SkipApiLive
+
 ```
+
+| Typ | Folder | Marker pytest |
+|-----|--------|---------------|
+| Jednostkowe | `tests/unit/` | `-m unit` |
+| Integracyjne | `tests/integration/` | `-m "integration and not api_live"` |
+| Regresyjne | `tests/test_gu_discovery_regression.py`, `test_excel_append.py` | unittest |
+| API live | `tests/integration/test_api_keys.py` | `-m api_live` |
+
+Raport Excel (Gmail): `python scripts/send_excel_gmail.py` / `--dry-run` — poniedziałek 04:30 na GHA (`GU poniedzialek excel email`).
 
 
 

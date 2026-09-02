@@ -4,6 +4,7 @@ Wspólne nazwy zmiennych środowiskowych (identyczne jak w PowerShell User/Machi
 
 Ustawienie na stałe (PowerShell):
   [System.Environment]::SetEnvironmentVariable("SERPER_API_KEY", "...", "User")
+  [System.Environment]::SetEnvironmentVariable("GOOGLE_AI_STUDIO_API_KEY", "...", "User")
   [System.Environment]::SetEnvironmentVariable("MAIL_USER", "twoj@domena.pl", "User")
   [System.Environment]::SetEnvironmentVariable("MAIL_PASSWORD", "...", "User")
   [System.Environment]::SetEnvironmentVariable("SMTP_HOST", "serwer.home.pl", "User")
@@ -46,6 +47,7 @@ _load_dotenv_file()
 
 # --- Nazwy 1:1 z PowerShell ([Environment]::SetEnvironmentVariable(..., "User")) ---
 ENV_SERPER_API_KEY = "SERPER_API_KEY"
+ENV_GOOGLE_AI_STUDIO_API_KEY = "GOOGLE_AI_STUDIO_API_KEY"
 ENV_MAIL_USER = "MAIL_USER"
 ENV_MAIL_PASSWORD = "MAIL_PASSWORD"
 ENV_MAIL_SENDER_NAME = "MAIL_SENDER_NAME"
@@ -62,10 +64,12 @@ ENV_MAIL_ARCHIVE_IMAP = "MAIL_ARCHIVE_IMAP"
 ENV_GMAIL_USER = "GMAIL_USER"
 ENV_GMAIL_APP_PASSWORD = "GMAIL_APP_PASSWORD"
 ENV_GMAIL_SENDER_NAME = "GMAIL_SENDER_NAME"
-ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
-ENV_CLAUDE_MODEL = "CLAUDE_MODEL"
-ENV_CLAUDE_MODEL_VERIFY = "CLAUDE_MODEL_VERIFY"
-ENV_CLAUDE_MODEL_FAST = "CLAUDE_MODEL_FAST"
+ENV_EXCEL_REPORT_TO = "EXCEL_REPORT_TO"
+DEFAULT_EXCEL_REPORT_TO = "svinchak1993@gmail.com"
+ENV_GEMINI_MODEL = "GEMINI_MODEL"
+ENV_GEMINI_MODELS = "GEMINI_MODELS"
+ENV_GEMINI_REQUEST_TIMEOUT = "GEMINI_REQUEST_TIMEOUT"
+ENV_USE_GEMINI_REPLY_INTELLIGENCE = "USE_GEMINI_REPLY_INTELLIGENCE"
 ENV_KANBUD_DATA_DIR = "KANBUD_DATA_DIR"
 
 # Opcjonalne (tylko niektóre skrypty)
@@ -124,8 +128,8 @@ def get_serper_api_key() -> str:
     return get_env_value(ENV_SERPER_API_KEY)
 
 
-def get_anthropic_api_key() -> str:
-    return get_env_value(ENV_ANTHROPIC_API_KEY)
+def get_google_ai_studio_api_key() -> str:
+    return get_env_value(ENV_GOOGLE_AI_STUDIO_API_KEY)
 
 
 def get_mail_user() -> str:
@@ -152,10 +156,15 @@ def get_gmail_sender_name() -> str:
     return get_mail_sender_name()
 
 
+def get_excel_report_to() -> str:
+    return get_env_value(ENV_EXCEL_REPORT_TO) or DEFAULT_EXCEL_REPORT_TO
+
+
 def check_env_status() -> dict[str, bool]:
     """Które zmienne są ustawione (bez ujawniania wartości)."""
     all_names = (
         ENV_SERPER_API_KEY,
+        ENV_GOOGLE_AI_STUDIO_API_KEY,
         ENV_MAIL_USER,
         ENV_MAIL_PASSWORD,
         ENV_MAIL_SENDER_NAME,
@@ -164,10 +173,9 @@ def check_env_status() -> dict[str, bool]:
         ENV_GMAIL_USER,
         ENV_GMAIL_APP_PASSWORD,
         ENV_GMAIL_SENDER_NAME,
-        ENV_ANTHROPIC_API_KEY,
-        ENV_CLAUDE_MODEL,
-        ENV_CLAUDE_MODEL_VERIFY,
-        ENV_CLAUDE_MODEL_FAST,
+        ENV_GEMINI_MODEL,
+        ENV_GEMINI_MODELS,
+        ENV_GEMINI_REQUEST_TIMEOUT,
     )
     return {n: bool(get_env_value(n)) for n in all_names}
 

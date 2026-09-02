@@ -533,3 +533,99 @@ def send_smtp_email(
         except Exception:
             pass
         return False, str(e)
+
+
+def send_smtp_email_with_attachments(
+    to_email: str,
+    subject: str,
+    body: str,
+    attachment_paths: list[str | Path],
+    logger: logging.Logger,
+    *,
+    mail_type: str = "załącznik",
+    campaign: str = "",
+) -> tuple[bool, str]:
+    """Wysyłka SMTP z załącznikami (yagmail / Gmail app password)."""
+    try:
+        import yagmail  # pyright: ignore[reportMissingImports]  # noqa: F401
+    except ImportError:
+        return False, "brak yagmail (pip install yagmail)"
+
+    username = get_mail_user()
+    password = get_mail_password()
+    if not (username and password):
+        return False, "brak MAIL_USER / MAIL_PASSWORD (Gmail: hasło aplikacji)"
+
+    files: list[str] = []
+    for raw in attachment_paths or []:
+        path = Path(raw)
+        if not path.is_file():
+            return False, f"brak pliku załącznika: {path}"
+        files.append(str(path.resolve()))
+
+    subject_clean = sanitize_special_text(subject)
+    body_clean = sanitize_email_body(body)
+    bcc = _split_recipients(get_env_value(ENV_MAIL_BCC))
+    cc = merge_mail_cc_recipients(to_email, get_env_value(ENV_MAIL_CC))
+
+    try:
+        yag = _yagmail_smtp()
+        kwargs: dict[str, Any] = {
+            "to": to_email,
+            "subject": subject_clean,
+            "contents": [body_clean],
+            "attachments": files,
+        }
+        if bcc:
+            kwargs["bcc"] = bcc
+        if cc:
+            kwargs["cc"] = cc
+        yag.send(**kwargs)
+        archive_sent_message(
+            to_email,
+            subject_clean,
+            body_clean,
+            logger,
+            cc=cc,
+            bcc=bcc,
+            attachment_paths=files,
+        )
+        host = get_smtp_host() or "smtp.gmail.com"
+        attach_note = ", ".join(Path(f).name for f in files)
+        logger.info(
+            "Wysłano %s → %s via %s | %s | zał.: %s",
+            mail_type,
+            to_email,
+            host,
+            (subject or "")[:60],
+            attach_note,
+        )
+        try:
+            from email_journal import log_mail_sent
+
+            log_mail_sent(
+                to_email,
+                subject,
+                mail_type=mail_type,
+                campaign=campaign,
+                ok=True,
+            )
+        except Exception:
+            pass
+        return True, "gesendet"
+    except Exception as e:
+        logger.warning("Błąd wysyłki z załącznikiem do %s: %s", to_email, e)
+        try:
+            from email_journal import log_mail_sent
+
+            log_mail_sent(
+                to_email,
+                subject,
+                mail_type=mail_type,
+                campaign=campaign,
+                ok=False,
+                error=str(e),
+            )
+        except Exception:
+            pass
+        return False, str(e)

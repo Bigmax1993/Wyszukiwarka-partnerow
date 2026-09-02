@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Serper API – DE bundesweit: Generalunternehmer (GU), którzy stawiają sklepy/markety (Neubau, Filialbau)
 lub robią przebudowy/umbau i modernizację filii (Rewe, Aldi, Kaufland, Netto, Penny, Edeka).
@@ -885,6 +885,176 @@ def save_csv(rows, path: Path) -> None:
         writer.writerows(rows)
 
 
+def _excel_cell_str(value) -> str:
+    if value is None:
+        return ""
+    try:
+        import math
+
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
+
+def export_row_dedupe_key(row: dict) -> str:
+    """Klucz deduplikacji wiersza Excel (Kontakte)."""
+    email = _excel_cell_str(row.get("E-mail") or row.get("email_target")).lower()
+    if email and "@" in email:
+        return f"email:{email}"
+    url = _excel_cell_str(row.get("URL") or row.get("url")).lower()
+    if url:
+        return f"url:{url}"
+    name = _excel_cell_str(row.get("Nazwa firmy") or row.get("nazwa")).lower()
+    state = _excel_cell_str(row.get("Bundesland") or row.get("bundesland")).lower()
+    if name:
+        return f"name:{name}|{state}"
+    return ""
+
+
+def bundesland_row_dedupe_key(row: dict) -> str:
+    url = _excel_cell_str(row.get("URL") or row.get("url")).lower()
+    if url:
+        return f"url:{url}"
+    name = _excel_cell_str(row.get("Nazwa firmy") or row.get("nazwa")).lower()
+    state = _excel_cell_str(row.get("Bundesland") or row.get("bundesland")).lower()
+    address = _excel_cell_str(row.get("Adres") or row.get("adres")).lower()
+    return f"name:{name}|{state}|{address}"
+
+
+def _excel_preserve_columns() -> frozenset[str]:
+    cols = set(REPLY_EXPORT_COLUMNS)
+    cols.update(f"Cena rel. {i}" for i in (1, 2, 3))
+    return frozenset(cols)
+
+
+def _merge_excel_export_row(existing: dict, incoming: dict) -> dict:
+    """Scala wiersz — zachowuje odpowiedzi/ręczne kolumny, uzupełnia dane ze scrapera."""
+    preserve = _excel_preserve_columns()
+    out = dict(existing)
+    for key, raw in incoming.items():
+        if str(key).startswith("_"):
+            continue
+        new_val = _excel_cell_str(raw)
+        old_val = _excel_cell_str(out.get(key))
+        if key in preserve:
+            if not old_val and new_val:
+                out[key] = raw
+        elif new_val:
+            out[key] = raw
+        elif key not in out:
+            out[key] = raw
+    return out
+
+
+def merge_export_rows_append(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    logger: logging.Logger | None = None,
+) -> tuple[list[dict], int, int]:
+    """Dopisuje nowe wiersze Kontakte; istniejące aktualizuje bez usuwania."""
+    merged = [dict(r) for r in (existing or [])]
+    index: dict[str, int] = {}
+    for i, row in enumerate(merged):
+        key = export_row_dedupe_key(row)
+        if key:
+            index[key] = i
+    appended = 0
+    updated = 0
+    for raw in incoming or []:
+        inc = dict(raw)
+        key = export_row_dedupe_key(inc)
+        if key and key in index:
+            pos = index[key]
+            merged[pos] = _merge_excel_export_row(merged[pos], inc)
+            updated += 1
+        else:
+            if key:
+                index[key] = len(merged)
+            merged.append(inc)
+            appended += 1
+    if logger is not None:
+        logger.info(
+            "Excel Kontakte append: +%s nowych, ~%s zaktualizowanych (razem %s)",
+            appended,
+            updated,
+            len(merged),
+        )
+    return merged, appended, updated
+
+
+def merge_bundesland_rows_append(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    logger: logging.Logger | None = None,
+) -> tuple[list[dict], int, int]:
+    merged = [dict(r) for r in (existing or [])]
+    index: dict[str, int] = {}
+    for i, row in enumerate(merged):
+        key = bundesland_row_dedupe_key(row)
+        if key:
+            index[key] = i
+    appended = 0
+    updated = 0
+    for raw in incoming or []:
+        inc = dict(raw)
+        key = bundesland_row_dedupe_key(inc)
+        if key and key in index:
+            pos = index[key]
+            merged[pos] = _merge_excel_export_row(merged[pos], inc)
+            updated += 1
+        else:
+            if key:
+                index[key] = len(merged)
+            merged.append(inc)
+            appended += 1
+    if logger is not None:
+        logger.info(
+            "Excel Wojewodztwa append: +%s nowych, ~%s zaktualizowanych (razem %s)",
+            appended,
+            updated,
+            len(merged),
+        )
+    return merged, appended, updated
+
+
+def load_existing_excel_sheets(path: Path, logger: logging.Logger) -> dict[str, list[dict]]:
+    """Wczytuje istniejące arkusze XLSX (append — bez pełnej przebudowy)."""
+    if not path.exists() or path.suffix.lower() != ".xlsx":
+        return {}
+    try:
+        import pandas as pd  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        logger.warning("pandas brak — append Excel niemożliwy, zapis od zera")
+        return {}
+    sheets: dict[str, list[dict]] = {}
+    try:
+        book = pd.ExcelFile(path)
+        for sheet_name in book.sheet_names:
+            if sheet_name.strip().lower() == "info":
+                continue
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            rows = []
+            for rec in df.fillna("").to_dict(orient="records"):
+                row = {
+                    k: _excel_cell_str(v) if not isinstance(v, (int, float)) else v
+                    for k, v in rec.items()
+                }
+                rows.append(row)
+            sheets[sheet_name] = rows
+        logger.info(
+            "Excel wczytany do append: %s (%s arkuszy)",
+            path.name,
+            ", ".join(f"{k}={len(v)}" for k, v in sheets.items()),
+        )
+    except Exception as exc:
+        logger.warning("Excel append: nie wczytano %s (%s) — zapis od nowych wierszy", path, exc)
+    return sheets
+
+
 def build_excel_info_sheet_rows() -> list[dict]:
     """Arkusz Info w Excelu — zasady zapisu (append, nie pełna przebudowa)."""
     return [
@@ -951,6 +1121,17 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
             rows_for_excel, logger=logger, cache=cache
         )
         state_rows = build_bundesland_rows(rows_for_excel)
+        existing_sheets = load_existing_excel_sheets(path, logger)
+        export_rows, _, _ = merge_export_rows_append(
+            existing_sheets.get("Kontakte", []),
+            export_rows,
+            logger=logger,
+        )
+        state_rows, _, _ = merge_bundesland_rows_append(
+            existing_sheets.get("Wojewodztwa", []),
+            state_rows,
+            logger=logger,
+        )
         if cache is None:
             cache = {}
         cfg = ReplySyncConfig(
@@ -1515,18 +1696,18 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         row = apply_regex_row_contact_cleanup(row)
         return finalize_row_for_excel_tables(row)
 
-    cleaned_name = finalize_company_name_for_export(
-        parsed.get("company_name_clean", ""),
-        fallback_raw=company,
-        website=website,
-        email=email,
-    )
+        cleaned_name = finalize_company_name_for_export(
+            parsed.get("company_name_clean", ""),
+            fallback_raw=company,
+            website=website,
+            email=email,
+        )
     claude_result = {
-        "company_name_clean": cleaned_name,
-        "address": sanitize_special_text(parsed.get("address", address)) or address,
-        "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
-        "website": sanitize_special_text(parsed.get("website", website)) or website,
-        "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
+            "company_name_clean": cleaned_name,
+            "address": sanitize_special_text(parsed.get("address", address)) or address,
+            "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
+            "website": sanitize_special_text(parsed.get("website", website)) or website,
+            "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
         "handelsketten": format_handelsketten_for_excel(
             parsed.get("handelsketten") or row.get("retail_chains_found") or ""
         ),
@@ -1535,7 +1716,7 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     if claude_result["bundesland"] not in GERMAN_STATES:
         claude_result["bundesland"] = extract_bundesland(row)
     apply_row_enrichment_to_row(row, claude_result)
-    if cache_key:
+        if cache_key:
         claude_cache[cache_key] = claude_result
     row = apply_regex_row_contact_cleanup(row)
     return finalize_row_for_excel_tables(row)
@@ -2264,15 +2445,15 @@ def build_email_jobs_from_cache_json(
     console_step("E-Mail-Warteschlange aus Cache JSON")
     data = cache
     if data is None:
-        if not CACHE_FILE.exists():
-            logger.info("Kein Cache JSON – keine Mails.")
-            return []
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as e:
-            logger.warning(f"Cache JSON Lesefehler: {e}")
-            return []
+    if not CACHE_FILE.exists():
+        logger.info("Kein Cache JSON – keine Mails.")
+        return []
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.warning(f"Cache JSON Lesefehler: {e}")
+        return []
     contacts = data.get("contacts", {}) if isinstance(data, dict) else {}
     jobs = []
     for place_url, info in contacts.items():
@@ -2316,8 +2497,8 @@ def build_email_jobs_from_cache_json(
             )
             if REQUIRE_NAMED_RETAIL_CHAIN and not has_required_retail_chain_mention(
                 chain_blob
-            ):
-                continue
+        ):
+            continue
         if email_status == "sent" and not force_resend:
             continue
         jobs.append(
@@ -2568,7 +2749,7 @@ def reset_serper_daily_for_discovery(cache: dict) -> None:
     n_serper, n_discovery = clear_serper_search_caches(cache)
     if old or n_serper or n_discovery or parts_ex:
         parts = []
-        if old:
+    if old:
             parts.append(
                 f"limit było {old}, start z {SERPER_DAILY_LIMIT} zapytań"
             )
@@ -3487,13 +3668,13 @@ def verify_company_on_website(
     if large:
         return _finalize_verification_result(
             {
-                "verified": False,
-                "is_small_firm": False,
-                "retail_chains": [],
-                "verification_reason": large_reason,
-                "verification_method": "rules",
-                "pages_checked": pages_checked,
-                "page_snippet": _truncate_page_snippet(page_text),
+            "verified": False,
+            "is_small_firm": False,
+            "retail_chains": [],
+            "verification_reason": large_reason,
+            "verification_method": "rules",
+            "pages_checked": pages_checked,
+            "page_snippet": _truncate_page_snippet(page_text),
             },
             blob,
         )
@@ -3504,12 +3685,12 @@ def verify_company_on_website(
         return _finalize_verification_result(
             {
                 "verified": rules_ok and bool(chains),
-                "is_small_firm": True,
-                "retail_chains": chains,
+            "is_small_firm": True,
+            "retail_chains": chains,
                 "verification_reason": rules_reason if rules_ok else "keine_handelskette",
-                "verification_method": "bs4_rules",
-                "pages_checked": pages_checked,
-                "page_snippet": _truncate_page_snippet(page_text),
+            "verification_method": "bs4_rules",
+            "pages_checked": pages_checked,
+            "page_snippet": _truncate_page_snippet(page_text),
             },
             blob,
         )
@@ -3520,13 +3701,13 @@ def verify_company_on_website(
     if rules_ok and is_small:
         return _finalize_verification_result(
             {
-                "verified": True,
-                "is_small_firm": True,
-                "retail_chains": chains,
-                "verification_reason": rules_reason,
-                "verification_method": "bs4_rules",
-                "pages_checked": pages_checked,
-                "page_snippet": _truncate_page_snippet(page_text),
+            "verified": True,
+            "is_small_firm": True,
+            "retail_chains": chains,
+            "verification_reason": rules_reason,
+            "verification_method": "bs4_rules",
+            "pages_checked": pages_checked,
+            "page_snippet": _truncate_page_snippet(page_text),
             },
             blob,
         )
@@ -3538,13 +3719,13 @@ def verify_company_on_website(
         if rules_ok2 and is_small:
             return _finalize_verification_result(
                 {
-                    "verified": True,
-                    "is_small_firm": True,
-                    "retail_chains": chains2,
-                    "verification_reason": f"serper_snippet:{rules_reason2}",
-                    "verification_method": "bs4_rules",
-                    "pages_checked": pages_checked,
-                    "page_snippet": _truncate_page_snippet(page_text),
+                "verified": True,
+                "is_small_firm": True,
+                "retail_chains": chains2,
+                "verification_reason": f"serper_snippet:{rules_reason2}",
+                "verification_method": "bs4_rules",
+                "pages_checked": pages_checked,
+                "page_snippet": _truncate_page_snippet(page_text),
                 },
                 blob,
             )
@@ -3556,13 +3737,13 @@ def verify_company_on_website(
         reason = large_reason or "nicht_klein"
     return _finalize_verification_result(
         {
-            "verified": False,
-            "is_small_firm": is_small,
-            "retail_chains": chains,
-            "verification_reason": reason,
-            "verification_method": "bs4_rules",
-            "pages_checked": pages_checked,
-            "page_snippet": _truncate_page_snippet(page_text),
+        "verified": False,
+        "is_small_firm": is_small,
+        "retail_chains": chains,
+        "verification_reason": reason,
+        "verification_method": "bs4_rules",
+        "pages_checked": pages_checked,
+        "page_snippet": _truncate_page_snippet(page_text),
         },
         blob,
     )
@@ -4051,7 +4232,7 @@ def find_company_names_in_text(
     website: str = "",
 ) -> list[str]:
     _ = text, logger, cache, page_url, website
-    return []
+        return []
 
 
 def find_company_name_in_text(
@@ -4981,11 +5162,11 @@ def collect_urls_for_www_reverify(
         if (info.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
             _add(url)
     for row in all_rows or []:
-        url = (row.get("url") or row.get("www") or "").strip()
+            url = (row.get("url") or row.get("www") or "").strip()
         if not url or url in seen:
-            continue
-        reason = (row.get("verification_reason") or "").strip()
-        if reason == PENDING_WWW_VERIFY_REASON and not row.get("retail_verified"):
+                continue
+            reason = (row.get("verification_reason") or "").strip()
+            if reason == PENDING_WWW_VERIFY_REASON and not row.get("retail_verified"):
             _add(url)
     return urls
 
@@ -5116,7 +5297,7 @@ def resolve_inquiry_email_target(
         target
         and not retail_verified
         and not is_valid_retail_store_builder_contact(
-            email=target, url=site, name=company_name, text=snippet
+        email=target, url=site, name=company_name, text=snippet
         )
     ):
         log_email_pick_decision(
@@ -6027,7 +6208,7 @@ def run_scraper(
         contacts_n = len(cache.get("contacts", {}) or {})
         if cache_rows:
             all_rows = merge_pipeline_rows(existing_rows, cache_rows)
-            console_step(
+        console_step(
                 f"Excel aus Cache: {len(cache_rows)} z JSON + {len(existing_rows)} z Excel "
                 f"→ {len(all_rows)} (contacts={contacts_n})"
             )
@@ -6220,11 +6401,11 @@ def run_scraper(
                             f"(poniżej progu {DISCOVERY_MIN_PENDING_GHA_FAIL})."
                         )
                     else:
-                        raise RuntimeError(
-                            f"Za mało kandydatów pending ({pending_land} < "
-                            f"{DISCOVERY_MIN_PENDING_GHA_FAIL}) dla {rotation_land}. "
-                            "Sprawdź [LEjek] w logu."
-                        )
+                    raise RuntimeError(
+                        f"Za mało kandydatów pending ({pending_land} < "
+                        f"{DISCOVERY_MIN_PENDING_GHA_FAIL}) dla {rotation_land}. "
+                        "Sprawdź [LEjek] w logu."
+                    )
             elif serper_only:
                 pending_all = count_all_pending_contacts(all_rows, cache)
                 log_discovery_funnel(funnel, logger)
@@ -6260,12 +6441,12 @@ def run_scraper(
                     f"({rows_with_email} wierszy z e-mailem)"
                 )
             else:
-                reenrich_contacts_for_mailing(
-                    all_rows,
-                    cache,
-                    logger,
-                    refresh_all=force_resend,
-                )
+            reenrich_contacts_for_mailing(
+                all_rows,
+                cache,
+                logger,
+                refresh_all=force_resend,
+            )
             _process_email_jobs(
                 all_rows,
                 cache,

@@ -14,7 +14,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 |----------|------|---------|---------|
 
-| **Tests** | `tests.yml` | push, PR | `py_compile` + smoke `--test` |
+| **Tests** | `tests.yml` | push, PR | pytest unit + integracja + regresja + API live |
 
 | **CI Deploy** | `ci-deploy.yml` | push | smoke + walidacja secretów + dry-run maili |
 
@@ -23,6 +23,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 | **GU niedziela backfill** | `de_gu_thu.yml` | cron, ręcznie | Backfill + Excel → `de-gu-wyniki-thu` |
 
 | **GU poniedzialek prep** | `de_gu_mon.yml` | cron, ręcznie | Rebuild Excel → `de-gu-wyniki-mon` |
+| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron, ręcznie | Excel na Gmail (04:30 PL) |
 
 | **GU poniedzialek send** | `de_gu_tue.yml` | cron, ręcznie | Wysyłka partia 1 (do 300) → `de-gu-wyniki-tue` |
 
@@ -34,11 +35,7 @@ Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwark
 
 ## Harmonogram cron (Europe/Warsaw)
 
-**Tymczasowo włączony na GitHub Actions** w oknie **14.07–21.07.2026** (sprawdzane w jobie `guard` przez `gu-gha-window-guard`, nie `github.run_started_at` w `if`). Po 21.07 harmonogram GHA pomija joby (uruchomienia `workflow_dispatch` i łańcuchy `gha_chain_workflow.sh` nadal działają). Poza tym oknem — lokalnie: `schedule/register_tasks_5_dni.ps1`.
-
-Harmonogram (Europe/Warsaw):
-
-
+Harmonogram GHA jest **aktywny cały rok** (`gu-gha-window-guard` zwraca `active=true` dla crona).
 
 | Dzień | Workflow | Cron | Godzina PL |
 |-------|----------|------|------------|
@@ -48,10 +45,8 @@ Harmonogram (Europe/Warsaw):
 | **Czwartek** | discovery część 4 | `0 20 * * 4` | **20:00** |
 | **Piątek** | discovery część 5 | `0 16 * * 5` | **16:00** |
 | **Niedziela** | backfill | `30 5 * * 0` | **05:30** |
-| **Poniedziałek** | sync Drive | `0 6 * * 1` | **06:00** |
+| **Poniedziałek** | excel email | `30 4 * * 1` | **04:30** |
 | **Poniedziałek** | prep | `0 7 * * 1` | **07:00** |
-| **Poniedziałek** | send 1 | `0 9 * * 1` | **09:00** |
-| ~~**Wtorek**~~ | ~~send 2~~ | — | **pominięty** |
 
 
 
@@ -152,6 +147,10 @@ gh workflow run "GU niedziela backfill" -R Bigmax1993/Wyszukiwarka-partnerow
 gh workflow run "Sync wyniki Google Drive" -R Bigmax1993/Wyszukiwarka-partnerow
 
 gh workflow run "GU poniedzialek prep" -R Bigmax1993/Wyszukiwarka-partnerow
+
+gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow
+
+gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow -f dry_run=true
 
 gh workflow run "GU poniedzialek send" -R Bigmax1993/Wyszukiwarka-partnerow -f force_resend=true
 

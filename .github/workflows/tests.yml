@@ -8,11 +8,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  smoke:
+  tests:
     runs-on: ubuntu-latest
     env:
       KANBUD_PROJECT_ROOT: ${{ github.workspace }}/libs
+      USE_GEMINI_REPLY_INTELLIGENCE: "0"
       PYTHONUTF8: "1"
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,17 +30,20 @@ jobs:
         run: |
           python -m py_compile kanbud_bootstrap.py
           python -m py_compile campaign_data_paths.py
-          python -m py_compile email_targeting.py
           python -m py_compile de_gu_bauunternehmen_scraper.py
-          python -m py_compile de_gu_keywords.py
+          python -m py_compile scripts/send_excel_gmail.py
 
-      - name: Scraper smoke (--test)
-        run: python de_gu_bauunternehmen_scraper.py --test
+      - name: Unit tests
+        run: python -m pytest tests/unit -m unit -v --tb=short
 
-      - name: Regresja discovery GU i Claude
+      - name: Integration tests (offline)
+        run: python -m pytest tests/integration -m "integration and not api_live" -v --tb=short
+
+      - name: Regression tests
         run: |
+          python -m unittest tests.test_gu_discovery_regression -v
+          python -m unittest tests.test_excel_append tests.test_send_excel_gmail -v
           python -m unittest \
-            tests.test_gu_discovery_regression \
             tests.test_claude_llm_campaign \
             tests.test_claude_contact_extract \
             tests.test_claude_unlimited \
@@ -46,3 +52,9 @@ jobs:
             tests.test_claude_page_text \
             tests.test_discovery_run_state \
             -v
+
+      - name: Scraper smoke (--test)
+        run: python de_gu_bauunternehmen_scraper.py --test
+
+      - name: API live (Serper + Anthropic)
+        run: python -m pytest tests/integration/test_api_keys.py -m api_live -v --tb=short
