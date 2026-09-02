@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Serper API – DE bundesweit: Generalunternehmer (GU), którzy stawiają sklepy/markety (Neubau, Filialbau)
 lub robią przebudowy/umbau i modernizację filii (Rewe, Aldi, Kaufland, Netto, Penny, Edeka).
@@ -1696,18 +1696,18 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         row = apply_regex_row_contact_cleanup(row)
         return finalize_row_for_excel_tables(row)
 
-        cleaned_name = finalize_company_name_for_export(
-            parsed.get("company_name_clean", ""),
-            fallback_raw=company,
-            website=website,
-            email=email,
-        )
+    cleaned_name = finalize_company_name_for_export(
+        parsed.get("company_name_clean", ""),
+        fallback_raw=company,
+        website=website,
+        email=email,
+    )
     claude_result = {
-            "company_name_clean": cleaned_name,
-            "address": sanitize_special_text(parsed.get("address", address)) or address,
-            "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
-            "website": sanitize_special_text(parsed.get("website", website)) or website,
-            "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
+        "company_name_clean": cleaned_name,
+        "address": sanitize_special_text(parsed.get("address", address)) or address,
+        "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
+        "website": sanitize_special_text(parsed.get("website", website)) or website,
+        "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
         "handelsketten": format_handelsketten_for_excel(
             parsed.get("handelsketten") or row.get("retail_chains_found") or ""
         ),
@@ -1716,7 +1716,7 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     if claude_result["bundesland"] not in GERMAN_STATES:
         claude_result["bundesland"] = extract_bundesland(row)
     apply_row_enrichment_to_row(row, claude_result)
-        if cache_key:
+    if cache_key:
         claude_cache[cache_key] = claude_result
     row = apply_regex_row_contact_cleanup(row)
     return finalize_row_for_excel_tables(row)
