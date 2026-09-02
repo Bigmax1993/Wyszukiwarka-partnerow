@@ -1,15 +1,14 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-Wspólne nazwy zmiennych środowiskowych (identyczne jak w PowerShell User/Machine).
+Wsp├│lne nazwy zmiennych ┼Ťrodowiskowych (identyczne jak w PowerShell User/Machine).
 
-Ustawienie na stałe (PowerShell):
+Ustawienie na sta┼ée (PowerShell):
   [System.Environment]::SetEnvironmentVariable("SERPER_API_KEY", "...", "User")
-  [System.Environment]::SetEnvironmentVariable("GOOGLE_AI_STUDIO_API_KEY", "...", "User")
   [System.Environment]::SetEnvironmentVariable("MAIL_USER", "twoj@domena.pl", "User")
   [System.Environment]::SetEnvironmentVariable("MAIL_PASSWORD", "...", "User")
   [System.Environment]::SetEnvironmentVariable("SMTP_HOST", "serwer.home.pl", "User")
   [System.Environment]::SetEnvironmentVariable("IMAP_HOST", "serwer.home.pl", "User")
-  # Opcjonalnie (stare nazwy nadal działają): GMAIL_USER, GMAIL_APP_PASSWORD, GMAIL_SENDER_NAME
+  # Opcjonalnie (stare nazwy nadal dzia┼éaj─ů): GMAIL_USER, GMAIL_APP_PASSWORD, GMAIL_SENDER_NAME
 """
 from __future__ import annotations
 
@@ -21,7 +20,7 @@ _DOTENV_LOADED = False
 
 
 def _load_dotenv_file() -> None:
-    """Ładuje .env z katalogu projektu (nie commituj .env z kluczami)."""
+    """┼üaduje .env z katalogu projektu (nie commituj .env z kluczami)."""
     global _DOTENV_LOADED
     if _DOTENV_LOADED:
         return
@@ -47,7 +46,6 @@ _load_dotenv_file()
 
 # --- Nazwy 1:1 z PowerShell ([Environment]::SetEnvironmentVariable(..., "User")) ---
 ENV_SERPER_API_KEY = "SERPER_API_KEY"
-ENV_GOOGLE_AI_STUDIO_API_KEY = "GOOGLE_AI_STUDIO_API_KEY"
 ENV_MAIL_USER = "MAIL_USER"
 ENV_MAIL_PASSWORD = "MAIL_PASSWORD"
 ENV_MAIL_SENDER_NAME = "MAIL_SENDER_NAME"
@@ -60,19 +58,19 @@ ENV_IMAP_SSL = "IMAP_SSL"
 ENV_MAIL_BCC = "MAIL_BCC"
 ENV_MAIL_CC = "MAIL_CC"
 ENV_MAIL_ARCHIVE_IMAP = "MAIL_ARCHIVE_IMAP"
-# Kompatybilność wsteczna (Gmail lub stare instalacje)
+# Kompatybilno┼Ť─ç wsteczna (Gmail lub stare instalacje)
 ENV_GMAIL_USER = "GMAIL_USER"
 ENV_GMAIL_APP_PASSWORD = "GMAIL_APP_PASSWORD"
 ENV_GMAIL_SENDER_NAME = "GMAIL_SENDER_NAME"
+ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+ENV_CLAUDE_MODEL = "CLAUDE_MODEL"
+ENV_CLAUDE_MODEL_VERIFY = "CLAUDE_MODEL_VERIFY"
+ENV_CLAUDE_MODEL_FAST = "CLAUDE_MODEL_FAST"
+ENV_KANBUD_DATA_DIR = "KANBUD_DATA_DIR"
 ENV_EXCEL_REPORT_TO = "EXCEL_REPORT_TO"
 DEFAULT_EXCEL_REPORT_TO = "svinchak1993@gmail.com"
-ENV_GEMINI_MODEL = "GEMINI_MODEL"
-ENV_GEMINI_MODELS = "GEMINI_MODELS"
-ENV_GEMINI_REQUEST_TIMEOUT = "GEMINI_REQUEST_TIMEOUT"
-ENV_USE_GEMINI_REPLY_INTELLIGENCE = "USE_GEMINI_REPLY_INTELLIGENCE"
-ENV_KANBUD_DATA_DIR = "KANBUD_DATA_DIR"
 
-# Opcjonalne (tylko niektóre skrypty)
+# Opcjonalne (tylko niekt├│re skrypty)
 ENV_ENABLE_GEO_DISTANCE_PLZ_FILTER = "ENABLE_GEO_DISTANCE_PLZ_FILTER"
 ENV_MAX_DISTANCE_KM_FROM_ANCHOR = "MAX_DISTANCE_KM_FROM_ANCHOR"
 ENV_SERPER_SHUFFLE_TERMS = "SERPER_SHUFFLE_TERMS"
@@ -90,7 +88,7 @@ _LEGACY_ENV_ALIASES = {
 
 
 def get_env_value(name: str, default: str = "") -> str:
-    """Odczyt zmiennej: proces → cache → PowerShell User → PowerShell Machine."""
+    """Odczyt zmiennej: proces Ôćĺ cache Ôćĺ PowerShell User Ôćĺ PowerShell Machine."""
     val = os.getenv(name)
     if val:
         return val.strip()
@@ -128,8 +126,12 @@ def get_serper_api_key() -> str:
     return get_env_value(ENV_SERPER_API_KEY)
 
 
-def get_google_ai_studio_api_key() -> str:
-    return get_env_value(ENV_GOOGLE_AI_STUDIO_API_KEY)
+def get_anthropic_api_key() -> str:
+    return get_env_value(ENV_ANTHROPIC_API_KEY)
+
+
+def get_excel_report_to() -> str:
+    return get_env_value(ENV_EXCEL_REPORT_TO) or DEFAULT_EXCEL_REPORT_TO
 
 
 def get_mail_user() -> str:
@@ -156,15 +158,10 @@ def get_gmail_sender_name() -> str:
     return get_mail_sender_name()
 
 
-def get_excel_report_to() -> str:
-    return get_env_value(ENV_EXCEL_REPORT_TO) or DEFAULT_EXCEL_REPORT_TO
-
-
 def check_env_status() -> dict[str, bool]:
-    """Które zmienne są ustawione (bez ujawniania wartości)."""
+    """Kt├│re zmienne s─ů ustawione (bez ujawniania warto┼Ťci)."""
     all_names = (
         ENV_SERPER_API_KEY,
-        ENV_GOOGLE_AI_STUDIO_API_KEY,
         ENV_MAIL_USER,
         ENV_MAIL_PASSWORD,
         ENV_MAIL_SENDER_NAME,
@@ -173,14 +170,15 @@ def check_env_status() -> dict[str, bool]:
         ENV_GMAIL_USER,
         ENV_GMAIL_APP_PASSWORD,
         ENV_GMAIL_SENDER_NAME,
-        ENV_GEMINI_MODEL,
-        ENV_GEMINI_MODELS,
-        ENV_GEMINI_REQUEST_TIMEOUT,
+        ENV_ANTHROPIC_API_KEY,
+        ENV_CLAUDE_MODEL,
+        ENV_CLAUDE_MODEL_VERIFY,
+        ENV_CLAUDE_MODEL_FAST,
     )
     return {n: bool(get_env_value(n)) for n in all_names}
 
 
-# UTF-8 / polskie znaki — od razu przy imporcie modułu wspólnego
+# UTF-8 / polskie znaki ÔÇö od razu przy imporcie modu┼éu wsp├│lnego
 from polish_text import configure_utf8_environment
 
 configure_utf8_environment()
