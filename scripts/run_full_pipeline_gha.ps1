@@ -2,7 +2,7 @@
 <#
 Uruchamia pipeline GU na GitHub Actions (recznie, krok po kroku).
 
-Pipeline: discovery -> backfill -> excel email (Gmail) -> prep (harmonogram tygodniowy).
+Pipeline: discovery -> backfill -> prep -> Excel (bez wysylki maili, bez Google Drive).
 
   powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1
 
@@ -48,9 +48,10 @@ if (-not $SkipDiscovery) {
     Invoke-GhaWorkflow "GU sobota discovery"
 }
 Invoke-GhaWorkflow "GU niedziela backfill"
-Invoke-GhaWorkflow "GU poniedzialek excel email"
+Invoke-GhaWorkflow "GU poniedzialek excel email" @{ dry_run = "true" }
 Invoke-GhaWorkflow "GU poniedzialek prep"
 
 Write-Host ""
-Write-Host "Pipeline zakonczony (Excel w artefakcie de-gu-wyniki-mon, raport Gmail wyslany)." -ForegroundColor Green
+Write-Host "Pipeline zakonczony (Excel w artefakcie de-gu-wyniki-mon)." -ForegroundColor Green
+Write-Host "Raport Gmail (pon 04:30) jest w cronie; powyzszy krok excel email to dry-run test." -ForegroundColor Yellow
 Write-Host "Kampania MFG i sync Google Drive sa poza automatycznym pipeline." -ForegroundColor Yellow

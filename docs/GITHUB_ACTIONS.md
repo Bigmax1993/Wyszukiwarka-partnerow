@@ -2,19 +2,19 @@
 
 Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwarka-partnerow)
 
-## Pipeline automatyczny (3 kroki)
+## Pipeline automatyczny (4 kroki)
 
 ```
-sobota discovery → niedziela backfill → pon 04:30 excel email → pon 08:00 prep
+sobota discovery → niedziela backfill → poniedziałek excel email (04:30) → poniedziałek prep (08:00)
 ```
 
-**Bez** kampanii MFG (home.pl) i **bez** sync Google Drive.
+Artefakt końcowy: `de-gu-wyniki-mon` (Excel w `Wyniki/`). **Bez** kampanii MFG i **bez** sync Google Drive.
 
 ## Workflowy
 
 | Workflow | Plik | Trigger | Co robi |
 |----------|------|---------|---------|
-| **Tests** | `tests.yml` | push, PR | unit + integracja + regresja + API live (Serper, Anthropic) |
+| **Tests** | `tests.yml` | push, PR | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push | smoke + walidacja `SERPER_API_KEY` |
 | **GU sobota discovery** | `de_gu_wed.yml` | cron, ręcznie | Rotacja 1 Bundesland → `de-gu-wyniki-wed` |
 | **GU niedziela backfill** | `de_gu_thu.yml` | cron, ręcznie | Verify + backfill + Excel → `de-gu-wyniki-thu` |
@@ -59,7 +59,7 @@ Sobota discovery kumuluje cache z `de-gu-wyniki-mon` (fallback: `de-gu-wyniki-fr
 
 ## Ręczne uruchomienie
 
-Pełny cykl automatyczny (z raportem Excel Gmail):
+Pełny cykl automatyczny (bez maili i Drive):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1

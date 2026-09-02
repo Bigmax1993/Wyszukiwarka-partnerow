@@ -24,18 +24,19 @@ $env:KANBUD_PROJECT_ROOT = "$PWD\libs"
 python de_gu_bauunternehmen_scraper.py --test
 ```
 
-Pełna bateria testów (jednostkowe, integracyjne, regresyjne, API live):
+Pełna bateria testów:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1
+powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1 -SkipApiLive
 ```
 
 | Typ | Folder / plik | Marker pytest |
 |-----|---------------|---------------|
 | Jednostkowe | `tests/unit/` | `-m unit` |
-| Integracyjne | `tests/integration/` | `-m integration` |
+| Integracyjne | `tests/integration/` | `-m "integration and not api_live"` |
 | Regresyjne | `tests/test_gu_discovery_regression.py`, `test_excel_append.py` | unittest |
-| API live | `tests/integration/test_api_keys.py` | `-m api_live` |
+| API live | `tests/integration/test_api_keys.py` | `-m api_live` (Serper + Anthropic) |
 
 ## Wyniki
 
@@ -109,13 +110,11 @@ scripts\register_gu_weekly_tasks.cmd
 
 (lub ręcznie: `run_sroda.ps1` → `run_czwartek.ps1` → `run_poniedzialek_prep.ps1`)
 
-Pełny pipeline na GitHub Actions (ręcznie — symuluje harmonogram tygodniowy):
+Pełny pipeline na GitHub Actions (ręcznie, bez maili i Drive):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1
 ```
-
-Kroki: discovery → backfill → excel email (Gmail) → prep.
 
 ## GitHub Actions
 
@@ -146,8 +145,8 @@ W `.env`: `MAIL_USER` = konto Gmail nadawcy, `MAIL_PASSWORD` = [hasło aplikacji
 ├── de_gu_bauunternehmen_scraper.py
 ├── gu_bundesland_rotation.py
 ├── libs/
-├── schedule/           # PLAN_5_DNI.md, run_*.ps1
-├── tests/              # unit/, integration/, regresja
+├── schedule/           # PLAN_5_DNI.md, register_gu_weekly_tasks.cmd
+├── tests/              # unit/, integration/, regresja discovery
 ├── run_config/
 ├── assets/campaign/    # PPTX na runnerze GitHub
 ├── scripts/            # send_excel_gmail.py, run_full_pipeline_gha.ps1, RUN_ALL_TESTS.ps1

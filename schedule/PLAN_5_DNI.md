@@ -2,7 +2,7 @@
 
 Jeden **obrót** na **jedną falę** (1 Bundesland / tydzień, rotacja `--rotate-bundesland`).
 
-**Pipeline automatyczny:** discovery → backfill → Excel → **raport Gmail (pon 04:30)**. Bez kampanii MFG i bez sync Google Drive.
+**Pipeline kończy się na Excelu** — bez automatycznej wysyłki maili i bez sync Google Drive.
 
 ## Tabela harmonogramu
 
