@@ -1,9 +1,7 @@
+# WYŁĄCZONE z automatycznego pipeline — wysyłka maili tylko ręcznie (workflow_dispatch).
 name: GU wtorek send
 
 on:
-  schedule:
-    # 07:00 UTC = 09:00 PL (CEST); zimą (CET) 08:00 PL
-    - cron: "0 7 * * 2"
   workflow_dispatch:
     inputs:
       force_resend:

@@ -1,7 +1,8 @@
-# Plan 5 dni: sobota → niedziela → poniedziałek → wtorek
+# Plan tygodniowy: sobota → niedziela → poniedziałek
 
 Jeden **obrót** na **jedną falę** (1 Bundesland / tydzień, rotacja `--rotate-bundesland`).
-Wysyłka **pon 12:00** + **wt 09:00** (2×300 maili/dzień).
+
+**Pipeline automatyczny:** discovery → backfill → Excel → **raport Gmail (pon 04:30)**. Bez kampanii MFG i bez sync Google Drive.
 
 ## Tabela harmonogramu
 
@@ -9,39 +10,44 @@ Wysyłka **pon 12:00** + **wt 09:00** (2×300 maili/dzień).
 |-------|--------------|-----------|----------------|
 | **Sobota** | **20:10** | `run_sroda.ps1` | `GU sobota discovery` |
 | **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` (~05:30 Actions) |
+| **Poniedziałek** | **04:30** | `run_poniedzialek_excel_email.ps1` | `GU poniedzialek excel email` |
 | **Poniedziałek** | 08:00 | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
-| **Poniedziałek** | **12:00** | `run_poniedzialek_send.ps1` | `GU poniedzialek send` (partia 1) |
-| **Wtorek** | **09:00** | `run_wtorek.ps1` | `GU wtorek send` (partia 2) |
 
 | Dzień | Co robi |
 |-------|---------|
 | **Sobota** | Discovery Serper + www → cache JSON |
-| **Niedziela** | Backfill e-maili + Excel |
-| **Poniedziałek rano** | Rebuild Excel z cache, **bez wysyłki** |
-| **Poniedziałek 12:00** | Wysyłka partia 1 (max **300**, okno **8–18** Berlin) |
-| **Wtorek 09:00** | Wysyłka partia 2 (kolejne **300** + zaległe) |
+| **Niedziela** | Weryfikacja www + backfill e-maili + Excel |
+| **Poniedziałek** | Rebuild Excel z cache — **gotowy plik w `Wyniki/`** |
+| **Poniedziałek 04:30** | Wysyłka Excela na **svinchak1993@gmail.com** (Gmail / yagmail) |
 
-Po wtorku: workflow **Sync wyniki Google Drive** → upload na [folder Drive](../docs/GOOGLE_DRIVE.md).
+## Poza automatycznym pipeline (ręcznie)
+
+| Funkcja | Jak uruchomić |
+|---------|---------------|
+| Wysyłka maili MFG | `python de_gu_bauunternehmen_scraper.py --send-emails-only` lub workflow `GU poniedzialek send` / `GU wtorek send` |
+| Sync Google Drive | `python scripts/gdrive_upload_wyniki.py` lub workflow `Sync wyniki Google Drive` |
 
 ## Task Scheduler (Windows)
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "schedule\register_tasks_5_dni.ps1"
+```cmd
+scripts\register_gu_weekly_tasks.cmd
 ```
+
+Usunięcie starych zadań wysyłki: skrypt usuwa `Kanbud_GU_Poniedzialek_Send` i `Kanbud_GU_Wtorek_Send` przy rejestracji.
 
 ## GitHub Actions — artefakty
 
 ```
-sobota → wed → niedziela → thu → pon prep → mon → pon send → tue → wt send → fri → sync Drive
+sobota → wed → niedziela → thu → pon prep → mon
 ```
 
 | Workflow | Plik | Cron UTC (CEST → PL) |
 |----------|------|----------------------|
 | discovery | `de_gu_wed.yml` | `10 18 * * 6` → **20:10** sobota |
 | backfill | `de_gu_thu.yml` | `30 3 * * 0` → **05:30** niedziela |
+| excel email | `de_gu_mon_excel_email.yml` | `30 2 * * 1` → **04:30** poniedziałek |
 | prep | `de_gu_mon.yml` | `0 6 * * 1` → **08:00** poniedziałek |
-| send 1 | `de_gu_tue.yml` | `0 10 * * 1` → **12:00** poniedziałek |
-| send 2 | `de_gu_fri.yml` | `0 7 * * 2` → **09:00** wtorek |
-| sync Drive | `sync-google-drive.yml` | `0 12 * * 2` → 14:00 wtorek |
 
-**Zimą (CET):** send 1 → `0 11 * * 1` (12:00 PL).
+Sobota discovery kumuluje cache z poprzedniego `de-gu-wyniki-mon` (fallback: `de-gu-wyniki-fri`).
+
+**Zimą (CET):** discovery → `10 19 * * 6` (20:10 PL).

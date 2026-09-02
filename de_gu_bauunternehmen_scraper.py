@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Serper API – DE bundesweit: Generalunternehmer (GU), którzy stawiają sklepy/markety (Neubau, Filialbau)
 lub robią przebudowy/umbau i modernizację filii (Rewe, Aldi, Kaufland, Netto, Penny, Edeka).
@@ -118,6 +118,7 @@ from scraper_env import (
     get_serper_api_key,
 )
 from scraper_email_replies import (
+    REPLY_EXPORT_COLUMNS,
     ReplySyncConfig,
     mark_email_sent,
     merge_export_row,
@@ -726,6 +727,221 @@ def save_csv(rows, path: Path) -> None:
         writer.writerows(rows)
 
 
+def _excel_cell_str(value) -> str:
+    if value is None:
+        return ""
+    try:
+        import math
+
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
+
+def export_row_dedupe_key(row: dict) -> str:
+    """Klucz deduplikacji wiersza Excel (Kontakte)."""
+    email = _excel_cell_str(row.get("E-mail") or row.get("email_target")).lower()
+    if email and "@" in email:
+        return f"email:{email}"
+    url = _excel_cell_str(row.get("URL") or row.get("url")).lower()
+    if url:
+        return f"url:{url}"
+    name = _excel_cell_str(row.get("Nazwa firmy") or row.get("nazwa")).lower()
+    state = _excel_cell_str(row.get("Bundesland") or row.get("bundesland")).lower()
+    if name:
+        return f"name:{name}|{state}"
+    return ""
+
+
+def bundesland_row_dedupe_key(row: dict) -> str:
+    url = _excel_cell_str(row.get("URL") or row.get("url")).lower()
+    if url:
+        return f"url:{url}"
+    name = _excel_cell_str(row.get("Nazwa firmy") or row.get("nazwa")).lower()
+    state = _excel_cell_str(row.get("Bundesland") or row.get("bundesland")).lower()
+    address = _excel_cell_str(row.get("Adres") or row.get("adres")).lower()
+    return f"name:{name}|{state}|{address}"
+
+
+def _excel_preserve_columns() -> frozenset[str]:
+    cols = set(REPLY_EXPORT_COLUMNS)
+    cols.update(f"Cena rel. {i}" for i in (1, 2, 3))
+    return frozenset(cols)
+
+
+def _merge_excel_export_row(existing: dict, incoming: dict) -> dict:
+    """Scala wiersz — zachowuje odpowiedzi/ręczne kolumny, uzupełnia dane ze scrapera."""
+    preserve = _excel_preserve_columns()
+    out = dict(existing)
+    for key, raw in incoming.items():
+        if str(key).startswith("_"):
+            continue
+        new_val = _excel_cell_str(raw)
+        old_val = _excel_cell_str(out.get(key))
+        if key in preserve:
+            if not old_val and new_val:
+                out[key] = raw
+        elif new_val:
+            out[key] = raw
+        elif key not in out:
+            out[key] = raw
+    return out
+
+
+def merge_export_rows_append(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    logger: logging.Logger | None = None,
+) -> tuple[list[dict], int, int]:
+    """Dopisuje nowe wiersze Kontakte; istniejące aktualizuje bez usuwania."""
+    merged = [dict(r) for r in (existing or [])]
+    index: dict[str, int] = {}
+    for i, row in enumerate(merged):
+        key = export_row_dedupe_key(row)
+        if key:
+            index[key] = i
+    appended = 0
+    updated = 0
+    for raw in incoming or []:
+        inc = dict(raw)
+        key = export_row_dedupe_key(inc)
+        if key and key in index:
+            pos = index[key]
+            merged[pos] = _merge_excel_export_row(merged[pos], inc)
+            updated += 1
+        else:
+            if key:
+                index[key] = len(merged)
+            merged.append(inc)
+            appended += 1
+    if logger is not None:
+        logger.info(
+            "Excel Kontakte append: +%s nowych, ~%s zaktualizowanych (razem %s)",
+            appended,
+            updated,
+            len(merged),
+        )
+    return merged, appended, updated
+
+
+def merge_bundesland_rows_append(
+    existing: list[dict],
+    incoming: list[dict],
+    *,
+    logger: logging.Logger | None = None,
+) -> tuple[list[dict], int, int]:
+    merged = [dict(r) for r in (existing or [])]
+    index: dict[str, int] = {}
+    for i, row in enumerate(merged):
+        key = bundesland_row_dedupe_key(row)
+        if key:
+            index[key] = i
+    appended = 0
+    updated = 0
+    for raw in incoming or []:
+        inc = dict(raw)
+        key = bundesland_row_dedupe_key(inc)
+        if key and key in index:
+            pos = index[key]
+            merged[pos] = _merge_excel_export_row(merged[pos], inc)
+            updated += 1
+        else:
+            if key:
+                index[key] = len(merged)
+            merged.append(inc)
+            appended += 1
+    if logger is not None:
+        logger.info(
+            "Excel Wojewodztwa append: +%s nowych, ~%s zaktualizowanych (razem %s)",
+            appended,
+            updated,
+            len(merged),
+        )
+    return merged, appended, updated
+
+
+def load_existing_excel_sheets(path: Path, logger: logging.Logger) -> dict[str, list[dict]]:
+    """Wczytuje istniejące arkusze XLSX (append — bez pełnej przebudowy)."""
+    if not path.exists() or path.suffix.lower() != ".xlsx":
+        return {}
+    try:
+        import pandas as pd  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        logger.warning("pandas brak — append Excel niemożliwy, zapis od zera")
+        return {}
+    sheets: dict[str, list[dict]] = {}
+    try:
+        book = pd.ExcelFile(path)
+        for sheet_name in book.sheet_names:
+            if sheet_name.strip().lower() == "info":
+                continue
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            rows = []
+            for rec in df.fillna("").to_dict(orient="records"):
+                row = {
+                    k: _excel_cell_str(v) if not isinstance(v, (int, float)) else v
+                    for k, v in rec.items()
+                }
+                rows.append(row)
+            sheets[sheet_name] = rows
+        logger.info(
+            "Excel wczytany do append: %s (%s arkuszy)",
+            path.name,
+            ", ".join(f"{k}={len(v)}" for k, v in sheets.items()),
+        )
+    except Exception as exc:
+        logger.warning("Excel append: nie wczytano %s (%s) — zapis od nowych wierszy", path, exc)
+    return sheets
+
+
+def build_excel_info_sheet_rows() -> list[dict]:
+    """Arkusz Info w Excelu — zasady zapisu (append, nie pełna przebudowa)."""
+    return [
+        {
+            "Temat": "Tryb zapisu Excel",
+            "Wartość": (
+                "APPEND — pipeline dopisuje nowe firmy i aktualizuje istniejące wiersze "
+                "(po e-mail / URL / nazwa+federalny land). Nie przebudowuje pliku od zera."
+            ),
+        },
+        {
+            "Temat": "Start każdego runu",
+            "Wartość": (
+                "Scraper wczytuje istniejący plik Excel (arkusz Kontakte), potem dopisuje "
+                "nowe wiersze z discovery / backfill / cache JSON."
+            ),
+        },
+        {
+            "Temat": "Czego nie robić ręcznie",
+            "Wartość": (
+                "Nie kasuj wszystkich wierszy w Kontakte — przy pustym Excelu i pustym "
+                "cache pipeline nie odtworzy historii. Edycja pojedynczych wierszy OK."
+            ),
+        },
+        {
+            "Temat": "--rebuild-from-cache",
+            "Wartość": (
+                "Scala wiersze z JSON cache + istniejący Excel (merge po URL). "
+                "Gdy contacts=0 w cache — zachowuje dotychczasowe wiersze z Excela."
+            ),
+        },
+        {
+            "Temat": "Arkusze",
+            "Wartość": "Info (ten arkusz) | Kontakte (firmy) | Wojewodztwa (podsumowanie landów)",
+        },
+        {
+            "Temat": "Cache JSON",
+            "Wartość": (
+                "Osobny plik de_gu_bauunternehmen_cache.json — kumulacja tygodniowa; "
+                "reset cache ≠ kasowanie Excela (chyba że świadomie usuniesz plik .xlsx)."
+            ),
+        },
+    ]
+
+
 def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -746,6 +962,17 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
             rows_for_excel, logger=logger, cache=cache
         )
         state_rows = build_bundesland_rows(rows_for_excel)
+        existing_sheets = load_existing_excel_sheets(path, logger)
+        export_rows, _, _ = merge_export_rows_append(
+            existing_sheets.get("Kontakte", []),
+            export_rows,
+            logger=logger,
+        )
+        state_rows, _, _ = merge_bundesland_rows_append(
+            existing_sheets.get("Wojewodztwa", []),
+            state_rows,
+            logger=logger,
+        )
         if cache is None:
             cache = {}
         cfg = ReplySyncConfig(
@@ -757,7 +984,11 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
         try:
             write_excel_with_reply_styles(
                 path,
-                {"Kontakte": export_rows, "Wojewodztwa": state_rows},
+                {
+                    "Info": build_excel_info_sheet_rows(),
+                    "Kontakte": export_rows,
+                    "Wojewodztwa": state_rows,
+                },
                 cache,
                 cfg,
                 logger,
@@ -778,7 +1009,11 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
             )
             write_excel_with_reply_styles(
                 alt,
-                {"Kontakte": export_rows, "Wojewodztwa": state_rows},
+                {
+                    "Info": build_excel_info_sheet_rows(),
+                    "Kontakte": export_rows,
+                    "Wojewodztwa": state_rows,
+                },
                 cache,
                 cfg_alt,
                 logger,
@@ -1535,6 +1770,22 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
             "contact_quality_score": int(info.get("contact_quality_score", 0) or 0),
         }
     )
+
+
+def merge_pipeline_rows(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """Łączy wiersze pipeline po URL (incoming nadpisuje pola istniejących)."""
+    by_url = index_all_rows_by_url(list(existing))
+    merged = list(existing)
+    for row in incoming:
+        url = (row.get("url") or "").strip()
+        if not url:
+            continue
+        if url in by_url:
+            by_url[url].update(row)
+        else:
+            merged.append(row)
+            by_url[url] = row
+    return merged
 
 
 def build_all_rows_from_cache(cache: dict) -> list[dict]:
@@ -5084,12 +5335,26 @@ def run_scraper(
         reset_serper_daily_for_discovery(cache)
         ensure_serper_budget_or_fail(cache)
     if rebuild_from_cache:
-        all_rows = build_all_rows_from_cache(cache)
+        cache_rows = build_all_rows_from_cache(cache)
+        existing_rows, _ = load_existing_output(OUTPUT_FILE, logger)
+        contacts_n = len(cache.get("contacts", {}) or {})
+        if cache_rows:
+            all_rows = merge_pipeline_rows(existing_rows, cache_rows)
+            console_step(
+                f"Excel aus Cache: {len(cache_rows)} z JSON + {len(existing_rows)} z Excel "
+                f"→ {len(all_rows)} (contacts={contacts_n})"
+            )
+        elif existing_rows:
+            all_rows = existing_rows
+            console_step(
+                f"Excel aus Cache: contacts=0 — zachowano {len(existing_rows)} wierszy z Excela"
+            )
+        else:
+            all_rows = []
+            console_step(
+                f"Excel aus Cache neu: 0 Zeilen (contacts={contacts_n}, pusty Excel)"
+            )
         seen_global = build_discovery_seen_urls(all_rows, cache)
-        console_step(
-            f"Excel aus Cache neu: {len(all_rows)} Zeilen "
-            f"(contacts={len(cache.get('contacts', {}))}, także bez E-Mail)"
-        )
         persist_progress(all_rows, cache, logger, reason="rebuild_from_cache")
     else:
         all_rows, _seen_from_file = load_existing_output(OUTPUT_FILE, logger)

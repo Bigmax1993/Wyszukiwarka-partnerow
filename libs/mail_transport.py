@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Wspólna warstwa poczty: SMTP/IMAP (home.pl lub Gmail) z zmiennych środowiskowych.
+Wspólna warstwa poczty: SMTP/IMAP (Gmail) z zmiennych środowiskowych.
 """
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ from scraper_env import (
     get_mail_user,
 )
 
-_DEFAULT_HOMEPL_SMTP = "serwer.home.pl"
-_DEFAULT_HOMEPL_IMAP = "serwer.home.pl"
+_DEFAULT_GMAIL_SMTP = "smtp.gmail.com"
+_DEFAULT_GMAIL_IMAP = "imap.gmail.com"
 _DEFAULT_SMTP_PORT_SSL = 465
 _DEFAULT_SMTP_PORT_STARTTLS = 587
 _DEFAULT_IMAP_PORT_SSL = 993
@@ -61,8 +61,8 @@ def get_smtp_host() -> str:
     if host:
         return host
     if _is_gmail_address(_mail_address()):
-        return "smtp.gmail.com"
-    return _DEFAULT_HOMEPL_SMTP
+        return _DEFAULT_GMAIL_SMTP
+    return ""
 
 
 def get_imap_host() -> str:
@@ -70,15 +70,13 @@ def get_imap_host() -> str:
     if host:
         return host
     if _is_gmail_address(_mail_address()):
-        return "imap.gmail.com"
-    return _DEFAULT_HOMEPL_IMAP
+        return _DEFAULT_GMAIL_IMAP
+    return ""
 
 
 def mail_provider_label() -> str:
     smtp = get_smtp_host().lower()
     addr = _mail_address()
-    if "home.pl" in smtp or (addr and addr.endswith("@home.pl")):
-        return "home.pl"
     if _is_gmail_address(addr) or "gmail" in smtp:
         return "Gmail"
     if smtp:
@@ -464,7 +462,7 @@ def send_smtp_email(
     mail_type: str = "wiadomość",
     campaign: str = "",
 ) -> tuple[bool, str]:
-    """Wysyłka SMTP (home.pl lub Gmail). Zwraca (ok, info)."""
+    """Wysyłka SMTP (Gmail). Zwraca (ok, info)."""
     try:
         import yagmail  # pyright: ignore[reportMissingImports]  # noqa: F401
     except ImportError:
@@ -500,7 +498,7 @@ def send_smtp_email(
             cc=cc,
             bcc=bcc,
         )
-        host = get_smtp_host() or _DEFAULT_HOMEPL_SMTP
+        host = get_smtp_host() or _DEFAULT_GMAIL_SMTP
         logger.info(
             f"Wysłano {mail_type} → {to_email} via {host} | temat: {(subject or '')[:60]}"
         )
@@ -519,6 +517,102 @@ def send_smtp_email(
         return True, "gesendet"
     except Exception as e:
         logger.warning(f"Błąd wysyłki do {to_email}: {e}")
+        try:
+            from email_journal import log_mail_sent
+
+            log_mail_sent(
+                to_email,
+                subject,
+                mail_type=mail_type,
+                campaign=campaign,
+                ok=False,
+                error=str(e),
+            )
+        except Exception:
+            pass
+        return False, str(e)
+
+
+def send_smtp_email_with_attachments(
+    to_email: str,
+    subject: str,
+    body: str,
+    attachment_paths: list[str | Path],
+    logger: logging.Logger,
+    *,
+    mail_type: str = "załącznik",
+    campaign: str = "",
+) -> tuple[bool, str]:
+    """Wysyłka SMTP z załącznikami (yagmail / Gmail app password)."""
+    try:
+        import yagmail  # pyright: ignore[reportMissingImports]  # noqa: F401
+    except ImportError:
+        return False, "brak yagmail (pip install yagmail)"
+
+    username = get_mail_user()
+    password = get_mail_password()
+    if not (username and password):
+        return False, "brak MAIL_USER / MAIL_PASSWORD (Gmail: hasło aplikacji)"
+
+    files: list[str] = []
+    for raw in attachment_paths or []:
+        path = Path(raw)
+        if not path.is_file():
+            return False, f"brak pliku załącznika: {path}"
+        files.append(str(path.resolve()))
+
+    subject_clean = sanitize_special_text(subject)
+    body_clean = sanitize_email_body(body)
+    bcc = _split_recipients(get_env_value(ENV_MAIL_BCC))
+    cc = merge_mail_cc_recipients(to_email, get_env_value(ENV_MAIL_CC))
+
+    try:
+        yag = _yagmail_smtp()
+        kwargs: dict[str, Any] = {
+            "to": to_email,
+            "subject": subject_clean,
+            "contents": [body_clean],
+            "attachments": files,
+        }
+        if bcc:
+            kwargs["bcc"] = bcc
+        if cc:
+            kwargs["cc"] = cc
+        yag.send(**kwargs)
+        archive_sent_message(
+            to_email,
+            subject_clean,
+            body_clean,
+            logger,
+            cc=cc,
+            bcc=bcc,
+            attachment_paths=files,
+        )
+        host = get_smtp_host() or _DEFAULT_GMAIL_SMTP
+        attach_note = ", ".join(Path(f).name for f in files)
+        logger.info(
+            "Wysłano %s → %s via %s | %s | zał.: %s",
+            mail_type,
+            to_email,
+            host,
+            (subject or "")[:60],
+            attach_note,
+        )
+        try:
+            from email_journal import log_mail_sent
+
+            log_mail_sent(
+                to_email,
+                subject,
+                mail_type=mail_type,
+                campaign=campaign,
+                ok=True,
+            )
+        except Exception:
+            pass
+        return True, "gesendet"
+    except Exception as e:
+        logger.warning("Błąd wysyłki z załącznikiem do %s: %s", to_email, e)
         try:
             from email_journal import log_mail_sent
 

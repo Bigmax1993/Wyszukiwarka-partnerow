@@ -31,19 +31,12 @@ jobs:
       - name: Validate secrets (presence only)
         env:
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
-          MAIL_USER: ${{ secrets.MAIL_USER }}
-          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
         run: |
           python -c "
           import os, sys
-          missing = [k for k in ('SERPER_API_KEY','MAIL_USER','MAIL_PASSWORD') if not (os.environ.get(k) or '').strip()]
+          missing = [k for k in ('SERPER_API_KEY',) if not (os.environ.get(k) or '').strip()]
           if missing:
               print('MISSING SECRETS:', ', '.join(missing))
               sys.exit(1)
           print('OK: wymagane secrets ustawione (wartosci ukryte).')
           "
-
-      - name: Dry-run email pipeline (bez wysylki SMTP)
-        env:
-          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
-        run: python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only

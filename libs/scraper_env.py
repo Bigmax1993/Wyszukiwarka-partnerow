@@ -64,6 +64,8 @@ ENV_MAIL_ARCHIVE_IMAP = "MAIL_ARCHIVE_IMAP"
 ENV_GMAIL_USER = "GMAIL_USER"
 ENV_GMAIL_APP_PASSWORD = "GMAIL_APP_PASSWORD"
 ENV_GMAIL_SENDER_NAME = "GMAIL_SENDER_NAME"
+ENV_EXCEL_REPORT_TO = "EXCEL_REPORT_TO"
+DEFAULT_EXCEL_REPORT_TO = "svinchak1993@gmail.com"
 ENV_GEMINI_MODEL = "GEMINI_MODEL"
 ENV_GEMINI_MODELS = "GEMINI_MODELS"
 ENV_GEMINI_REQUEST_TIMEOUT = "GEMINI_REQUEST_TIMEOUT"
@@ -152,6 +154,10 @@ def get_gmail_app_password() -> str:
 
 def get_gmail_sender_name() -> str:
     return get_mail_sender_name()
+
+
+def get_excel_report_to() -> str:
+    return get_env_value(ENV_EXCEL_REPORT_TO) or DEFAULT_EXCEL_REPORT_TO
 
 
 def check_env_status() -> dict[str, bool]:

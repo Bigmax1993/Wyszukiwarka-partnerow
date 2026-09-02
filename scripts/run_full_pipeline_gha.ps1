@@ -1,16 +1,16 @@
 #Requires -Version 5.1
 <#
-Uruchamia pelny pipeline GU na GitHub Actions (recznie, krok po kroku).
+Uruchamia pipeline GU na GitHub Actions (recznie, krok po kroku).
+
+Pipeline: discovery -> backfill -> excel email (Gmail) -> prep (harmonogram tygodniowy).
 
   powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1
 
 Opcje:
   -SkipDiscovery   zacznij od backfill (jesli discovery juz bylo)
-  -ForceResend     ponowna wysylka (--force-resend na obu partiach)
 #>
 param(
-    [switch]$SkipDiscovery,
-    [switch]$ForceResend
+    [switch]$SkipDiscovery
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,17 +44,13 @@ function Invoke-GhaWorkflow {
     Write-Host "OK: $Name" -ForegroundColor Green
 }
 
-$sendFields = @{}
-if ($ForceResend) { $sendFields["force_resend"] = "true" }
-
 if (-not $SkipDiscovery) {
     Invoke-GhaWorkflow "GU sobota discovery"
 }
 Invoke-GhaWorkflow "GU niedziela backfill"
+Invoke-GhaWorkflow "GU poniedzialek excel email"
 Invoke-GhaWorkflow "GU poniedzialek prep"
-Invoke-GhaWorkflow "GU poniedzialek send" $sendFields
-Invoke-GhaWorkflow "GU wtorek send" $sendFields
-Invoke-GhaWorkflow "Sync wyniki Google Drive"
 
 Write-Host ""
-Write-Host "Pipeline zakonczony pomyslnie." -ForegroundColor Green
+Write-Host "Pipeline zakonczony (Excel w artefakcie de-gu-wyniki-mon, raport Gmail wyslany)." -ForegroundColor Green
+Write-Host "Kampania MFG i sync Google Drive sa poza automatycznym pipeline." -ForegroundColor Yellow

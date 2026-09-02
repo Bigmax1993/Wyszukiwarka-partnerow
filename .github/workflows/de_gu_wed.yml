@@ -1,4 +1,4 @@
-﻿name: GU sobota discovery
+name: GU sobota discovery
 
 on:
   schedule:
@@ -30,26 +30,29 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install chromium --with-deps
 
-      - name: Resolve artifact run (poprzedni poniedzialek)
+      - name: Resolve artifact run (poprzedni poniedzialek prep)
         id: prev_run
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
-            --paginate --jq '.artifacts[] | select(.name=="de-gu-wyniki-fri" and .expired==false) | .workflow_run.id' | head -1)
-          if [ -n "$RUN_ID" ]; then
-            echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-            echo "Kumuluje cache z de-gu-wyniki-fri (run $RUN_ID)"
-          else
-            echo "Brak poprzedniego artefaktu — pierwszy cykl"
-          fi
+          for ARTIFACT in de-gu-wyniki-mon de-gu-wyniki-fri; do
+            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+              --paginate --jq ".artifacts[] | select(.name==\"$ARTIFACT\" and .expired==false) | .workflow_run.id" | head -1)
+            if [ -n "$RUN_ID" ]; then
+              echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+              echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+              echo "Kumuluje cache z $ARTIFACT (run $RUN_ID)"
+              exit 0
+            fi
+          done
+          echo "Brak poprzedniego artefaktu — pierwszy cykl"
 
       - name: Download previous Wyniki (kumulacja cache + Excel)
         if: steps.prev_run.outputs.run-id != ''
         uses: actions/download-artifact@v4
         with:
-          name: de-gu-wyniki-fri
+          name: ${{ steps.prev_run.outputs.artifact }}
           github-token: ${{ github.token }}
           run-id: ${{ steps.prev_run.outputs.run-id }}
           path: .

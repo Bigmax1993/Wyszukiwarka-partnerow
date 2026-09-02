@@ -1,12 +1,8 @@
+# WYŁĄCZONE z automatycznego pipeline — tylko ręcznie (workflow_dispatch).
 name: Sync wyniki Google Drive
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 12 * * 2"
-  workflow_run:
-    workflows: ["GU wtorek send"]
-    types: [completed]
 
 permissions:
   actions: read
