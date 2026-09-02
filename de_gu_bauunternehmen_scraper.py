@@ -2445,15 +2445,15 @@ def build_email_jobs_from_cache_json(
     console_step("E-Mail-Warteschlange aus Cache JSON")
     data = cache
     if data is None:
-    if not CACHE_FILE.exists():
-        logger.info("Kein Cache JSON – keine Mails.")
-        return []
-    try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        logger.warning(f"Cache JSON Lesefehler: {e}")
-        return []
+        if not CACHE_FILE.exists():
+            logger.info("Kein Cache JSON – keine Mails.")
+            return []
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"Cache JSON Lesefehler: {e}")
+            return []
     contacts = data.get("contacts", {}) if isinstance(data, dict) else {}
     jobs = []
     for place_url, info in contacts.items():
@@ -2497,8 +2497,8 @@ def build_email_jobs_from_cache_json(
             )
             if REQUIRE_NAMED_RETAIL_CHAIN and not has_required_retail_chain_mention(
                 chain_blob
-        ):
-            continue
+            ):
+                continue
         if email_status == "sent" and not force_resend:
             continue
         jobs.append(
@@ -2749,7 +2749,7 @@ def reset_serper_daily_for_discovery(cache: dict) -> None:
     n_serper, n_discovery = clear_serper_search_caches(cache)
     if old or n_serper or n_discovery or parts_ex:
         parts = []
-    if old:
+        if old:
             parts.append(
                 f"limit było {old}, start z {SERPER_DAILY_LIMIT} zapytań"
             )
@@ -3668,13 +3668,13 @@ def verify_company_on_website(
     if large:
         return _finalize_verification_result(
             {
-            "verified": False,
-            "is_small_firm": False,
-            "retail_chains": [],
-            "verification_reason": large_reason,
-            "verification_method": "rules",
-            "pages_checked": pages_checked,
-            "page_snippet": _truncate_page_snippet(page_text),
+                "verified": False,
+                "is_small_firm": False,
+                "retail_chains": [],
+                "verification_reason": large_reason,
+                "verification_method": "rules",
+                "pages_checked": pages_checked,
+                "page_snippet": _truncate_page_snippet(page_text),
             },
             blob,
         )
@@ -3685,12 +3685,12 @@ def verify_company_on_website(
         return _finalize_verification_result(
             {
                 "verified": rules_ok and bool(chains),
-            "is_small_firm": True,
-            "retail_chains": chains,
+                "is_small_firm": True,
+                "retail_chains": chains,
                 "verification_reason": rules_reason if rules_ok else "keine_handelskette",
-            "verification_method": "bs4_rules",
-            "pages_checked": pages_checked,
-            "page_snippet": _truncate_page_snippet(page_text),
+                "verification_method": "bs4_rules",
+                "pages_checked": pages_checked,
+                "page_snippet": _truncate_page_snippet(page_text),
             },
             blob,
         )
@@ -3701,13 +3701,13 @@ def verify_company_on_website(
     if rules_ok and is_small:
         return _finalize_verification_result(
             {
-            "verified": True,
-            "is_small_firm": True,
-            "retail_chains": chains,
-            "verification_reason": rules_reason,
-            "verification_method": "bs4_rules",
-            "pages_checked": pages_checked,
-            "page_snippet": _truncate_page_snippet(page_text),
+                "verified": True,
+                "is_small_firm": True,
+                "retail_chains": chains,
+                "verification_reason": rules_reason,
+                "verification_method": "bs4_rules",
+                "pages_checked": pages_checked,
+                "page_snippet": _truncate_page_snippet(page_text),
             },
             blob,
         )
@@ -3719,13 +3719,13 @@ def verify_company_on_website(
         if rules_ok2 and is_small:
             return _finalize_verification_result(
                 {
-                "verified": True,
-                "is_small_firm": True,
-                "retail_chains": chains2,
-                "verification_reason": f"serper_snippet:{rules_reason2}",
-                "verification_method": "bs4_rules",
-                "pages_checked": pages_checked,
-                "page_snippet": _truncate_page_snippet(page_text),
+                    "verified": True,
+                    "is_small_firm": True,
+                    "retail_chains": chains2,
+                    "verification_reason": f"serper_snippet:{rules_reason2}",
+                    "verification_method": "bs4_rules",
+                    "pages_checked": pages_checked,
+                    "page_snippet": _truncate_page_snippet(page_text),
                 },
                 blob,
             )
@@ -3737,13 +3737,13 @@ def verify_company_on_website(
         reason = large_reason or "nicht_klein"
     return _finalize_verification_result(
         {
-        "verified": False,
-        "is_small_firm": is_small,
-        "retail_chains": chains,
-        "verification_reason": reason,
-        "verification_method": "bs4_rules",
-        "pages_checked": pages_checked,
-        "page_snippet": _truncate_page_snippet(page_text),
+            "verified": False,
+            "is_small_firm": is_small,
+            "retail_chains": chains,
+            "verification_reason": reason,
+            "verification_method": "bs4_rules",
+            "pages_checked": pages_checked,
+            "page_snippet": _truncate_page_snippet(page_text),
         },
         blob,
     )
@@ -4232,7 +4232,7 @@ def find_company_names_in_text(
     website: str = "",
 ) -> list[str]:
     _ = text, logger, cache, page_url, website
-        return []
+    return []
 
 
 def find_company_name_in_text(
@@ -5162,11 +5162,11 @@ def collect_urls_for_www_reverify(
         if (info.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
             _add(url)
     for row in all_rows or []:
-            url = (row.get("url") or row.get("www") or "").strip()
+        url = (row.get("url") or row.get("www") or "").strip()
         if not url or url in seen:
-                continue
-            reason = (row.get("verification_reason") or "").strip()
-            if reason == PENDING_WWW_VERIFY_REASON and not row.get("retail_verified"):
+            continue
+        reason = (row.get("verification_reason") or "").strip()
+        if reason == PENDING_WWW_VERIFY_REASON and not row.get("retail_verified"):
             _add(url)
     return urls
 
@@ -5297,7 +5297,7 @@ def resolve_inquiry_email_target(
         target
         and not retail_verified
         and not is_valid_retail_store_builder_contact(
-        email=target, url=site, name=company_name, text=snippet
+            email=target, url=site, name=company_name, text=snippet
         )
     ):
         log_email_pick_decision(
@@ -6208,7 +6208,7 @@ def run_scraper(
         contacts_n = len(cache.get("contacts", {}) or {})
         if cache_rows:
             all_rows = merge_pipeline_rows(existing_rows, cache_rows)
-        console_step(
+            console_step(
                 f"Excel aus Cache: {len(cache_rows)} z JSON + {len(existing_rows)} z Excel "
                 f"→ {len(all_rows)} (contacts={contacts_n})"
             )
@@ -6401,11 +6401,11 @@ def run_scraper(
                             f"(poniżej progu {DISCOVERY_MIN_PENDING_GHA_FAIL})."
                         )
                     else:
-                    raise RuntimeError(
-                        f"Za mało kandydatów pending ({pending_land} < "
-                        f"{DISCOVERY_MIN_PENDING_GHA_FAIL}) dla {rotation_land}. "
-                        "Sprawdź [LEjek] w logu."
-                    )
+                        raise RuntimeError(
+                            f"Za mało kandydatów pending ({pending_land} < "
+                            f"{DISCOVERY_MIN_PENDING_GHA_FAIL}) dla {rotation_land}. "
+                            "Sprawdź [LEjek] w logu."
+                        )
             elif serper_only:
                 pending_all = count_all_pending_contacts(all_rows, cache)
                 log_discovery_funnel(funnel, logger)
@@ -6441,12 +6441,12 @@ def run_scraper(
                     f"({rows_with_email} wierszy z e-mailem)"
                 )
             else:
-            reenrich_contacts_for_mailing(
-                all_rows,
-                cache,
-                logger,
-                refresh_all=force_resend,
-            )
+                reenrich_contacts_for_mailing(
+                    all_rows,
+                    cache,
+                    logger,
+                    refresh_all=force_resend,
+                )
             _process_email_jobs(
                 all_rows,
                 cache,
