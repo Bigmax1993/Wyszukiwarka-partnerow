@@ -174,6 +174,7 @@ from scraper_runtime_limit import (
     start_scraper_runtime_clock,
 )
 from scraper_email_replies import (
+    REPLY_EXPORT_COLUMNS,
     ReplySyncConfig,
     mark_email_sent,
     merge_export_row,
