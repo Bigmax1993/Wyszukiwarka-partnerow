@@ -1,13 +1,12 @@
 name: Sync wyniki Google Drive
 
-# Stała reguła kampanii GU:
+# DISABLED: Google Drive sync off — wyniki tylko lokalnie / artefakty GHA.
+# Rollback: usun if: false + przywroc schedule; ustaw DISABLE_GOOGLE_DRIVE=0.
+
+# Stała reguła kampanii GU (gdy włączone):
 # - Harmonogram: poniedziałek 06:00 Europe/Warsaw (cron + timezone).
 # - Źródło danych: pierwszy dostępny artefakt thu → mon → tue → fri
-#   (Excel po niedzielnym backfillu; NIE fri/tue z poprzedniej wysyłki).
-# - Po backfillu: auto-chain do prep (cron pon 06:00 jako zapas).
-# - Excel (.xlsx): kopia z datą + nadpisanie de_gu_bauunternehmen_kontakte.xlsx (aktualny).
 
-# Harmonogram GHA aktywny tylko 14.07–21.07.2026 (Europe/Warsaw); poza tym oknem — lokalnie.
 on:
   workflow_dispatch:
     inputs:
@@ -15,9 +14,6 @@ on:
         description: "Opcjonalnie wymus artefakt (np. de-gu-wyniki-thu)"
         required: false
         type: string
-  schedule:
-    - cron: "0 6 * * 1"
-      timezone: Europe/Warsaw
 
 permissions:
   actions: write
@@ -26,12 +22,14 @@ permissions:
 env:
   GDRIVE_FOLDER_ID: "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
   GDRIVE_VERSION_XLSX: "1"
+  DISABLE_GOOGLE_DRIVE: "1"
   SCRAPER_TIMEZONE: Europe/Warsaw
   KANBUD_PROJECT_ROOT: ${{ github.workspace }}/libs
 
 jobs:
+  # DISABLED: Google Drive sync off
   guard:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    if: false
     runs-on: ubuntu-latest
     outputs:
       active: ${{ steps.window.outputs.active }}
@@ -42,7 +40,7 @@ jobs:
 
   upload:
     needs: guard
-    if: ${{ needs.guard.outputs.active == 'true' }}
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

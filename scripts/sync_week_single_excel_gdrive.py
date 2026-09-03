@@ -92,6 +92,14 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger("week_single_sync")
 
+    try:
+        from scraper_env import is_google_drive_disabled
+
+        drive_off = is_google_drive_disabled()
+    except Exception:
+        raw = (os.environ.get("DISABLE_GOOGLE_DRIVE") or "1").strip().lower()
+        drive_off = raw not in ("0", "false", "no", "off")
+
     excel_name = f"{_KONTAKTE_PREFIX}_{args.week_label}.xlsx"
     wyniki = ROOT / "Wyniki"
     wyniki.mkdir(parents=True, exist_ok=True)
@@ -107,7 +115,12 @@ def main() -> int:
     with_email = sum(1 for r in rows if (r.get("email_target") or "").strip())
     print(f"Excel lokalny: {output} ({len(rows)} firm, {with_email} z e-mailem)")
 
-    if args.dry_run:
+    if args.dry_run or drive_off:
+        if drive_off and not args.dry_run:
+            print(
+                "[NO-OP] Google Drive wyłączony (DISABLE_GOOGLE_DRIVE=1) — "
+                "zostawiam tylko Excel lokalny."
+            )
         return 0
 
     creds, use_oauth = gdrive._load_credentials()

@@ -10,6 +10,26 @@ Bez OAuth Desktop JSON otworzy folder na Pulpicie + link do Drive (reczny drag-d
 $ErrorActionPreference = "Stop"
 $Root = Split-Path $PSScriptRoot -Parent
 Set-Location $Root
+
+# Kill-switch: DISABLE_GOOGLE_DRIVE (domyślnie 1)
+$dotenv = Join-Path $Root ".env"
+if (Test-Path $dotenv) {
+    Get-Content $dotenv | ForEach-Object {
+        if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+        $n, $v = $_ -split '=', 2
+        if (-not [Environment]::GetEnvironmentVariable($n.Trim(), "Process")) {
+            Set-Item -Path "Env:$($n.Trim())" -Value $v.Trim().Trim('"')
+        }
+    }
+}
+$driveFlag = if ($null -ne $env:DISABLE_GOOGLE_DRIVE -and $env:DISABLE_GOOGLE_DRIVE -ne "") {
+    $env:DISABLE_GOOGLE_DRIVE
+} else { "1" }
+if ($driveFlag -notin @("0", "false", "False", "no", "off", "OFF")) {
+    Write-Host "[NO-OP] Google Drive wyłączony (DISABLE_GOOGLE_DRIVE=$driveFlag). Exit 0." -ForegroundColor Yellow
+    exit 0
+}
+
 $Repo = "Bigmax1993/Wyszukiwarka-partnerow"
 $DriveFolder = "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
 

@@ -18,6 +18,13 @@ function Import-KanbudDotEnv {
 }
 
 function Set-KanbudGoogleDriveDataDir {
+    # Przy DISABLE_GOOGLE_DRIVE=1 (domyślnie) nie mapuj wyników na folder Drive.
+    $driveFlag = if ($null -ne $env:DISABLE_GOOGLE_DRIVE -and $env:DISABLE_GOOGLE_DRIVE -ne "") {
+        $env:DISABLE_GOOGLE_DRIVE
+    } else { "1" }
+    if ($driveFlag -notin @("0", "false", "False", "no", "off", "OFF")) {
+        return
+    }
     if ($env:KANBUD_DATA_DIR -or $env:KANBUD_GOOGLE_DRIVE_GU_PATH) { return }
     $names = @("GU Bauunternehmen Wyniki", "Kanbud GU Wyniki", "de_gu_wyniki")
     $bases = @("G:\My Drive", (Join-Path $env:USERPROFILE "Google Drive\My Drive"), (Join-Path $env:USERPROFILE "Google Drive"))

@@ -110,7 +110,25 @@ def send_excel_report(
     dry_run: bool = False,
     logger: logging.Logger | None = None,
 ) -> tuple[bool, str]:
+    """
+    Raport wewnętrzny (Excel → nasz Gmail) — NIE jest to wysyłka B2B do kontrahentów.
+    Osobny kill-switch: DISABLE_EXCEL_REPORT_EMAIL=1 (domyślnie).
+    """
     log = logger or setup_logging()
+    try:
+        from scraper_env import is_excel_report_email_disabled
+
+        if is_excel_report_email_disabled() and not dry_run:
+            msg = (
+                "raport Excel wyłączony (DISABLE_EXCEL_REPORT_EMAIL=1); "
+                "to nie jest mail B2B — rollback: ustaw 0"
+            )
+            log.info("[NO-OP] %s", msg)
+            print(f"[NO-OP] {msg}")
+            return True, "disabled_excel_report_email"
+    except Exception:
+        pass
+
     recipient = (to_email or get_excel_report_to()).strip()
     if not recipient or "@" not in recipient:
         return False, "brak poprawnego adresu EXCEL_REPORT_TO"

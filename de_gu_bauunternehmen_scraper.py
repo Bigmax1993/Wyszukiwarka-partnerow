@@ -5382,7 +5382,15 @@ def send_email_de_gu(
         get_env_value,
         get_mail_password,
         get_mail_user,
+        is_contractor_emails_disabled,
     )
+
+    if is_contractor_emails_disabled():
+        logger.info(
+            "Wysyłka kontrahentów wyłączona (DISABLE_CONTRACTOR_EMAILS) — pomijam SMTP → %s",
+            to_email,
+        )
+        return False, "wysyłka kontrahentów wyłączona (DISABLE_CONTRACTOR_EMAILS)"
 
     if not (get_mail_user() and get_mail_password()):
         return False, "brak MAIL_USER / MAIL_PASSWORD"
@@ -5531,6 +5539,17 @@ def _process_email_jobs(
     force_resend: bool = False,
     ignore_send_window: bool = False,
 ) -> None:
+    from scraper_env import is_contractor_emails_disabled
+
+    if is_contractor_emails_disabled() and not dry_run_email:
+        logger.info(
+            "Wysyłka kontrahentów wyłączona (DISABLE_CONTRACTOR_EMAILS) — "
+            "pomijam kolejkę SMTP (ForceResend=%s).",
+            force_resend,
+        )
+        console_step("Wysyłka kontrahentów wyłączona — NO-OP (DISABLE_CONTRACTOR_EMAILS=1)")
+        return
+
     persist_progress(all_rows, cache, logger, reason="vor Mailversand")
     sync_pipeline_rows_to_contacts_cache(all_rows, cache)
     email_jobs = build_email_jobs_from_cache_json(
@@ -6136,6 +6155,19 @@ def run_scraper(
         )
 
     logger = setup_logging()
+    try:
+        from scraper_env import is_contractor_emails_disabled
+
+        if is_contractor_emails_disabled() and enable_auto_email and not dry_run_email:
+            enable_auto_email = False
+            logger.info(
+                "DISABLE_CONTRACTOR_EMAILS=1 — auto-wysyłka do kontrahentów wyłączona."
+            )
+            console_step(
+                "Wysyłka kontrahentów wyłączona (DISABLE_CONTRACTOR_EMAILS) — discovery/Excel only."
+            )
+    except Exception:
+        pass
     deprecated = [k for k in _deprecated_kwargs if _deprecated_kwargs.get(k) is not None]
     if deprecated:
         logger.warning(
@@ -6914,6 +6946,17 @@ if __name__ == "__main__":
                 rc_path = sys.argv[i + 1]
         extra_kw: dict = {}
         if "--send-emails-only" in sys.argv:
+            from scraper_env import is_contractor_emails_disabled
+
+            dry_preview = "--dry-run-email" in sys.argv
+            if is_contractor_emails_disabled() and not dry_preview:
+                print(
+                    "[NO-OP] Wysyłka kontrahentów wyłączona "
+                    "(DISABLE_CONTRACTOR_EMAILS=1). "
+                    "Rollback: ustaw DISABLE_CONTRACTOR_EMAILS=0. "
+                    "Podgląd treści: --dry-run-email --send-emails-only"
+                )
+                raise SystemExit(0)
             extra_kw.update(
                 {
                     "discovery_mode": "emails_only",

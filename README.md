@@ -6,7 +6,9 @@ Repozytorium: [Bigmax1993/Wyszukiwarka-partnerow](https://github.com/Bigmax1993/
 
 
 
-Pipeline: **Serper → strony www → cache/Excel → maile MFG** (Generalunternehmer / Filialbau DE).
+Pipeline: **Serper → strony www → cache/Excel** (tryb **discovery-only**).
+Maile B2B do kontrahentów i Google Drive są **wyłączone** (`DISABLE_CONTRACTOR_EMAILS=1`, `DISABLE_GOOGLE_DRIVE=1`).
+Rollback: ustaw obie flagi na `0` i włącz ponownie workflowy send/Drive.
 
 
 
@@ -65,7 +67,8 @@ powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1 -SkipApiLive
 | Regresyjne | `tests/test_gu_discovery_regression.py`, `test_excel_append.py` | unittest |
 | API live | `tests/integration/test_api_keys.py` | `-m api_live` |
 
-Raport Excel (Gmail): `python scripts/send_excel_gmail.py` / `--dry-run` — poniedziałek 04:30 na GHA (`GU poniedzialek excel email`).
+Raport Excel (Gmail, **wewnętrzny**, nie B2B): `python scripts/send_excel_gmail.py` / `--dry-run` —
+domyślnie **wyłączony** (`DISABLE_EXCEL_REPORT_EMAIL=1`). Workflow `GU poniedzialek excel email` = DISABLED.
 
 
 
@@ -89,7 +92,8 @@ Raport Excel (Gmail): `python scripts/send_excel_gmail.py` / `--dry-run` — pon
 
 
 
-**Google Drive:** [folder wyników GU](https://drive.google.com/drive/folders/1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf) — [`docs/GOOGLE_DRIVE.md`](docs/GOOGLE_DRIVE.md)
+**Google Drive:** **OFF** by default (`DISABLE_GOOGLE_DRIVE=1`) — wyniki tylko w `Wyniki/` / artefaktach GHA.
+Opcjonalnie: [folder GU](https://drive.google.com/drive/folders/1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf) — [`docs/GOOGLE_DRIVE.md`](docs/GOOGLE_DRIVE.md)
 
 
 
@@ -113,8 +117,10 @@ python de_gu_bauunternehmen_scraper.py --backfill-emails-from-cache
 
 python de_gu_bauunternehmen_scraper.py --rebuild-from-cache
 
+# Wysyłka B2B: NO-OP przy DISABLE_CONTRACTOR_EMAILS=1 (domyślnie)
 python de_gu_bauunternehmen_scraper.py --send-emails-only
 
+# Podgląd treści bez SMTP:
 python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only
 
 ```
@@ -187,13 +193,13 @@ Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
 
 | **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` (~05:30) |
 
-| **Poniedziałek** | **06:00** | — | `Sync wyniki Google Drive` |
+| **Poniedziałek** | **06:00** | — | ~~`Sync wyniki Google Drive`~~ **DISABLED** |
 
 | **Poniedziałek** | **07:00** | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
 
-| **Poniedziałek** | **09:00** | `run_poniedzialek_send.ps1` | `GU poniedzialek send` (partia 1) |
+| **Poniedziałek** | **09:00** | ~~send~~ **NO-OP** | ~~`GU poniedzialek send`~~ **DISABLED** |
 
-| **Wtorek** | **09:00** | `run_wtorek.ps1` | `GU wtorek send` (partia 2) |
+| **Wtorek** | **09:00** | ~~send~~ **NO-OP** | ~~`GU wtorek send`~~ **DISABLED** |
 
 
 

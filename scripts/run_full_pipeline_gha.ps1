@@ -261,17 +261,20 @@ if (-not $SkipBackfill) {
 
 }
 
-Invoke-GhaWorkflow "Sync wyniki Google Drive" @{ artifact_name = "de-gu-wyniki-thu" }
+# DISABLED: Google Drive sync off (DISABLE_GOOGLE_DRIVE=1)
+Write-Host ""
+Write-Host "[POMINIETO] Sync wyniki Google Drive (DISABLE_GOOGLE_DRIVE / discovery-only)." -ForegroundColor Yellow
 
 Invoke-GhaWorkflow "GU poniedzialek prep"
 
-Invoke-GhaWorkflow "GU poniedzialek send" $sendFields
-
-Invoke-GhaWorkflow "GU wtorek send" $sendFields
-
-
+# DISABLED: contractor emails (DISABLE_CONTRACTOR_EMAILS=1)
+Write-Host ""
+Write-Host "[POMINIETO] GU poniedzialek send / GU wtorek send (DISABLE_CONTRACTOR_EMAILS)." -ForegroundColor Yellow
+if ($ForceResend) {
+    Write-Host "  (ForceResend zignorowany — wysylka kontrahentow wylaczona)" -ForegroundColor Yellow
+}
 
 Write-Host ""
 
-Write-Host "Pipeline zakonczony pomyslnie." -ForegroundColor Green
+Write-Host "Pipeline zakonczony pomyslnie (discovery-only: bez Drive, bez maili B2B)." -ForegroundColor Green
 

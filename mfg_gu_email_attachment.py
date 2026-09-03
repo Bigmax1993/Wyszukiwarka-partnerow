@@ -112,6 +112,21 @@ def _drive_download_to_buffer(service, file_id: str, mime_type: str) -> io.Bytes
 def _download_slides_pptx(dest: Path, logger: logging.Logger | None = None) -> bool:
     """Pobierz PPTX z Drive: natywny Slides (export) lub wrzucony plik (get_media)."""
     try:
+        from scraper_env import is_google_drive_disabled
+
+        if is_google_drive_disabled():
+            if logger:
+                logger.info(
+                    "DISABLE_GOOGLE_DRIVE=1 — pomijam pobranie PPTX ze Slides/Drive "
+                    "(użyj lokalnego assets/campaign lub MFG_EMAIL_ATTACHMENT_PATH)."
+                )
+            return False
+    except Exception:
+        raw = (os.environ.get("DISABLE_GOOGLE_DRIVE") or "1").strip().lower()
+        if raw not in ("0", "false", "no", "off"):
+            return False
+
+    try:
         from googleapiclient.discovery import build
     except ImportError:
         if logger:
@@ -166,6 +181,9 @@ def resolve_mfg_email_attachment(campaign_dir: Path) -> Path | None:
     cache_p = _cache_attachment_path(campaign_dir)
     if cache_p.is_file():
         return cache_p
+    bundled = Path(campaign_dir) / "assets" / "campaign" / ATTACHMENT_FILENAME
+    if bundled.is_file():
+        return bundled
     if LEGACY_ATTACHMENT_PATH.is_file():
         return LEGACY_ATTACHMENT_PATH
     return None

@@ -45,25 +45,45 @@ def _google_drive_bases() -> list[Path]:
     return bases
 
 
+def _google_drive_integration_disabled() -> bool:
+    try:
+        from scraper_env import is_google_drive_disabled
+
+        return is_google_drive_disabled()
+    except Exception:
+        raw = (os.environ.get("DISABLE_GOOGLE_DRIVE") or "1").strip().lower()
+        return raw not in ("0", "false", "no", "off")
+
+
 def resolve_data_root(campaign_dir: Path) -> Path:
     """
     Katalog danych kampanii: Wyniki/, wyslane/.
-    Priorytet: KANBUD_DATA_DIR → KANBUD_GOOGLE_DRIVE_GU_PATH → znany podfolder Drive → folder kampanii.
+    Priorytet: KANBUD_DATA_DIR → (opcjonalnie Drive) → folder kampanii.
+    Przy DISABLE_GOOGLE_DRIVE=1 ignoruje KANBUD_GOOGLE_DRIVE_* i auto-wykrywanie Drive.
     """
-    for key in ("KANBUD_DATA_DIR", "KANBUD_GOOGLE_DRIVE_GU_PATH", "KANBUD_GOOGLE_DRIVE_PATH"):
-        raw = (os.environ.get(key) or "").strip()
-        if raw:
-            p = Path(raw).expanduser().resolve()
-            if p.is_dir():
-                return p
+    drive_off = _google_drive_integration_disabled()
 
-    for base in _google_drive_bases():
-        if not base.is_dir():
-            continue
-        for name in _DRIVE_FOLDER_NAMES:
-            candidate = (base / name).resolve()
-            if candidate.is_dir():
-                return candidate
+    raw_data = (os.environ.get("KANBUD_DATA_DIR") or "").strip()
+    if raw_data:
+        p = Path(raw_data).expanduser().resolve()
+        if p.is_dir():
+            return p
+
+    if not drive_off:
+        for key in ("KANBUD_GOOGLE_DRIVE_GU_PATH", "KANBUD_GOOGLE_DRIVE_PATH"):
+            raw = (os.environ.get(key) or "").strip()
+            if raw:
+                p = Path(raw).expanduser().resolve()
+                if p.is_dir():
+                    return p
+
+        for base in _google_drive_bases():
+            if not base.is_dir():
+                continue
+            for name in _DRIVE_FOLDER_NAMES:
+                candidate = (base / name).resolve()
+                if candidate.is_dir():
+                    return candidate
 
     return Path(campaign_dir).resolve()
 

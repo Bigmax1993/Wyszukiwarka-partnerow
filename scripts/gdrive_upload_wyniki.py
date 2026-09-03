@@ -23,8 +23,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+LIBS = ROOT / "libs"
+for _p in (ROOT, LIBS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from campaign_data_paths import (  # noqa: E402
     GOOGLE_DRIVE_GU_FOLDER_ID,
@@ -395,6 +397,21 @@ def main() -> int:
         default=os.environ.get("GDRIVE_FOLDER_ID", GOOGLE_DRIVE_GU_FOLDER_ID),
     )
     args = parser.parse_args()
+
+    try:
+        from scraper_env import is_google_drive_disabled
+
+        drive_off = is_google_drive_disabled()
+    except Exception:
+        raw = (os.environ.get("DISABLE_GOOGLE_DRIVE") or "1").strip().lower()
+        drive_off = raw not in ("0", "false", "no", "off")
+    if drive_off:
+        print(
+            "[NO-OP] Google Drive wyłączony (DISABLE_GOOGLE_DRIVE=1). "
+            "Wyniki zostają lokalnie / w artefaktach GHA. "
+            "Rollback: DISABLE_GOOGLE_DRIVE=0"
+        )
+        return 0
 
     creds, use_oauth = _load_credentials()
     service, MediaFileUpload = _drive_service(creds)

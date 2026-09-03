@@ -76,8 +76,34 @@ ENV_MAX_DISTANCE_KM_FROM_ANCHOR = "MAX_DISTANCE_KM_FROM_ANCHOR"
 ENV_SERPER_SHUFFLE_TERMS = "SERPER_SHUFFLE_TERMS"
 ENV_EMAIL_MX_CHECK = "EMAIL_MX_CHECK"
 
+# Kill-switches (domyślnie włączone = wyłączone funkcje; rollback: ustaw na 0)
+ENV_DISABLE_CONTRACTOR_EMAILS = "DISABLE_CONTRACTOR_EMAILS"
+ENV_DISABLE_GOOGLE_DRIVE = "DISABLE_GOOGLE_DRIVE"
+ENV_DISABLE_EXCEL_REPORT_EMAIL = "DISABLE_EXCEL_REPORT_EMAIL"
+
 REQUIRED_FOR_EMAIL = (ENV_MAIL_USER, ENV_MAIL_PASSWORD)
 REQUIRED_FOR_SERPER = (ENV_SERPER_API_KEY,)
+
+
+def _env_flag_default_on(name: str) -> bool:
+    """True gdy flaga włączona (domyślnie 1). Wyłącz: 0 / false / no / off."""
+    raw = (os.getenv(name) if os.getenv(name) is not None else "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def is_contractor_emails_disabled() -> bool:
+    """ZERO maili B2B do kontrahentów (SMTP/yagmail). Dry-run treści nadal OK."""
+    return _env_flag_default_on(ENV_DISABLE_CONTRACTOR_EMAILS)
+
+
+def is_google_drive_disabled() -> bool:
+    """ZERO upload/sync/download przez Google Drive API oraz ścieżek Drive for desktop."""
+    return _env_flag_default_on(ENV_DISABLE_GOOGLE_DRIVE)
+
+
+def is_excel_report_email_disabled() -> bool:
+    """Raport wewnętrzny Excel (Gmail) — osobno od maili B2B."""
+    return _env_flag_default_on(ENV_DISABLE_EXCEL_REPORT_EMAIL)
 
 _WINDOWS_ENV_CACHE: dict[str, str] = {}
 _LEGACY_ENV_ALIASES = {
