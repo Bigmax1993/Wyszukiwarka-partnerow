@@ -1,10 +1,10 @@
 name: GU poniedzialek excel email
 
-# Raport wewnętrzny: końcowy Excel → jeden odbiorca EXCEL_REPORT_TO (svinchak1993@gmail.com).
-# NIE jest to wysyłka B2B do kontrahentów. Cron: poniedziałek 08:00 (po prep 07:00).
+# Raport wewnętrzny: końcowy Excel → svinchak1993@gmail.com (jeden odbiorca).
+# Cron: niedziela 09:00 (po backfillu 06:00). NIE jest to wysyłka B2B.
 on:
   schedule:
-    - cron: "0 8 * * 1"
+    - cron: "0 9 * * 0"
       timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
@@ -38,7 +38,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Resolve artifact (prefer mon prep, fallback thu backfill)
+      - name: Resolve artifact (prefer thu backfill, fallback mon)
         id: artifact_run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,7 +51,7 @@ jobs:
               '[.[] | select(.name == $n)] | sort_by(.created_at) | reverse | .[0] // empty'
           }
           PICK=""
-          for NAME in de-gu-wyniki-mon de-gu-wyniki-thu; do
+          for NAME in de-gu-wyniki-thu de-gu-wyniki-mon; do
             CAND=$(pick_latest "$NAME")
             if [ -n "$CAND" ] && [ "$CAND" != "null" ]; then
               PICK="$CAND"
@@ -59,7 +59,7 @@ jobs:
             fi
           done
           if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
-            echo "::error::Brak artefaktu mon/thu (uruchom prep lub niedziela backfill)"
+            echo "::error::Brak artefaktu thu/mon (uruchom niedziela backfill)"
             exit 1
           fi
           ARTIFACT=$(echo "$PICK" | jq -r '.name')

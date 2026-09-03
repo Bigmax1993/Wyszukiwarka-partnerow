@@ -23,10 +23,10 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 |----------|------|---------|--------|---------|
 | **Tests** | `tests.yml` | push, PR | **aktywny** | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push | **aktywny** | smoke + walidacja secretów |
-| **GU discovery** | `de_gu_pi.yml` | cron, ręcznie | **aktywny** | Discovery pon–pt → `de-gu-wyniki-pi` |
-| **GU niedziela backfill** | `de_gu_thu.yml` | cron, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
-| **GU poniedzialek prep** | `de_gu_mon.yml` | cron, ręcznie | **aktywny** | Rebuild Excel → `de-gu-wyniki-mon` |
-| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron pon 08:00, ręcznie | **aktywny** | Końcowy Excel → `svinchak1993@gmail.com` |
+| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00, ręcznie | **aktywny** | Discovery → `de-gu-wyniki-pi` |
+| **GU niedziela backfill** | `de_gu_thu.yml` | cron nd 06:00, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
+| **GU poniedzialek prep** | `de_gu_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
+| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron nd 09:00, ręcznie | **aktywny** | Końcowy Excel → `svinchak1993@gmail.com` |
 | **GU poniedzialek send** | `de_gu_tue.yml` | tylko `workflow_dispatch` | **DISABLED** | Wysyłka B2B partia 1 |
 | **GU wtorek send** | `de_gu_fri.yml` | tylko `workflow_dispatch` | **DISABLED** | Wysyłka B2B partia 2 |
 | **Sync wyniki Google Drive** | `sync-google-drive.yml` | tylko `workflow_dispatch` | **DISABLED** | Upload `Wyniki/` na Drive |
@@ -37,16 +37,15 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 
 | Dzień | Workflow | Cron | Godzina PL |
 |-------|----------|------|------------|
-| **Poniedziałek** | discovery część 1 | `0 17 * * 1` | **17:00** |
-| **Wtorek** | discovery część 2 | `0 15 * * 2` | **15:00** |
-| **Środa** | discovery część 3 | `0 19 * * 3` | **19:00** |
-| **Czwartek** | discovery część 4 | `0 20 * * 4` | **20:00** |
-| **Piątek** | discovery część 5 | `0 16 * * 5` | **16:00** |
-| **Niedziela** | backfill | `30 5 * * 0` | **05:30** |
-| **Poniedziałek** | prep | `0 7 * * 1` | **07:00** |
-| **Poniedziałek** | excel email | `0 8 * * 1` | **08:00** |
+| **Poniedziałek** | discovery | `0 18 * * 1` | **18:00** |
+| **Wtorek** | discovery | `0 18 * * 2` | **18:00** |
+| **Środa** | discovery | `0 18 * * 3` | **18:00** |
+| **Czwartek** | discovery | `0 18 * * 4` | **18:00** |
+| **Piątek** | discovery | `0 18 * * 5` | **18:00** |
+| **Niedziela** | backfill | `0 6 * * 0` | **06:00** |
+| **Niedziela** | excel email | `0 9 * * 0` | **09:00** |
 
-Wyłączone z crona (DISABLED): sync Drive 06:00, send B2B pon 09:00 / wt 09:00.
+Wyłączone z crona: prep, sync Drive, send B2B.
 
 ## Sekrety
 
@@ -68,14 +67,13 @@ Modele Claude (domyślnie w kodzie, opcjonalnie env):
 ## Artifacty (discovery-only)
 
 ```
-pon→pi | wt→pi | sro→pi | czw→pi | pt→pi → niedziela→thu → pon prep→mon
-(sync Drive / send: DISABLED)
+pon→pi | wt→pi | sro→pi | czw→pi | pt→pi → niedziela→thu → excel email (nd 09:00)
+(prep / sync Drive / send: OFF)
 ```
 
-- Poniedziałek 17:00: nowy tydzień discovery → `de-gu-wyniki-pi`
-- Wtorek–piątek: kontynuacja z `pi`
-- Niedziela: backfill z `pi` → `de-gu-wyniki-thu`
-- Poniedziałek 07:00: prep → `de-gu-wyniki-mon` (Excel, bez wysyłki)
+- Pon–pt 18:00: discovery → `de-gu-wyniki-pi`
+- Niedziela 06:00: backfill → `de-gu-wyniki-thu`
+- Niedziela 09:00: Excel na `svinchak1993@gmail.com`
 
 ## Załącznik PPTX (tylko gdy maile B2B włączone)
 
@@ -114,7 +112,7 @@ gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partner
 
 Workflowy DISABLED (send B2B / Drive) mają `if: false` — `gh workflow run` ich **nie wykona** jobów, dopóki nie przywrócisz YAML.
 
-Kolejność discovery-only + raport Excel: discovery (pon–pt) → backfill → prep → **excel email** (`svinchak1993@gmail.com`).
+Kolejność: discovery (pon–pt 18:00) → backfill (nd 06:00) → excel email (nd 09:00).
 
 Po piątkowym discovery (ręcznie):
 

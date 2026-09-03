@@ -69,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1 -SkipApiLive
 
 Raport Excel (Gmail, **wewnętrzny**, nie B2B): jeden odbiorca `svinchak1993@gmail.com`
 (`EXCEL_REPORT_TO`, `DISABLE_EXCEL_REPORT_EMAIL=0`).
-Workflow `GU poniedzialek excel email` — **poniedziałek 08:00** (po prep).
+Workflow `GU poniedzialek excel email` — **niedziela 09:00** (po backfillu 06:00).
 Lokalnie: `python scripts/send_excel_gmail.py` / `--dry-run`.
 
 
@@ -187,23 +187,17 @@ Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
 
 |-------|--------------|-----|----------------|
 
-| **Poniedziałek** | **17:00** | `run_poniedzialek_discovery.ps1` | `GU discovery` (część 1) |
-| **Wtorek** | **15:00** | `run_wtorek_discovery.ps1` | `GU discovery` (część 2) |
-| **Środa** | **19:00** | `run_sroda_discovery.ps1` | `GU discovery` (część 3) |
-| **Czwartek** | **20:00** | `run_czwartek_discovery.ps1` | `GU discovery` (część 4) |
-| **Piątek** | **16:00** | `run_piatek_discovery.ps1` | `GU discovery` (część 5) |
+| **Poniedziałek** | **18:00** | `run_poniedzialek_discovery.ps1` | `GU discovery` (część 1) |
+| **Wtorek** | **18:00** | `run_wtorek_discovery.ps1` | `GU discovery` (część 2) |
+| **Środa** | **18:00** | `run_sroda_discovery.ps1` | `GU discovery` (część 3) |
+| **Czwartek** | **18:00** | `run_czwartek_discovery.ps1` | `GU discovery` (część 4) |
+| **Piątek** | **18:00** | `run_piatek_discovery.ps1` | `GU discovery` (część 5) |
 
-| **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` (~05:30) |
+| **Niedziela** | **06:00** | `run_czwartek.ps1` | `GU niedziela backfill` |
 
-| **Poniedziałek** | **06:00** | — | ~~`Sync wyniki Google Drive`~~ **DISABLED** |
+| **Niedziela** | **09:00** | — | `GU poniedzialek excel email` → `svinchak1993@gmail.com` |
 
-| **Poniedziałek** | **07:00** | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
-
-| **Poniedziałek** | **08:00** | — | `GU poniedzialek excel email` → `svinchak1993@gmail.com` |
-
-| **Poniedziałek** | **09:00** | ~~send~~ **NO-OP** | ~~`GU poniedzialek send`~~ **DISABLED** |
-
-| **Wtorek** | **09:00** | ~~send~~ **NO-OP** | ~~`GU wtorek send`~~ **DISABLED** |
+| Prep / Drive / send B2B | — | — | **OFF** |
 
 
 

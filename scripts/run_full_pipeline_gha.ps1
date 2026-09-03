@@ -265,7 +265,9 @@ if (-not $SkipBackfill) {
 Write-Host ""
 Write-Host "[POMINIETO] Sync wyniki Google Drive (DISABLE_GOOGLE_DRIVE / discovery-only)." -ForegroundColor Yellow
 
-Invoke-GhaWorkflow "GU poniedzialek prep"
+# Prep: cron OFF — Excel powstaje w niedzielnym backfillu
+Write-Host ""
+Write-Host "[POMINIETO] GU poniedzialek prep (cron OFF — użyj backfillu / excel email)." -ForegroundColor Yellow
 
 # DISABLED: contractor emails (DISABLE_CONTRACTOR_EMAILS=1)
 Write-Host ""
@@ -275,6 +277,10 @@ if ($ForceResend) {
 }
 
 Write-Host ""
+Write-Host "Uruchamiam raport Excel (svinchak1993@gmail.com)..." -ForegroundColor Cyan
+Invoke-GhaWorkflow "GU poniedzialek excel email"
 
-Write-Host "Pipeline zakonczony pomyslnie (discovery-only: bez Drive, bez maili B2B)." -ForegroundColor Green
+Write-Host ""
+
+Write-Host "Pipeline zakonczony (discovery-only + Excel email; bez Drive / bez B2B)." -ForegroundColor Green
 

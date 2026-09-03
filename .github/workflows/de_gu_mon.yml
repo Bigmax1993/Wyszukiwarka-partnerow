@@ -1,10 +1,8 @@
 name: GU poniedzialek prep
 
-# Harmonogram GHA aktywny tylko 14.07–21.07.2026 (Europe/Warsaw); poza tym oknem — lokalnie.
+# Discovery-only: prep zbędny (Excel robi niedzielny backfill). Cron WYŁĄCZONY.
+# Zostaje tylko ręczne workflow_dispatch (rollback / awaryjny rebuild).
 on:
-  schedule:
-    - cron: "0 7 * * 1"
-      timezone: Europe/Warsaw
   workflow_dispatch:
 
 permissions:
@@ -23,7 +21,7 @@ env:
 
 jobs:
   guard:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     outputs:
       active: ${{ steps.window.outputs.active }}
@@ -79,8 +77,6 @@ jobs:
             Wyniki/
             wyslane/
 
-      - name: Chain — poniedzialek send
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/gha_chain_workflow.sh "GU poniedzialek send"
+      - name: "DISABLED: Chain — poniedzialek send"
+        if: false
+        run: echo "contractor send disabled"
