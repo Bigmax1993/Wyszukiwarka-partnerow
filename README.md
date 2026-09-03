@@ -167,7 +167,7 @@ python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.j
 
 | Serper | 1500 zapytań / dzień |
 
-| E-mail | 300 / dzień kalendarzowy, 2 / domena / dzień (pon 300 + wt 300) |
+| E-mail B2B | **wyłączone** (`DISABLE_CONTRACTOR_EMAILS=1`); limity 300/dzień dotyczyły trybu send |
 
 | 1 Bundesland / tydzień | ~40–60 fraz Serper × 5 dni discovery |
 
@@ -215,13 +215,13 @@ powershell -ExecutionPolicy Bypass -File schedule\register_tasks_5_dni.ps1
 
 
 
-Pełny pipeline na GitHub Actions (ręcznie):
-
-
+Pełny pipeline na GitHub Actions (ręcznie, **discovery-only** — bez Drive / bez send):
 
 ```powershell
 
-powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -ForceResend
+powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1
+
+powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -SkipDiscovery
 
 ```
 
@@ -247,24 +247,21 @@ powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -Forc
 
 | `CLAUDE_MODEL_VERIFY` | opcjonalny | Sonnet — weryfikacja www, maile z HTML (domyślnie `claude-sonnet-4-6`) |
 
-| `MAIL_USER`, `MAIL_PASSWORD` | tak (pon+wt) | SMTP + IMAP |
+| `MAIL_USER`, `MAIL_PASSWORD` | nie (discovery-only) | SMTP — tylko po rollbacku maili B2B |
 
-| `GDRIVE_OAUTH_*` | zalecany | Upload wyników na „Mój dysk” |
+| `GDRIVE_OAUTH_*` | nie (Drive OFF) | Upload na „Mój dysk” — tylko po `DISABLE_GOOGLE_DRIVE=0` |
 
-| `GDRIVE_SERVICE_ACCOUNT_JSON` | opcjonalny | Konto usługi (Shared Drive) |
-
-
-
-## Maile MFG
+| `GDRIVE_SERVICE_ACCOUNT_JSON` | nie (Drive OFF) | Konto usługi (Shared Drive) |
 
 
 
-- Treść: `mfg_gu_inquiry_email_de.py` (tylko niemiecki)
+## Maile MFG (wyłączone)
 
-- Załącznik: [Google Slides](https://docs.google.com/presentation/d/1kBnp5x0pdgXZSPzVte9e92IUgn2A5gSe/edit) → PPTX (`mfg_gu_email_attachment.py`)
+Kod treści/załącznika zostaje w repo (łatwy rollback), ale **SMTP do kontrahentów jest OFF**.
 
-- Na GitHub Actions: `assets/campaign/MFG_Referenzliste_Einzelhandel.pptx` (podmień po zmianie Slides)
-
+- Treść (gdy włączysz maile): `mfg_gu_inquiry_email_de.py` (tylko niemiecki)
+- Załącznik lokalny: `assets/campaign/MFG_Referenzliste_Einzelhandel.pptx` (bez pobierania ze Slides/Drive przy `DISABLE_GOOGLE_DRIVE=1`)
+- Kill-switch: `DISABLE_CONTRACTOR_EMAILS=0` + włącz workflowy send (usuń `if: false`)
 - Cc: tylko z `MAIL_CC` w `.env` — **bez** automatycznego `office@mfg-fliesen.de`
 
 
