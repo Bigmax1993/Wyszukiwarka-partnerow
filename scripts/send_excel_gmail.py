@@ -111,8 +111,9 @@ def send_excel_report(
     logger: logging.Logger | None = None,
 ) -> tuple[bool, str]:
     """
-    Raport wewnętrzny (Excel → nasz Gmail) — NIE jest to wysyłka B2B do kontrahentów.
-    Osobny kill-switch: DISABLE_EXCEL_REPORT_EMAIL=1 (domyślnie).
+    Raport wewnętrzny (Excel → jeden odbiorca EXCEL_REPORT_TO).
+    NIE jest to wysyłka B2B do kontrahentów.
+    Kill-switch: DISABLE_EXCEL_REPORT_EMAIL=1 (domyślnie raport WŁĄCZONY).
     """
     log = logger or setup_logging()
     try:
@@ -121,7 +122,7 @@ def send_excel_report(
         if is_excel_report_email_disabled() and not dry_run:
             msg = (
                 "raport Excel wyłączony (DISABLE_EXCEL_REPORT_EMAIL=1); "
-                "to nie jest mail B2B — rollback: ustaw 0"
+                "to nie jest mail B2B — włącz: ustaw 0"
             )
             log.info("[NO-OP] %s", msg)
             print(f"[NO-OP] {msg}")
@@ -132,6 +133,9 @@ def send_excel_report(
     recipient = (to_email or get_excel_report_to()).strip()
     if not recipient or "@" not in recipient:
         return False, "brak poprawnego adresu EXCEL_REPORT_TO"
+    # Jeden odbiorca — bez rozdzielania na listę / CC z tej ścieżki.
+    if "," in recipient or ";" in recipient:
+        return False, "EXCEL_REPORT_TO musi być jednym adresem (bez przecinków)"
 
     path = resolve_excel_path(excel_path)
     subject = build_email_subject(path)

@@ -35,9 +35,13 @@ class KillSwitchFlagsTest(unittest.TestCase):
         with patch.dict(os.environ, {"DISABLE_GOOGLE_DRIVE": "false"}, clear=False):
             self.assertFalse(scraper_env.is_google_drive_disabled())
 
-    def test_excel_report_disabled_by_default(self):
+    def test_excel_report_enabled_by_default(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DISABLE_EXCEL_REPORT_EMAIL", None)
+            self.assertFalse(scraper_env.is_excel_report_email_disabled())
+
+    def test_excel_report_disabled_with_one(self):
+        with patch.dict(os.environ, {"DISABLE_EXCEL_REPORT_EMAIL": "1"}, clear=False):
             self.assertTrue(scraper_env.is_excel_report_email_disabled())
 
 

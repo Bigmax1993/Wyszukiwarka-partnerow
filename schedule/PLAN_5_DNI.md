@@ -30,6 +30,7 @@ Tydzień N (przetwarzanie — BEZ send / BEZ Drive):
 | **Niedziela** | 06:00 | `run_czwartek.ps1` | `GU niedziela backfill` (~05:30 Actions) |
 | **Poniedziałek** | **06:00** | — | ~~`Sync wyniki Google Drive`~~ **DISABLED** |
 | **Poniedziałek** | **07:00** | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
+| **Poniedziałek** | **08:00** | — | `GU poniedzialek excel email` → `svinchak1993@gmail.com` |
 | **Poniedziałek** | **09:00** | ~~`run_poniedzialek_send.ps1`~~ **NO-OP** | ~~`GU poniedzialek send`~~ **DISABLED** |
 | **Wtorek** | **09:00** | ~~`run_wtorek.ps1`~~ **NO-OP** | ~~`GU wtorek send`~~ **DISABLED** |
 
@@ -41,7 +42,8 @@ Tydzień N (przetwarzanie — BEZ send / BEZ Drive):
 | **Czwartek 20:00** | Discovery część 4 — `--respect-cache` |
 | **Piątek 16:00** | Discovery część 5 — `--respect-cache`, domknięcie tygodnia |
 | **Niedziela 05:30** | Verify www + backfill e-maili + Excel (`de-gu-wyniki-thu`) |
-| **Poniedziałek 07:00** | Rebuild Excel z cache (`de-gu-wyniki-mon`), **bez wysyłki** |
+| **Poniedziałek 07:00** | Rebuild Excel z cache (`de-gu-wyniki-mon`), **bez wysyłki B2B** |
+| **Poniedziałek 08:00** | Raport: końcowy Excel na `svinchak1993@gmail.com` (jeden odbiorca) |
 
 ## Task Scheduler (Windows)
 
@@ -64,6 +66,7 @@ pon→pi | wt→pi | sro→pi | czw→pi | pt→pi → niedziela→thu → pon p
 | backfill | `de_gu_thu.yml` | `30 5 * * 0` → **05:30** niedziela |
 | sync Drive | `sync-google-drive.yml` | **DISABLED** |
 | prep | `de_gu_mon.yml` | `0 7 * * 1` → **07:00** poniedziałek |
+| excel email | `de_gu_mon_excel_email.yml` | `0 8 * * 1` → **08:00** poniedziałek |
 | send 1/2 | `de_gu_tue.yml` / `de_gu_fri.yml` | **DISABLED** |
 
 ## CLI send

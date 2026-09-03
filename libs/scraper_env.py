@@ -91,6 +91,12 @@ def _env_flag_default_on(name: str) -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _env_flag_default_off(name: str) -> bool:
+    """True gdy flaga włączona (domyślnie 0 = flaga off). Włącz: 1 / true / yes / on."""
+    raw = (os.getenv(name) if os.getenv(name) is not None else "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def is_contractor_emails_disabled() -> bool:
     """ZERO maili B2B do kontrahentów (SMTP/yagmail). Dry-run treści nadal OK."""
     return _env_flag_default_on(ENV_DISABLE_CONTRACTOR_EMAILS)
@@ -102,8 +108,8 @@ def is_google_drive_disabled() -> bool:
 
 
 def is_excel_report_email_disabled() -> bool:
-    """Raport wewnętrzny Excel (Gmail) — osobno od maili B2B."""
-    return _env_flag_default_on(ENV_DISABLE_EXCEL_REPORT_EMAIL)
+    """Raport wewnętrzny Excel (jeden odbiorca EXCEL_REPORT_TO). Domyślnie WŁĄCZONY."""
+    return _env_flag_default_off(ENV_DISABLE_EXCEL_REPORT_EMAIL)
 
 _WINDOWS_ENV_CACHE: dict[str, str] = {}
 _LEGACY_ENV_ALIASES = {

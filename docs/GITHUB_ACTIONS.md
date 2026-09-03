@@ -11,8 +11,8 @@ Pipeline na GHA zbiera firmy (Serper + Claude) i buduje Excel w artefaktach.
 |-------------------|-----------|--------|
 | `DISABLE_CONTRACTOR_EMAILS` | `1` | `--send-emails-only` = NO-OP |
 | `DISABLE_GOOGLE_DRIVE` | `1` | upload/sync Drive = NO-OP |
-| `DISABLE_EXCEL_REPORT_EMAIL` | `1` | raport Excel na Gmail = NO-OP |
-| workflow `if: false` | send + Drive + excel email | joby nie startują (nawet ręcznie) |
+| `DISABLE_EXCEL_REPORT_EMAIL` | `0` | raport Excel na `svinchak1993@gmail.com` **WŁĄCZONY** |
+| workflow `if: false` | send B2B + Drive | joby send/Drive nie startują |
 
 Rollback: ustaw flagi na `0` w `.env` / secrets env oraz usuń `if: false` z YAML send/Drive.
 Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`](../schedule/PLAN_5_DNI.md).
@@ -26,7 +26,7 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 | **GU discovery** | `de_gu_pi.yml` | cron, ręcznie | **aktywny** | Discovery pon–pt → `de-gu-wyniki-pi` |
 | **GU niedziela backfill** | `de_gu_thu.yml` | cron, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
 | **GU poniedzialek prep** | `de_gu_mon.yml` | cron, ręcznie | **aktywny** | Rebuild Excel → `de-gu-wyniki-mon` |
-| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | tylko `workflow_dispatch` | **DISABLED** | Raport Excel (wewnętrzny Gmail) |
+| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron pon 08:00, ręcznie | **aktywny** | Końcowy Excel → `svinchak1993@gmail.com` |
 | **GU poniedzialek send** | `de_gu_tue.yml` | tylko `workflow_dispatch` | **DISABLED** | Wysyłka B2B partia 1 |
 | **GU wtorek send** | `de_gu_fri.yml` | tylko `workflow_dispatch` | **DISABLED** | Wysyłka B2B partia 2 |
 | **Sync wyniki Google Drive** | `sync-google-drive.yml` | tylko `workflow_dispatch` | **DISABLED** | Upload `Wyniki/` na Drive |
@@ -44,8 +44,9 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 | **Piątek** | discovery część 5 | `0 16 * * 5` | **16:00** |
 | **Niedziela** | backfill | `30 5 * * 0` | **05:30** |
 | **Poniedziałek** | prep | `0 7 * * 1` | **07:00** |
+| **Poniedziałek** | excel email | `0 8 * * 1` | **08:00** |
 
-Wyłączone z crona (DISABLED): excel email 04:30, sync Drive 06:00, send pon 09:00 / wt 09:00.
+Wyłączone z crona (DISABLED): sync Drive 06:00, send B2B pon 09:00 / wt 09:00.
 
 ## Sekrety
 
@@ -53,7 +54,7 @@ Wyłączone z crona (DISABLED): excel email 04:30, sync Drive 06:00, send pon 09
 |--------|----------------|------|
 | `SERPER_API_KEY` | tak (discovery) | API Serper |
 | `ANTHROPIC_API_KEY` | tak (discovery + backfill) | Claude API |
-| `MAIL_USER`, `MAIL_PASSWORD` | nie (discovery-only) | SMTP — tylko po rollbacku maili B2B / raportu Excel |
+| `MAIL_USER`, `MAIL_PASSWORD` | tak (raport Excel) | SMTP Gmail — wysyłka końcowego `.xlsx` na `EXCEL_REPORT_TO` |
 | `GDRIVE_OAUTH_*` | nie (Drive OFF) | OAuth upload — tylko po `DISABLE_GOOGLE_DRIVE=0` |
 | `GDRIVE_SERVICE_ACCOUNT_JSON` | nie (Drive OFF) | Konto usługi Shared Drive |
 
@@ -107,11 +108,13 @@ gh workflow run "GU discovery" -R Bigmax1993/Wyszukiwarka-partnerow -f resume_ar
 
 gh workflow run "GU niedziela backfill" -R Bigmax1993/Wyszukiwarka-partnerow
 gh workflow run "GU poniedzialek prep" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow -f dry_run=true
 ```
 
-Workflowy DISABLED (send / Drive / excel email) mają `if: false` — `gh workflow run` ich **nie wykona** jobów, dopóki nie przywrócisz YAML.
+Workflowy DISABLED (send B2B / Drive) mają `if: false` — `gh workflow run` ich **nie wykona** jobów, dopóki nie przywrócisz YAML.
 
-Kolejność discovery-only: discovery (pon–pt) → backfill → prep.
+Kolejność discovery-only + raport Excel: discovery (pon–pt) → backfill → prep → **excel email** (`svinchak1993@gmail.com`).
 
 Po piątkowym discovery (ręcznie):
 

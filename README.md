@@ -67,8 +67,10 @@ powershell -ExecutionPolicy Bypass -File scripts\RUN_ALL_TESTS.ps1 -SkipApiLive
 | Regresyjne | `tests/test_gu_discovery_regression.py`, `test_excel_append.py` | unittest |
 | API live | `tests/integration/test_api_keys.py` | `-m api_live` |
 
-Raport Excel (Gmail, **wewnętrzny**, nie B2B): `python scripts/send_excel_gmail.py` / `--dry-run` —
-domyślnie **wyłączony** (`DISABLE_EXCEL_REPORT_EMAIL=1`). Workflow `GU poniedzialek excel email` = DISABLED.
+Raport Excel (Gmail, **wewnętrzny**, nie B2B): jeden odbiorca `svinchak1993@gmail.com`
+(`EXCEL_REPORT_TO`, `DISABLE_EXCEL_REPORT_EMAIL=0`).
+Workflow `GU poniedzialek excel email` — **poniedziałek 08:00** (po prep).
+Lokalnie: `python scripts/send_excel_gmail.py` / `--dry-run`.
 
 
 
@@ -197,6 +199,8 @@ Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)
 
 | **Poniedziałek** | **07:00** | `run_poniedzialek_prep.ps1` | `GU poniedzialek prep` |
 
+| **Poniedziałek** | **08:00** | — | `GU poniedzialek excel email` → `svinchak1993@gmail.com` |
+
 | **Poniedziałek** | **09:00** | ~~send~~ **NO-OP** | ~~`GU poniedzialek send`~~ **DISABLED** |
 
 | **Wtorek** | **09:00** | ~~send~~ **NO-OP** | ~~`GU wtorek send`~~ **DISABLED** |
@@ -247,7 +251,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -Skip
 
 | `CLAUDE_MODEL_VERIFY` | opcjonalny | Sonnet — weryfikacja www, maile z HTML (domyślnie `claude-sonnet-4-6`) |
 
-| `MAIL_USER`, `MAIL_PASSWORD` | nie (discovery-only) | SMTP — tylko po rollbacku maili B2B |
+| `MAIL_USER`, `MAIL_PASSWORD` | tak (raport Excel) | SMTP — końcowy `.xlsx` na `svinchak1993@gmail.com` |
 
 | `GDRIVE_OAUTH_*` | nie (Drive OFF) | Upload na „Mój dysk” — tylko po `DISABLE_GOOGLE_DRIVE=0` |
 
