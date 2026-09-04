@@ -2,6 +2,8 @@
 """
 Upload folderu Wyniki/ (+ opcjonalnie wyslane/) do Google Drive.
 
+Cache (.json) i logi (.log) NIE są uploadowane — zostają w artefaktach GitHub Actions.
+
 Konto usługowe nie ma własnej przestrzeni dyskowej — pliki muszą trafić na
 Shared Drive (dysk zespołowy) albo upload w imieniu użytkownika (delegacja DWD).
 
@@ -48,6 +50,13 @@ _LIST_OPTS = {
 }
 
 _GU_FOLDER_NAME = "GU Bauunternehmen Wyniki"
+
+# Cache (.json) i logi zostają w artefaktach GitHub — nie na Drive.
+_GDRIVE_SKIP_SUFFIXES = frozenset({".json", ".log"})
+
+
+def _skip_gdrive_upload(path: Path) -> bool:
+    return path.suffix.lower() in _GDRIVE_SKIP_SUFFIXES
 
 
 def _gdrive_version_xlsx_enabled() -> bool:
@@ -350,6 +359,9 @@ def upload_files_flat(service, MediaFileUpload, local_dir: Path, drive_parent_id
     for p in sorted(local_dir.iterdir()):
         if not p.is_file():
             continue
+        if _skip_gdrive_upload(p):
+            print(f"  SKIP {p.name} (tylko GitHub artefakt)")
+            continue
         if p.suffix.lower() == ".xlsx" and _gdrive_version_xlsx_enabled():
             dated = versioned_xlsx_upload_name(p.name)
             _upload_file(service, MediaFileUpload, p, drive_parent_id, version_xlsx=True)
@@ -372,15 +384,19 @@ def upload_folder_named(
     sub_id = _find_or_create_folder(service, drive_parent_id, drive_name)
     count = 0
     for p in sorted(local_dir.iterdir()):
-        if p.is_file():
-            uploaded_as = (
-                versioned_xlsx_upload_name(p.name)
-                if _gdrive_version_xlsx_enabled() and p.suffix.lower() == ".xlsx"
-                else p.name
-            )
-            _upload_file(service, MediaFileUpload, p, sub_id)
-            print(f"  OK {drive_name}/{uploaded_as}")
-            count += 1
+        if not p.is_file():
+            continue
+        if _skip_gdrive_upload(p):
+            print(f"  SKIP {drive_name}/{p.name} (tylko GitHub artefakt)")
+            continue
+        uploaded_as = (
+            versioned_xlsx_upload_name(p.name)
+            if _gdrive_version_xlsx_enabled() and p.suffix.lower() == ".xlsx"
+            else p.name
+        )
+        _upload_file(service, MediaFileUpload, p, sub_id)
+        print(f"  OK {drive_name}/{uploaded_as}")
+        count += 1
     return count
 
 
