@@ -23,10 +23,10 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 |----------|------|---------|--------|---------|
 | **Tests** | `tests.yml` | push, PR | **aktywny** | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push | **aktywny** | smoke + walidacja secretów |
-| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00, ręcznie | **aktywny** | Discovery → `de-gu-wyniki-pi` |
-| **GU niedziela backfill** | `de_gu_thu.yml` | cron nd 06:00, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
+| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00 + guard ostatni tydzień, ręcznie | **aktywny** | Discovery → `de-gu-wyniki-pi` |
+| **GU niedziela backfill** | `de_gu_thu.yml` | cron nd 06:00 + guard, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
 | **GU poniedzialek prep** | `de_gu_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
-| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron nd 09:00, ręcznie | **aktywny** | Końcowy Excel → `svinchak1993@gmail.com` |
+| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron nd 09:00 + guard, ręcznie | **aktywny** | Końcowy Excel → `svinchak1993@gmail.com` |
 | **GU poniedzialek send** | `de_gu_tue.yml` | tylko `workflow_dispatch` | **DISABLED** | Wysyłka B2B partia 1 |
 | **GU wtorek send** | `de_gu_fri.yml` | tylko `workflow_dispatch` | **DISABLED** | Wysyłka B2B partia 2 |
 | **Sync wyniki Google Drive** | `sync-google-drive.yml` | tylko `workflow_dispatch` | **DISABLED** | Upload `Wyniki/` na Drive |
@@ -34,6 +34,13 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 | **GU tydzien backfill i wysylka** | `week-backfill-and-send.yml` | ręcznie | **częściowo** | Backfill/Excel OK; kroki send = `if: false` |
 
 ## Harmonogram cron (Europe/Warsaw) — aktywne
+
+Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/gu-gha-window-guard`) odpala joby tylko w **ostatnim tygodniu miesiąca**:
+
+- **pon–pt**: od poniedziałku do ostatniego piątku miesiąca
+- **niedziela**: dzień po tym piątku (backfill 06:00 + Excel 09:00; może wypaść 1.–6. kolejnego miesiąca)
+- **wrzesień 2026**: całkowity skip (pierwszy cykl = ostatni tydzień października 2026)
+- **`workflow_dispatch`**: zawsze działa (awaryjnie / ręcznie)
 
 | Dzień | Workflow | Cron | Godzina PL |
 |-------|----------|------|------------|

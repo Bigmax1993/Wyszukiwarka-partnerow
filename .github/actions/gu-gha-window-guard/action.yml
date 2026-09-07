@@ -1,6 +1,8 @@
 name: GU GHA schedule window guard
 description: >-
-  Dla cron zawsze aktywny harmonogram tygodniowy GU (discovery → backfill → prep → excel).
+  Cron: aktywny tylko w ostatnim tygodniu miesiąca (pon–pt discovery,
+  niedziela = dzień po ostatnim piątku → backfill/excel).
+  Wrzesień 2026: całkowity skip (schedule).
   workflow_dispatch zawsze przechodzi (active=true).
 outputs:
   active:
@@ -11,5 +13,93 @@ runs:
   steps:
     - id: check
       shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
       run: |
-        echo "active=true" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        TZ=Europe/Warsaw
+        export TZ
+
+        if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          echo "Guard: workflow_dispatch → active=true"
+          echo "active=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        YEAR=$(date +%Y)
+        MONTH=$(date +%m)
+        DAY=$(date +%d)
+        DOW=$(date +%u)   # 1=Mon … 7=Sun
+        TODAY=$(date +%Y-%m-%d)
+
+        echo "Guard: today=$TODAY (DOW=$DOW) event=$EVENT_NAME"
+
+        # Wrzesień 2026 — nie puszczamy pipeline'u (oszczędność / decyzja operacyjna)
+        if [ "$YEAR" = "2026" ] && [ "$MONTH" = "09" ]; then
+          echo "Guard: skip — wrzesień 2026 (pipeline OFF do października)"
+          echo "active=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Ostatni piątek miesiąca YYYY-MM → YYYY-MM-DD
+        last_friday_of() {
+          local y="$1" m="$2"
+          local dim last_dow offset fri_day
+          dim=$(date -d "$y-$m-01 +1 month -1 day" +%d)
+          last_dow=$(date -d "$y-$m-$dim" +%u)
+          offset=$(( (last_dow - 5 + 7) % 7 ))
+          fri_day=$(( 10#$dim - offset ))
+          printf '%s-%s-%02d' "$y" "$m" "$fri_day"
+        }
+
+        prev_year_month() {
+          local y="$1" m="$2"
+          if [ "$m" = "01" ]; then
+            printf '%04d 12' $(( 10#$y - 1 ))
+          else
+            printf '%04d %02d' "$y" $(( 10#$m - 1 ))
+          fi
+        }
+
+        LAST_FRI=$(last_friday_of "$YEAR" "$MONTH")
+        MON_LAST=$(( $(date -d "$LAST_FRI" +%d) - 4 ))
+        MON_DATE=$(printf '%s-%s-%02d' "$YEAR" "$MONTH" "$MON_LAST")
+        SUN_AFTER=$(date -d "$LAST_FRI + 2 days" +%Y-%m-%d)
+
+        read -r PY PM <<< "$(prev_year_month "$YEAR" "$MONTH")"
+        PREV_LAST_FRI=$(last_friday_of "$PY" "$PM")
+        PREV_SUN_AFTER=$(date -d "$PREV_LAST_FRI + 2 days" +%Y-%m-%d)
+
+        echo "Guard: last_week Mon=$MON_DATE … Fri=$LAST_FRI; sun_after=$SUN_AFTER; prev_sun_after=$PREV_SUN_AFTER"
+
+        ACTIVE=false
+        REASON=""
+
+        if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
+          # Discovery: pon–pt ostatniego tygodnia miesiąca
+          if [[ "$TODAY" >= "$MON_DATE" && "$TODAY" <= "$LAST_FRI" ]]; then
+            ACTIVE=true
+            REASON="ostatni tydzień miesiąca (discovery $MON_DATE–$LAST_FRI)"
+          else
+            REASON="poza ostatnim tygodniem ($MON_DATE–$LAST_FRI)"
+          fi
+        elif [ "$DOW" -eq 7 ]; then
+          # Backfill / excel: niedziela zaraz po ostatnim piątku (może być już 1.–6. kolejnego miesiąca)
+          if [ "$TODAY" = "$SUN_AFTER" ] || [ "$TODAY" = "$PREV_SUN_AFTER" ]; then
+            # Nie domykaj cyklu września 2026 w październiku (nie dotyczy — wrzesień kończy się w Sept)
+            ACTIVE=true
+            REASON="niedziela po ostatnim piątku cyklu"
+          else
+            REASON="niedziela poza domknięciem cyklu (oczekiwano $SUN_AFTER lub $PREV_SUN_AFTER)"
+          fi
+        else
+          REASON="sobota — brak jobów GU"
+        fi
+
+        if [ "$ACTIVE" = "true" ]; then
+          echo "Guard: active=true ($REASON)"
+          echo "active=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Guard: active=false ($REASON)"
+          echo "active=false" >> "$GITHUB_OUTPUT"
+        fi

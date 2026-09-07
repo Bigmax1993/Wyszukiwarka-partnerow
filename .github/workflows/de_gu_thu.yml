@@ -1,6 +1,7 @@
 name: GU niedziela backfill
 
-# Discovery-only: niedziela 06:00 Europe/Warsaw — verify + backfill + Excel.
+# Discovery-only: cron nd 06:00 Europe/Warsaw - verify + backfill + Excel.
+# Guard: tylko niedziela po ostatnim piatku miesiaca; wrzesien 2026 OFF.
 on:
   schedule:
     - cron: "0 6 * * 0"

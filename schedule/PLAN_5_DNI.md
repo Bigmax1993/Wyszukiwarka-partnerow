@@ -1,17 +1,22 @@
 # Plan tygodniowy — discovery-only (Europe/Warsaw)
 
-Jeden **obrót** = 1 Bundesland / tydzień (`--rotate-bundesland`).
+Jeden **obrót** = 1 Bundesland / aktywny cykl (`--rotate-bundesland`).
 
 **Aktualny tryb:** bez maili B2B, bez Drive. Discovery + backfill + Excel na Gmail.
+
+**Cadence:** tylko **ostatni tydzień miesiąca** (guard na GHA). Wrzesień 2026 = OFF; start od października 2026.
 
 ## Cykl
 
 ```
+(ostatni tydzień miesiąca)
 pon–pt 18:00 discovery → nd 06:00 backfill → nd 09:00 Excel → svinchak1993@gmail.com
 (prep / send B2B / Drive: OFF)
 ```
 
 ## Harmonogram
+
+Cron odpala się co tydzień, ale joby startują tylko gdy guard = active (ostatni tydzień miesiąca).
 
 | Dzień | Godzina (PL) | GitHub Actions | Cron |
 |-------|--------------|----------------|------|

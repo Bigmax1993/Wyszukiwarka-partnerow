@@ -177,6 +177,8 @@ python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.j
 
 ## Harmonogram tygodnia
 
+**GHA:** tylko **ostatni tydzień miesiąca** (guard). Wrzesień 2026 OFF — start od października 2026. Szczegóły w docs/GITHUB_ACTIONS.md.
+
 
 
 Szczegóły: [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md)

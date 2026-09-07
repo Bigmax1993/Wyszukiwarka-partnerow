@@ -1,6 +1,8 @@
 name: GU discovery
 
-# Discovery-only: pon–pt 18:00 Europe/Warsaw (1 land / tydzień).
+# Discovery-only: cron pon-pt 18:00 Europe/Warsaw.
+# Realny start tylko w OSTATNIM tygodniu miesiaca (guard).
+# Wrzesien 2026: skip. 1 land / aktywny cykl.
 on:
   schedule:
     - cron: "0 18 * * 1"
