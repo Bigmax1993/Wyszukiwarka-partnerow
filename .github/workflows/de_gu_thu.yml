@@ -1,7 +1,7 @@
 name: GU niedziela backfill
 
 # Discovery-only: cron nd 06:00 Europe/Warsaw - verify + backfill + Excel.
-# Guard: niedziela tygodnia cyklu (co 2 tyg. od 2026-09-21).
+# Guard: niedziela tygodnia cyklu (co 6 tyg. od 2026-09-21).
 on:
   schedule:
     - cron: "0 6 * * 0"

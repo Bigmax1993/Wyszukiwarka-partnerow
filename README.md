@@ -177,7 +177,7 @@ python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.j
 
 ## Harmonogram tygodnia
 
-**GHA:** **co 2 tygodnie** od **21.09.2026** (guard). Szczegóły w docs/GITHUB_ACTIONS.md.
+**GHA:** co **6 tygodni** od **21.09.2026** (guard). Szczegóły w docs/GITHUB_ACTIONS.md.
 
 
 

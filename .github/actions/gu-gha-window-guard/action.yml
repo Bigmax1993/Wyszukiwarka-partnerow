@@ -1,8 +1,9 @@
 name: GU GHA schedule window guard
 description: >-
-  Cron: aktywny co 2 tygodnie od kotwicy 2026-09-21 (pon–pt discovery,
+  Cron: aktywny co 6 tygodni od 2026-09-21 (pon–pt discovery,
   niedziela tego tygodnia → backfill/excel).
   workflow_dispatch zawsze przechodzi (active=true).
+  Opcjonalnie env: GU_CADENCE_ANCHOR (YYYY-MM-DD), GU_CADENCE_DAYS (domyślnie 42).
 outputs:
   active:
     description: "true = uruchom pipeline, false = pomiń scheduled"
@@ -14,9 +15,6 @@ runs:
       shell: bash
       env:
         EVENT_NAME: ${{ github.event_name }}
-        # Poniedziałek pierwszego cyklu (Europe/Warsaw)
-        GU_CADENCE_ANCHOR_MONDAY: "2026-09-21"
-        GU_CADENCE_WEEKS: "2"
       run: |
         set -euo pipefail
         TZ=Europe/Warsaw
@@ -28,39 +26,38 @@ runs:
           exit 0
         fi
 
-        ANCHOR="${GU_CADENCE_ANCHOR_MONDAY:-2026-09-21}"
-        EVERY=$(( ${GU_CADENCE_WEEKS:-2} * 7 ))
+        ANCHOR="${GU_CADENCE_ANCHOR:-2026-09-21}"
+        CADENCE_DAYS="${GU_CADENCE_DAYS:-42}"
         DOW=$(date +%u)   # 1=Mon … 7=Sun
         TODAY=$(date +%Y-%m-%d)
+        # Poniedziałek tygodnia ISO (dla nd: dziś − 6)
+        MONDAY=$(date -d "$TODAY - $((DOW - 1)) days" +%Y-%m-%d)
 
-        echo "Guard: today=$TODAY (DOW=$DOW) event=$EVENT_NAME anchor=$ANCHOR every=${EVERY}d"
-
-        # Poniedziałek bieżącego tygodnia ISO (pon–niedz)
-        if [ "$DOW" -eq 7 ]; then
-          WEEK_MON=$(date -d "$TODAY - 6 days" +%Y-%m-%d)
-        else
-          WEEK_MON=$(date -d "$TODAY - $(( DOW - 1 )) days" +%Y-%m-%d)
-        fi
+        echo "Guard: today=$TODAY (DOW=$DOW) monday=$MONDAY anchor=$ANCHOR every=${CADENCE_DAYS}d"
 
         ANCHOR_EPOCH=$(date -d "$ANCHOR" +%s)
-        WEEK_MON_EPOCH=$(date -d "$WEEK_MON" +%s)
-        DELTA_DAYS=$(( (WEEK_MON_EPOCH - ANCHOR_EPOCH) / 86400 ))
+        MONDAY_EPOCH=$(date -d "$MONDAY" +%s)
+        DAYS=$(( (MONDAY_EPOCH - ANCHOR_EPOCH) / 86400 ))
 
         ACTIVE=false
         REASON=""
 
-        if [ "$DELTA_DAYS" -lt 0 ]; then
-          REASON="przed pierwszym cyklem (anchor $ANCHOR, week_mon $WEEK_MON)"
-        elif [ $(( DELTA_DAYS % EVERY )) -ne 0 ]; then
-          REASON="tydzień off (co ${GU_CADENCE_WEEKS:-2} tyg.; week_mon=$WEEK_MON, delta=${DELTA_DAYS}d)"
-        elif [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
-          ACTIVE=true
-          REASON="cykl co ${GU_CADENCE_WEEKS:-2} tyg. discovery (week_mon=$WEEK_MON)"
-        elif [ "$DOW" -eq 7 ]; then
-          ACTIVE=true
-          REASON="cykl co ${GU_CADENCE_WEEKS:-2} tyg. niedziela backfill/excel (week_mon=$WEEK_MON)"
+        if [ "$DAYS" -lt 0 ]; then
+          REASON="przed pierwszym cyklem (anchor $ANCHOR)"
+        elif [ $(( DAYS % CADENCE_DAYS )) -ne 0 ]; then
+          NEXT=$(( CADENCE_DAYS - (DAYS % CADENCE_DAYS) ))
+          REASON="poza cyklem co ${CADENCE_DAYS}d (dni od anchor=$DAYS; następny pon za ~${NEXT}d)"
         else
-          REASON="sobota — brak jobów GU"
+          # Ten tydzień (pon=anchor+n*cadence) jest aktywny
+          if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
+            ACTIVE=true
+            REASON="tydzień cyklu discovery (pon $MONDAY)"
+          elif [ "$DOW" -eq 7 ]; then
+            ACTIVE=true
+            REASON="niedziela domknięcia cyklu (pon $MONDAY)"
+          else
+            REASON="sobota — brak jobów GU"
+          fi
         fi
 
         if [ "$ACTIVE" = "true" ]; then
