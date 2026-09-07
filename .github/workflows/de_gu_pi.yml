@@ -1,8 +1,7 @@
 name: GU discovery
 
 # Discovery-only: cron pon-pt 18:00 Europe/Warsaw.
-# Realny start tylko w OSTATNIM tygodniu miesiaca (guard).
-# Wrzesien 2026: skip. 1 land / aktywny cykl.
+# Guard: co 2 tygodnie od 2026-09-21 (1 land / aktywny cykl).
 on:
   schedule:
     - cron: "0 18 * * 1"

@@ -3,7 +3,7 @@ name: GU poniedzialek excel email
 # Raport wewnętrzny: końcowy Excel → svinchak1993@gmail.com + Google Drive.
 # Drive: https://drive.google.com/drive/folders/1JMPyphoNX_oS_EjW7LEhf103lvvtsMUL
 # Cron: niedziela 09:00 (po backfillu 06:00). NIE jest to wysyłka B2B.
-# Guard: tylko niedziela po ostatnim piątku miesiąca; wrzesień 2026 OFF.
+# Guard: niedziela tygodnia cyklu (co 2 tyg. od 2026-09-21).
 on:
   schedule:
     - cron: "0 9 * * 0"

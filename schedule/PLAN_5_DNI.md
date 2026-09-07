@@ -4,19 +4,19 @@ Jeden **obrót** = 1 Bundesland / aktywny cykl (`--rotate-bundesland`).
 
 **Aktualny tryb:** bez maili B2B, bez Drive. Discovery + backfill + Excel na Gmail.
 
-**Cadence:** tylko **ostatni tydzień miesiąca** (guard na GHA). Wrzesień 2026 = OFF; start od października 2026.
+**Cadence:** **co 2 tygodnie** od **2026-09-21** (guard na GHA).
 
 ## Cykl
 
 ```
-(ostatni tydzień miesiąca)
+(co 2 tygodnie, start 21.09.2026)
 pon–pt 18:00 discovery → nd 06:00 backfill → nd 09:00 Excel → svinchak1993@gmail.com
 (prep / send B2B / Drive: OFF)
 ```
 
 ## Harmonogram
 
-Cron odpala się co tydzień, ale joby startują tylko gdy guard = active (ostatni tydzień miesiąca).
+Cron odpala się co tydzień, ale joby startują tylko gdy guard = active (tydzień cyklu co 2 tyg.).
 
 | Dzień | Godzina (PL) | GitHub Actions | Cron |
 |-------|--------------|----------------|------|

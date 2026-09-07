@@ -23,7 +23,7 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 |----------|------|---------|--------|---------|
 | **Tests** | `tests.yml` | push, PR | **aktywny** | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push | **aktywny** | smoke + walidacja secretów |
-| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00 + guard ostatni tydzień, ręcznie | **aktywny** | Discovery → `de-gu-wyniki-pi` |
+| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00 + guard co 2 tyg., ręcznie | **aktywny** | Discovery → `de-gu-wyniki-pi` |
 | **GU niedziela backfill** | `de_gu_thu.yml` | cron nd 06:00 + guard, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
 | **GU poniedzialek prep** | `de_gu_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
 | **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron nd 09:00 + guard, ręcznie | **aktywny** | Końcowy Excel → `svinchak1993@gmail.com` |
@@ -35,12 +35,13 @@ Szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md), [`../schedule/PLAN_5_DNI.md`]
 
 ## Harmonogram cron (Europe/Warsaw) — aktywne
 
-Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/gu-gha-window-guard`) odpala joby tylko w **ostatnim tygodniu miesiąca**:
+Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/gu-gha-window-guard`) odpala joby **co 2 tygodnie**:
 
-- **pon–pt**: od poniedziałku do ostatniego piątku miesiąca
-- **niedziela**: dzień po tym piątku (backfill 06:00 + Excel 09:00; może wypaść 1.–6. kolejnego miesiąca)
-- **wrzesień 2026**: całkowity skip (pierwszy cykl = ostatni tydzień października 2026)
-- **`workflow_dispatch`**: zawsze działa (awaryjnie / ręcznie)
+- **Kotwica:** poniedziałek **2026-09-21** (pierwszy cykl)
+- **Kolejne cykle:** 05.10, 19.10, 02.11, … (co 14 dni)
+- **pon–pt:** discovery w tygodniu cyklu
+- **niedziela:** backfill 06:00 + Excel 09:00 (ten sam tydzień)
+- **`workflow_dispatch`:** zawsze działa (awaryjnie / ręcznie)
 
 | Dzień | Workflow | Cron | Godzina PL |
 |-------|----------|------|------------|
