@@ -8,6 +8,7 @@ Krótka mapa różnic — żeby nie mieszać cadence i zakresów jobów.
 |--|----------------|----------------------------------|
 | Godziny | pon–pt 18:00, nd 06:00 (+ nd 09:00 Excel) | pon–pt 18:00, nd 06:00 |
 | Okres | **co 42 dni** od `2026-09-21` (guard) | **co tydzień** (bez guarda) |
+| Najbliższe cykle GHA | **02–08.11.2026**, **14–20.12.2026**, **25–31.01.2027** (pełna lista w [`GITHUB_ACTIONS.md`](GITHUB_ACTIONS.md#kalendarz-uruchomień-gha-europewarsaw)) | co tydzień bez ograniczenia |
 | Excel Gmail + Drive xlsx | **nd 09:00** (tylko GHA) | **brak** — nie rejestrowane |
 
 Obowiązujące godziny PC bierze `register_tasks_5_dni.ps1`. Komentarze w nagłówkach `schedule/run_*_discovery.ps1` mogą być historyczne.

@@ -141,6 +141,21 @@ Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`schedule/PLAN
 | **Niedziela** | **09:00** | — | `GU poniedzialek excel email` → Gmail + Drive xlsx |
 | Prep / pełny Drive / send B2B | — | — | **OFF** |
 
+### Daty uruchomień GHA (tygodnie cyklu)
+
+| Cykl | Discovery (pon–pt 18:00) | Backfill + Excel (nd 06:00 / 09:00) |
+|------|--------------------------|------------------------------------|
+| 1 | **21–25.09.2026** | **27.09.2026** |
+| 2 | **02–06.11.2026** | **08.11.2026** |
+| 3 | **14–18.12.2026** | **20.12.2026** |
+| 4 | **25–29.01.2027** | **31.01.2027** |
+| 5 | **08–12.03.2027** | **14.03.2027** |
+| 6 | **19–23.04.2027** | **25.04.2027** |
+| 7 | **31.05–04.06.2027** | **06.06.2027** |
+| 8 | **12–16.07.2027** | **18.07.2027** |
+
+Pełna tabela dzień-po-dniu: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md#kalendarz-uruchomień-gha-europewarsaw).
+
 Po udanym discovery w **piątek** GHA odpala `GU niedziela backfill` od razu (`workflow_dispatch`). Cron nd 06:00 to zapasowy / restart.
 
 Task Scheduler:
