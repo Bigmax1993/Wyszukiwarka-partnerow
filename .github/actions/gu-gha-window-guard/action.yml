@@ -1,9 +1,10 @@
 name: GU GHA schedule window guard
 description: >-
-  Cron: aktywny co 6 tygodni od 2026-09-21 (pon–pt discovery,
-  niedziela tego tygodnia → backfill/excel).
+  Cron: aktywny co 55 dni od 2026-11-02 (tydzień pipeline: pon–pt discovery,
+  niedziela → backfill/excel; start = poniedziałek w dniu markera lub kolejny).
+  Pierwszy tydzień (02–08.11.2026) jak w poprzednim planie; potem +55 dni.
   workflow_dispatch zawsze przechodzi (active=true).
-  Opcjonalnie env: GU_CADENCE_ANCHOR (YYYY-MM-DD), GU_CADENCE_DAYS (domyślnie 42).
+  Opcjonalnie env: GU_CADENCE_ANCHOR (YYYY-MM-DD), GU_CADENCE_DAYS (domyślnie 55).
 outputs:
   active:
     description: "true = uruchom pipeline, false = pomiń scheduled"
@@ -26,37 +27,76 @@ runs:
           exit 0
         fi
 
-        ANCHOR="${GU_CADENCE_ANCHOR:-2026-09-21}"
-        CADENCE_DAYS="${GU_CADENCE_DAYS:-42}"
+        ANCHOR="${GU_CADENCE_ANCHOR:-2026-11-02}"
+        CADENCE_DAYS="${GU_CADENCE_DAYS:-55}"
         DOW=$(date +%u)   # 1=Mon … 7=Sun
         TODAY=$(date +%Y-%m-%d)
-        # Poniedziałek tygodnia ISO (dla nd: dziś − 6)
+        # Poniedziałek bieżącego tygodnia ISO
         MONDAY=$(date -d "$TODAY - $((DOW - 1)) days" +%Y-%m-%d)
 
         echo "Guard: today=$TODAY (DOW=$DOW) monday=$MONDAY anchor=$ANCHOR every=${CADENCE_DAYS}d"
 
         ANCHOR_EPOCH=$(date -d "$ANCHOR" +%s)
         MONDAY_EPOCH=$(date -d "$MONDAY" +%s)
-        DAYS=$(( (MONDAY_EPOCH - ANCHOR_EPOCH) / 86400 ))
+        DAYS_MON=$(( (MONDAY_EPOCH - ANCHOR_EPOCH) / 86400 ))
 
         ACTIVE=false
         REASON=""
 
-        if [ "$DAYS" -lt 0 ]; then
+        if [ "$DAYS_MON" -lt -6 ]; then
           REASON="przed pierwszym cyklem (anchor $ANCHOR)"
-        elif [ $(( DAYS % CADENCE_DAYS )) -ne 0 ]; then
-          NEXT=$(( CADENCE_DAYS - (DAYS % CADENCE_DAYS) ))
-          REASON="poza cyklem co ${CADENCE_DAYS}d (dni od anchor=$DAYS; następny pon za ~${NEXT}d)"
         else
-          # Ten tydzień (pon=anchor+n*cadence) jest aktywny
-          if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
-            ACTIVE=true
-            REASON="tydzień cyklu discovery (pon $MONDAY)"
-          elif [ "$DOW" -eq 7 ]; then
-            ACTIVE=true
-            REASON="niedziela domknięcia cyklu (pon $MONDAY)"
+          # Marker = anchor + n*CADENCE. Tydzień pipeline startuje w poniedziałek
+          # w dniu markera albo w kolejny poniedziałek (55 nie dzieli się przez 7).
+          n_lo=$(( (DAYS_MON - 6) / CADENCE_DAYS ))
+          n_hi=$(( (DAYS_MON + CADENCE_DAYS + 6) / CADENCE_DAYS ))
+          [ "$n_lo" -lt 0 ] && n_lo=0
+
+          MATCH_N=""
+          MATCH_RAW=""
+          for n in $(seq "$n_lo" "$n_hi"); do
+            RAW_EPOCH=$(( ANCHOR_EPOCH + n * CADENCE_DAYS * 86400 ))
+            RAW=$(date -d "@$RAW_EPOCH" +%Y-%m-%d)
+            RAW_DOW=$(date -d "$RAW" +%u)
+            if [ "$RAW_DOW" -eq 1 ]; then
+              CYCLE_MONDAY="$RAW"
+            else
+              # kolejny poniedziałek po markerze
+              CYCLE_MONDAY=$(date -d "$RAW + $((8 - RAW_DOW)) days" +%Y-%m-%d)
+            fi
+            if [ "$CYCLE_MONDAY" = "$MONDAY" ]; then
+              MATCH_N="$n"
+              MATCH_RAW="$RAW"
+              break
+            fi
+          done
+
+          if [ -n "$MATCH_N" ]; then
+            if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
+              ACTIVE=true
+              REASON="tydzień cyklu n=$MATCH_N discovery (marker $MATCH_RAW → pon $MONDAY)"
+            elif [ "$DOW" -eq 7 ]; then
+              ACTIVE=true
+              REASON="niedziela domknięcia cyklu n=$MATCH_N (marker $MATCH_RAW → pon $MONDAY)"
+            else
+              REASON="sobota — brak jobów GU (cykl n=$MATCH_N, pon $MONDAY)"
+            fi
           else
-            REASON="sobota — brak jobów GU"
+            # Najbliższy następny marker → poniedziałek
+            if [ "$DAYS_MON" -lt 0 ]; then
+              NEXT_N=0
+            else
+              NEXT_N=$(( DAYS_MON / CADENCE_DAYS + 1 ))
+            fi
+            NEXT_RAW_EPOCH=$(( ANCHOR_EPOCH + NEXT_N * CADENCE_DAYS * 86400 ))
+            NEXT_RAW=$(date -d "@$NEXT_RAW_EPOCH" +%Y-%m-%d)
+            NEXT_RAW_DOW=$(date -d "$NEXT_RAW" +%u)
+            if [ "$NEXT_RAW_DOW" -eq 1 ]; then
+              NEXT_MON="$NEXT_RAW"
+            else
+              NEXT_MON=$(date -d "$NEXT_RAW + $((8 - NEXT_RAW_DOW)) days" +%Y-%m-%d)
+            fi
+            REASON="poza cyklem co ${CADENCE_DAYS}d (następny pon cyklu ≈ $NEXT_MON)"
           fi
         fi
 

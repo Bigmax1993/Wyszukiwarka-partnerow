@@ -11,7 +11,7 @@ Pipeline: **Serper → strony www → cache/Excel** (tryb **discovery-only**).
 **Produkcja (GHA/PC):** `run_config/mfg_gu_de.json` — **wszystkie 16 Bundesländer**, discovery w 5 częściach (pon–pt) z `--respect-cache`.  
 **Opcja ręczna:** `--rotate-bundesland` — jeden land na cykl (nie używane w GHA).
 
-Cadence **GHA:** co **6 tygodni** (42 dni) od **2026-09-21**. Task Scheduler na **PC** rejestruje zadania **co tydzień** (bez guarda 42 dni). Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`docs/LOCAL_VS_GHA.md`](docs/LOCAL_VS_GHA.md).
+Cadence **GHA:** od **2026-11-02** (ten poniedziałek jak wcześniej), potem co **55 dni** (tydzień wyrównany do poniedziałku). Task Scheduler na **PC** rejestruje zadania **co tydzień** (bez guarda). Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`docs/LOCAL_VS_GHA.md`](docs/LOCAL_VS_GHA.md).
 
 | Moduł | Plik |
 |-------|------|
@@ -125,7 +125,7 @@ python de_gu_bauunternehmen_scraper.py --run-config run_config\welle_nrw_by_bw.j
 
 ## Harmonogram
 
-**GHA:** co **6 tygodni** od **21.09.2026** (guard 42 dni).  
+**GHA:** **02–08.11.2026** jak w poprzednim planie, potem co **55 dni** (guard; start = poniedziałek markera lub kolejny).  
 **PC (Task Scheduler):** te same godziny **co tydzień** — bez guarda. Excel + Drive tylko na GHA.
 
 Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md), [`docs/LOCAL_VS_GHA.md`](docs/LOCAL_VS_GHA.md).
@@ -145,14 +145,15 @@ Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`schedule/PLAN
 
 | Cykl | Discovery (pon–pt 18:00) | Backfill + Excel (nd 06:00 / 09:00) |
 |------|--------------------------|------------------------------------|
-| 1 | **21–25.09.2026** | **27.09.2026** |
-| 2 | **02–06.11.2026** | **08.11.2026** |
-| 3 | **14–18.12.2026** | **20.12.2026** |
-| 4 | **25–29.01.2027** | **31.01.2027** |
-| 5 | **08–12.03.2027** | **14.03.2027** |
-| 6 | **19–23.04.2027** | **25.04.2027** |
-| 7 | **31.05–04.06.2027** | **06.06.2027** |
-| 8 | **12–16.07.2027** | **18.07.2027** |
+| hist. | **21–25.09.2026** (stary 42d) | **27.09.2026** |
+| 1 | **02–06.11.2026** | **08.11.2026** |
+| 2 | **28.12.2026–01.01.2027** | **03.01.2027** |
+| 3 | **22–26.02.2027** | **28.02.2027** |
+| 4 | **19–23.04.2027** | **25.04.2027** |
+| 5 | **14–18.06.2027** | **20.06.2027** |
+| 6 | **09–13.08.2027** | **15.08.2027** |
+| 7 | **04–08.10.2027** | **10.10.2027** |
+| 8 | **22–26.11.2027** | **28.11.2027** |
 
 Pełna tabela dzień-po-dniu: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md#kalendarz-uruchomień-gha-europewarsaw).
 
@@ -209,6 +210,6 @@ Kod treści/załącznika zostaje w repo (łatwy rollback), ale **SMTP do kontrah
 ├── scripts/                       # gdrive_*, RUN_ALL_TESTS, pipeline GHA
 ├── tests/
 ├── .github/workflows/
-├── .github/actions/gu-gha-window-guard/   # cadence 42 dni
+├── .github/actions/gu-gha-window-guard/   # cadence 55 dni
 └── docs/                          # GITHUB_ACTIONS, GOOGLE_DRIVE, LOCAL_VS_GHA, ROLLBACK_B2B
 ```

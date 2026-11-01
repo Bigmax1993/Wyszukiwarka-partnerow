@@ -2,7 +2,7 @@
 
 Zastąpiony przez **[PLAN_5_DNI.md](PLAN_5_DNI.md)**.
 
-Aktualny tryb: **discovery-only** z cadence **co 6 tygodni** od **2026-09-21** — patrz PLAN_5_DNI / `docs/GITHUB_ACTIONS.md` / `docs/LOCAL_VS_GHA.md`.
+Aktualny tryb: **discovery-only** z cadence **co 55 dni** od **2026-11-02** (ten tydzień jak wcześniej) — patrz PLAN_5_DNI / `docs/GITHUB_ACTIONS.md` / `docs/LOCAL_VS_GHA.md`.
 
 `register_tasks_3_dni.ps1` przekierowuje na `register_tasks_5_dni.ps1`.
 

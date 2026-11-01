@@ -7,8 +7,8 @@ Krótka mapa różnic — żeby nie mieszać cadence i zakresów jobów.
 | | GitHub Actions | PC (`register_tasks_5_dni.ps1`) |
 |--|----------------|----------------------------------|
 | Godziny | pon–pt 18:00, nd 06:00 (+ nd 09:00 Excel) | pon–pt 18:00, nd 06:00 |
-| Okres | **co 42 dni** od `2026-09-21` (guard) | **co tydzień** (bez guarda) |
-| Najbliższe cykle GHA | **02–08.11.2026**, **14–20.12.2026**, **25–31.01.2027** (pełna lista w [`GITHUB_ACTIONS.md`](GITHUB_ACTIONS.md#kalendarz-uruchomień-gha-europewarsaw)) | co tydzień bez ograniczenia |
+| Okres | **co 55 dni** od `2026-11-02` (guard; wyrównanie do pon) | **co tydzień** (bez guarda) |
+| Najbliższe cykle GHA | **02–08.11.2026**, **28.12.2026–03.01.2027**, **22–28.02.2027** (pełna lista w [`GITHUB_ACTIONS.md`](GITHUB_ACTIONS.md#kalendarz-uruchomień-gha-europewarsaw)) | co tydzień bez ograniczenia |
 | Excel Gmail + Drive xlsx | **nd 09:00** (tylko GHA) | **brak** — nie rejestrowane |
 
 Obowiązujące godziny PC bierze `register_tasks_5_dni.ps1`. Komentarze w nagłówkach `schedule/run_*_discovery.ps1` mogą być historyczne.
@@ -43,6 +43,6 @@ Nazwa pliku `run_czwartek.ps1` jest legacy — to **niedzielny backfill**, nie d
 
 ## Kiedy używać czego
 
-- **Produkcja kampanii / cadence 6 tyg.:** GHA (guard + artefakty + Excel/Drive).
+- **Produkcja kampanii / cadence 55 dni:** GHA (guard + artefakty + Excel/Drive).
 - **Dev / częstsze testy:** PC Task Scheduler lub ręczne `python … --run-config …`.
 - **Nie zakładaj**, że PC „sam” ograniczy się do tygodnia cyklu GHA — trzeba to wyłączyć / nie rejestrować zadań poza cyklem.
