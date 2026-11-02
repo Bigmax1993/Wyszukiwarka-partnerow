@@ -139,7 +139,7 @@ Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`schedule/PLAN
 | **Piątek** | **18:00** | `run_piatek_discovery.ps1` | `GU discovery` (część 5) → **chain** backfill |
 | **Niedziela** | **06:00** | `run_czwartek.ps1` (legacy nazwa = backfill) | `GU niedziela backfill` (cron + fallback) |
 | **Niedziela** | **09:00** | — | `GU poniedzialek excel email` → Gmail + Drive xlsx |
-| Prep / pełny Drive / send B2B | — | — | **OFF** |
+| Prep / pełny Drive / send B2B | — | — | **OFF** (discovery **bez** chain send) |
 
 ### Daty uruchomień GHA (tygodnie cyklu)
 
@@ -194,7 +194,7 @@ Kod treści/załącznika zostaje w repo (łatwy rollback), ale **SMTP do kontrah
 - Treść (gdy włączysz maile): `mfg_gu_inquiry_email_de.py` (tylko niemiecki)
 - Załącznik lokalny: `assets/campaign/MFG_Referenzliste_Einzelhandel.pptx`
 - Checklist rollback: [`docs/ROLLBACK_B2B.md`](docs/ROLLBACK_B2B.md)
-- Kill-switch: `DISABLE_CONTRACTOR_EMAILS=0` + usuń `if: false` z jobów send (`de_gu_tue.yml`, `de_gu_fri.yml`); ewentualnie dodaj cron/chain (obecnie tylko `workflow_dispatch`)
+- Kill-switch: `DISABLE_CONTRACTOR_EMAILS=0` + Enable workflow + usuń `if: false` z jobów send (`de_gu_tue.yml`, `de_gu_fri.yml`) + przywróć chain w `de_gu_pi.yml` (usuniety 2026-11-02) albo `gh workflow run`; szczegóły: [`docs/ROLLBACK_B2B.md`](docs/ROLLBACK_B2B.md)
 - Cc: tylko z `MAIL_CC` w `.env` — **bez** automatycznego `office@mfg-fliesen.de`
 
 ## Struktura repo

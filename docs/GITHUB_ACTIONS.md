@@ -11,7 +11,7 @@ Pipeline na GHA zbiera firmy (Serper + Claude), buduje Excel w artefaktach i w n
 1. wysyła **raport Excel** na `svinchak1993@gmail.com`
 2. uploaduje **tylko końcowy `.xlsx`** na Google Drive (`secrets.GDRIVE_FOLDER_ID`)
 
-**Nie wysyła maili B2B** do kontrahentów. **Pełny sync** `Wyniki/` (cache/logi/`wyslane`) jest **DISABLED**.
+**Nie wysyła maili B2B** do kontrahentów (brak chain do send po discovery; workflowy send wyłączone). **Pełny sync** `Wyniki/` (cache/logi/`wyslane`) jest **DISABLED**.
 
 Discovery używa `run_config/mfg_gu_de.json` (**16 Bundesländer**, bundesweit) — **bez** `--rotate-bundesland`. Artefakt discovery zawsze: `de-gu-wyniki-pi`.
 
@@ -32,7 +32,7 @@ Drive: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md). Plan: [`../schedule/PLAN_5_DNI.md`]
 |----------|------|---------|--------|---------|
 | **Tests** | `tests.yml` | push/PR → `master` | **aktywny** | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push → `master` | **aktywny** | smoke + walidacja secretów |
-| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00 + guard co 55 dni, ręcznie | **aktywny** | Discovery bundesweit → `de-gu-wyniki-pi` |
+| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00 + guard co 55 dni, ręcznie | **aktywny** | Discovery bundesweit → `de-gu-wyniki-pi`; pt → chain backfill; **bez** chain send B2B |
 | **GU niedziela backfill** | `de_gu_thu.yml` | cron nd 06:00 + guard, chain z pt, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
 | **GU poniedzialek prep** | `de_gu_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
 | **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron nd 09:00 + guard, ręcznie | **aktywny** | Excel → Gmail **+ Drive (tylko `.xlsx`)** |
@@ -107,14 +107,17 @@ Limit Serper w GHA: `SERPER_DAILY_LIMIT=1000` (domyślnie w kodzie też 1000).
 | Po sukcesie | Uruchamia | Efekt dziś |
 |-------------|-----------|------------|
 | Discovery **piątek** | `GU niedziela backfill` (`artifact_run_id` = bieżący run) | **działa od razu** (dispatch omija guard dnia; w tygodniu poza cyklem cron nd i tak jest skip) |
-| Discovery **pon–czw** | `GU wtorek send` | **no-op** (`if: false` na send) |
+| Discovery **pon–czw** | — | **brak chain** (maile B2B OFF; krok send usunięty z `de_gu_pi.yml` 2026-11-02) |
 | Backfill (cron nd 06:00) | — | zapasowy / restart, jeśli chain z pt nie wystarczy |
 | Backfill → Sync Drive | Sync Drive | step wyłączony |
 | Prep → send | send | step wyłączony |
 
+Send B2B (`GU wtorek send` / `GU poniedzialek send`) jest **DISABLED** (`disabled_manually` + `if: false`). Discovery **nie** odpala tych workflowów — wcześniejszy chain po pon–czw padał (`could not find any workflows named GU wtorek send`).
+
 Typowy przebieg w tygodniu cyklu:
 
 ```
+pon–czw discovery → stop (artefakt de-gu-wyniki-pi)
 pt discovery → (chain) backfill → nd 09:00 Excel+Drive
 (+ opcjonalnie nd 06:00 cron jako fallback backfill)
 ```

@@ -1,6 +1,6 @@
 # Rollback — włączenie maili B2B (MFG)
 
-Aktualnie SMTP do kontrahentów jest **OFF**. Ten checklist przywraca wysyłkę bez zakładania, że „wystarczy przywrócić schedule” — workflowy send mają dziś tylko `workflow_dispatch` i joby z `if: false`.
+Aktualnie SMTP do kontrahentów jest **OFF**. Ten checklist przywraca wysyłkę bez zakładania, że „wystarczy przywrócić schedule” — workflowy send są `disabled_manually`, mają tylko `workflow_dispatch`, joby z `if: false`, a discovery **nie** chainuje send.
 
 ## 1. Flagi środowiska
 
@@ -17,9 +17,11 @@ Pliki:
 
 Kroki:
 
-1. Usuń `if: false` z jobów send.
-2. (Opcjonalnie) dodaj `schedule:` / chain z discovery — dziś go **nie ma** do „przywrócenia”; trzeba dodać od zera albo odpalać `gh workflow run`.
-3. Sprawdź sekrety SMTP/IMAP wymagane przez YAML (często `MAIL_*`; nie mylić z samym raportem Excel).
+1. Włącz workflowy w UI GitHub (Actions → … → Enable workflow) — obecnie `disabled_manually`.
+2. Usuń `if: false` z jobów send.
+3. Przywróć chain w `.github/workflows/de_gu_pi.yml` po discovery pon–czw (krok usunięty 2026-11-02), np. `gha_chain_workflow.sh "GU wtorek send"` + `artifact_run_id` / `artifact_name=de-gu-wyniki-pi` — albo odpalać `gh workflow run` ręcznie. Opcjonalnie dodaj `schedule:`.
+4. Ustaw `DISABLE_CONTRACTOR_EMAILS=0` (patrz §1).
+5. Sprawdź sekrety SMTP/IMAP wymagane przez YAML (często `MAIL_*`; nie mylić z samym raportem Excel).
 
 ## 3. Treść i załącznik
 

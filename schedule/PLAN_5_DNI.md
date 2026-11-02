@@ -38,7 +38,7 @@ Cron odpala się co tydzień, ale joby startują tylko gdy guard = active (tydzi
 |-----------|--------|
 | Prep | cron OFF (tylko ręcznie) |
 | Pełny Sync Drive | DISABLED |
-| Send B2B pon/wt | DISABLED (`if: false`; tylko dispatch) |
+| Send B2B pon/wt | DISABLED (`disabled_manually` + `if: false`; discovery **nie** chainuje send) |
 
 ### Daty uruchomień (GHA)
 

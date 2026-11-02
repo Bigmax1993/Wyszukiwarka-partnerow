@@ -39,7 +39,7 @@ Nazwa pliku `run_czwartek.ps1` jest legacy — to **niedzielny backfill**, nie d
 | Raport Excel → Gmail | nd 09:00 ON | ręcznie: `scripts/send_excel_gmail.py` |
 | Upload końcowego `.xlsx` | nd 09:00 ON (`GDRIVE_FOLDER_ID`) | lokalnie przy `DISABLE_GOOGLE_DRIVE=0` |
 | Pełny sync `Wyniki/` | OFF | OFF (domyślnie) |
-| Send B2B | OFF (`if: false`) | OFF (`DISABLE_CONTRACTOR_EMAILS=1`) |
+| Send B2B | OFF (`disabled_manually` + `if: false`; brak chain z discovery) | OFF (`DISABLE_CONTRACTOR_EMAILS=1`) |
 
 ## Kiedy używać czego
 
