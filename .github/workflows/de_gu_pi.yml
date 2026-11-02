@@ -109,15 +109,25 @@ jobs:
           echo "Faza discovery: $PHASE"
 
           if [ "$PHASE" = "mon" ]; then
+            # Seed nowego tygodnia z końca poprzedniego cyklu.
+            # Discovery zawsze uploaduje de-gu-wyniki-pi; backfill → de-gu-wyniki-thu.
+            # Legacy de-gu-wyniki-fri już nie powstaje.
             RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-              --jq '[.artifacts[] | select(.name=="de-gu-wyniki-fri" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+              --jq '[.artifacts[] | select(.name=="de-gu-wyniki-thu" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+            ARTIFACT_NAME="de-gu-wyniki-thu"
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+                --jq '[.artifacts[] | select(.name=="de-gu-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+              ARTIFACT_NAME="de-gu-wyniki-pi"
+            fi
             if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
               echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-              echo "artifact-name=de-gu-wyniki-fri" >> "$GITHUB_OUTPUT"
-              echo "resume=0" >> "$GITHUB_OUTPUT"
-              echo "Poniedzialek: nowy tydzien, cache z de-gu-wyniki-fri (run $RUN_ID)"
+              echo "artifact-name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+              # Nowy tydzień discovery, ale z istniejącym cache firm (kontynuacja kumulacji).
+              echo "resume=1" >> "$GITHUB_OUTPUT"
+              echo "Poniedzialek: nowy tydzien, seed $ARTIFACT_NAME (run $RUN_ID) + --respect-cache"
             else
-              echo "Poniedzialek: brak fri — pierwszy cykl (pusty start)"
+              echo "Poniedzialek: brak thu/pi — pierwszy cykl (pusty start)"
             fi
           else
             RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
@@ -136,7 +146,7 @@ jobs:
         if: steps.prev_run.outputs.run-id != ''
         uses: actions/download-artifact@v4
         with:
-          name: ${{ steps.prev_run.outputs.artifact-name || 'de-gu-wyniki-fri' }}
+          name: ${{ steps.prev_run.outputs.artifact-name || 'de-gu-wyniki-pi' }}
           github-token: ${{ github.token }}
           run-id: ${{ steps.prev_run.outputs.run-id }}
           path: .

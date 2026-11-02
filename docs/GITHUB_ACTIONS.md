@@ -153,8 +153,8 @@ pon→pi | wt→pi | sro→pi | czw→pi | pt→pi
 ```
 
 - **Pon–pt:** upload zawsze jako `de-gu-wyniki-pi` (nie mon/tue/wed).
-- **Poniedziałek:** wznawia z `de-gu-wyniki-fri` z poprzedniego cyklu (jeśli jest), inaczej świeży start.
-- **Wt–pt:** kontynuacja z ostatniego `de-gu-wyniki-pi`.
+- **Poniedziałek:** seed z `de-gu-wyniki-thu` (po backfillu) albo fallback `de-gu-wyniki-pi`, z `--respect-cache` (kumulacja); brak artefaktu = świeży start.
+- **Wt–pt:** kontynuacja z ostatniego `de-gu-wyniki-pi` + `--respect-cache` (harmonogram cron; np. po discovery 2026-11-02 run z artefaktem pi).
 - **Backfill:** `de-gu-wyniki-thu` (`--verify-pending-contacts --reverify-all-contacts` + `mfg_gu_de.json`).
 - **Nd 09:00:** artefakt `thu` (fallback `mon`) → Gmail + Drive (tylko `de_gu_bauunternehmen_kontakte.xlsx`).
 - Ręczne wznawianie: input `resume_artifact_run_id`.
