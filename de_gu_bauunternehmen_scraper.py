@@ -2734,8 +2734,14 @@ def clear_serper_search_caches(cache: dict) -> tuple[int, int]:
     return n_serper, n_discovery
 
 
-def reset_serper_daily_for_discovery(cache: dict) -> None:
-    """Sobota discovery — pełny budżet Serper na dzień kampanii."""
+def reset_serper_daily_for_discovery(
+    cache: dict, *, keep_search_caches: bool = False
+) -> None:
+    """Odśwież dzienny budżet Serper na dzień kampanii.
+
+    keep_search_caches=True (--respect-cache / wznowienie): nie czyść serper +
+    serper_discovery — kontynuacja od zapisanych zapytań zamiast od zera.
+    """
     today = campaign_today()
     daily = cache.setdefault("serper_daily", {})
     old = int(daily.get(today, 0) or 0)
@@ -2747,6 +2753,19 @@ def reset_serper_daily_for_discovery(cache: dict) -> None:
         parts_ex = [f"serper_api_exhausted wyczyszczone ({today})"]
     else:
         parts_ex = []
+    if keep_search_caches:
+        n_serper = len(cache.get("serper") or {})
+        n_discovery = len(cache.get("serper_discovery") or {})
+        parts = [
+            f"zachowano cache serper={n_serper}, serper_discovery={n_discovery}"
+        ]
+        if old:
+            parts.insert(
+                0, f"limit było {old}, start z {SERPER_DAILY_LIMIT} zapytań"
+            )
+        parts.extend(parts_ex)
+        console_step(f"Serper-Reset ({today}): " + "; ".join(parts))
+        return
     n_serper, n_discovery = clear_serper_search_caches(cache)
     if old or n_serper or n_discovery or parts_ex:
         parts = []
@@ -6233,7 +6252,10 @@ def run_scraper(
 
     cache = load_cache(logger)
     if serper_only and discovery_mode != "emails_only" and not rebuild_from_cache:
-        reset_serper_daily_for_discovery(cache)
+        reset_serper_daily_for_discovery(
+            cache,
+            keep_search_caches=not DISCOVERY_IGNORE_CONTACT_CACHE,
+        )
         ensure_serper_budget_or_fail(cache)
     if rebuild_from_cache:
         cache_rows = build_all_rows_from_cache(cache)
@@ -7059,7 +7081,7 @@ if __name__ == "__main__":
             globals()["DISCOVERY_IGNORE_CONTACT_CACHE"] = False
             print(
                 "[TRYB] Discovery respektuje contacts JSON (pomija znane URL, "
-                "bez ponownego www)."
+                "bez ponownego www) i zachowuje serper_discovery cache."
             )
         if "--bundesland" in sys.argv:
             i = sys.argv.index("--bundesland")
