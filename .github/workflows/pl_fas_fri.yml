@@ -2,7 +2,7 @@ name: PL spedycja wtorek send
 
 # B2B partia 2 — cron wt 09:00 Europe/Warsaw (dzień po partii 1).
 # Harmonogram: discovery pon–pt → backfill → Excel nd → (następny) pon send 1 → wt send 2.
-# Guard: FAS_GUARD_MODE=send_followup (tydzień PO niedzieli Excel, co 55 dni).
+# Guard: FAS_GUARD_MODE=send_followup (tydzień PO niedzieli Excel, co tydzień).
 on:
   schedule:
     - cron: "0 9 * * 2"

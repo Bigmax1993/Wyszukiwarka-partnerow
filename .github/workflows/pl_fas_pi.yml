@@ -1,7 +1,7 @@
 name: PL spedycja discovery
 
 # Discovery-only: cron pon-pt 18:00 Europe/Warsaw.
-# Guard: co 55 dni od 2026-11-02 (pierwszy tydzień jak wcześniej; potem +55d).
+# Guard: co tydzień od 2026-11-02 (GU_CADENCE_DAYS=7).
 on:
   schedule:
     - cron: "0 18 * * 1"

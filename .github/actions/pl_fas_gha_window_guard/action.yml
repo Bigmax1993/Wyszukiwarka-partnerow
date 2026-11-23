@@ -1,11 +1,11 @@
 name: PL FAS GHA schedule window guard
 description: >-
-  Cron: aktywny co 55 dni od 2026-11-02.
+  Cron: aktywny co tydzień od 2026-11-02 (GU_CADENCE_DAYS=7).
   Tryb pipeline (domyślny): tydzień cyklu pon–pt discovery + niedziela backfill/excel.
   Tryb send_followup (env FAS_GUARD_MODE=send_followup): pon/wt 09:00
   w tygodniu PO niedzieli Excel — B2B partia 1/2 według harmonogramu.
   workflow_dispatch zawsze active=true.
-  Opcjonalnie: GU_CADENCE_ANCHOR, GU_CADENCE_DAYS (domyślnie 55).
+  Opcjonalnie: GU_CADENCE_ANCHOR, GU_CADENCE_DAYS (domyślnie 7).
 outputs:
   active:
     description: "true = uruchom pipeline, false = pomiń scheduled"
@@ -29,7 +29,7 @@ runs:
         fi
 
         ANCHOR="${GU_CADENCE_ANCHOR:-2026-11-02}"
-        CADENCE_DAYS="${GU_CADENCE_DAYS:-55}"
+        CADENCE_DAYS="${GU_CADENCE_DAYS:-7}"
         MODE="${FAS_GUARD_MODE:-pipeline}"
         DOW=$(date +%u)   # 1=Mon … 7=Sun
         TODAY=$(date +%Y-%m-%d)

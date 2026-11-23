@@ -2,7 +2,7 @@
 
 ## Stan aktualny (GHA)
 
-Wysyłka B2B jest **włączona na GitHub Actions** według kolejności tygodnia cyklu (guard 55 dni):
+Wysyłka B2B jest **włączona na GitHub Actions** według kolejności tygodnia cyklu (guard **co tydzień**):
 
 | Krok | Kiedy (Europe/Warsaw) | Workflow |
 |------|----------------------|----------|

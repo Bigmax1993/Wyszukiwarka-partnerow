@@ -36,7 +36,7 @@ Drive: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md). Plan: [`../schedule/PLAN_5_DNI.md`]
 |----------|------|---------|--------|---------|
 | **Tests** | `tests.yml` | push/PR → `master` | **aktywny** | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push → `master` | **aktywny** | smoke + walidacja secretów |
-| **PL spedycja discovery** | `pl_fas_pi.yml` | cron pon–pt 18:00 + guard co 55 dni, ręcznie | **aktywny** | Discovery PL (16 woj.) → `pl-spedycja-wyniki-pi`; pt → chain backfill; **bez** chain send B2B |
+| **PL spedycja discovery** | `pl_fas_pi.yml` | cron pon–pt 18:00 + guard **co tydzień**, ręcznie | **aktywny** | Discovery PL (16 woj.) → `pl-spedycja-wyniki-pi`; pt → chain backfill; **bez** chain send B2B |
 | **PL spedycja niedziela backfill** | `pl_fas_thu.yml` | cron nd 06:00 + guard, chain z pt, ręcznie | **aktywny** | Backfill + Excel → `pl-spedycja-wyniki-thu` |
 | **PL spedycja poniedzialek prep** | `pl_fas_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
 | **PL spedycja poniedzialek excel email** | `pl_fas_mon_excel_email.yml` | cron nd 09:00 + guard, ręcznie | **aktywny** | Excel → Gmail **+ Drive (tylko `.xlsx`)** |
@@ -60,15 +60,12 @@ Nazwy plików YAML (`*_tue`, `*_fri`, `*_thu`) są legacy — liczy się **displ
 
 ## Harmonogram cron (Europe/Warsaw) — aktywne
 
-Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/pl_fas_gha_window_guard`) odpala joby **co 55 dni**:
+Cron i **guard** (`.github/actions/pl_fas_gha_window_guard`) — **co tydzień**:
 
 | Parametr | Wartość |
 |----------|---------|
-| Anchor (poniedziałek) | `2026-11-02` (`GU_CADENCE_ANCHOR`) — ten tydzień jak w poprzednim planie |
-| Okres | **55 dni** (`GU_CADENCE_DAYS`, domyślnie 55) od anchora |
-| Start tygodnia pipeline | poniedziałek **w dniu** markera `anchor + n·55` albo **kolejny** poniedziałek (55 ∤ 7) |
-| Kolejne poniedziałki | `2026-11-02`, `2026-12-28`, `2027-02-22`, `2027-04-19`, … |
-| Historyczny (stary 42d) | `2026-09-21`–`2026-09-27` (już po) |
+| Anchor (poniedziałek) | `2026-11-02` (`GU_CADENCE_ANCHOR`) |
+| Okres | **7 dni** (`GU_CADENCE_DAYS`, domyślnie **7**) — każdy tydzień od anchora |
 | Aktywne dni cyklu (pipeline) | pon–pt (discovery) + **niedziela** (backfill + excel) |
 | Follow-up B2B | **pon/wt** tygodnia *po* niedzieli Excel (`FAS_GUARD_MODE=send_followup`) |
 | Sobota | nieaktywna |
@@ -88,22 +85,18 @@ Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/pl_fas_gha_window_g
 
 ### Kalendarz uruchomień GHA (Europe/Warsaw)
 
-Konkretne daty tygodni cyklu (guard = active). Poza tymi tygodniami cron jest **skip**.  
-**02–08.11.2026** = ten sam tydzień co w starym planie; od niego cadence **55 dni** (start tygodnia wyrównany do poniedziałku → odstęp zwykle 56 dni).
+Od **2026-11-02** pipeline i B2B lecą **co tydzień** (bez skipów między tygodniami).
 
-| Cykl | Marker (+55d) | Pon 18:00 | Wt 18:00 | Śr 18:00 | Czw 18:00 | Pt 18:00 → chain backfill | Nd 06:00 backfill | Nd 09:00 Excel+Drive |
-|------|---------------|-----------|----------|----------|-----------|---------------------------|-------------------|----------------------|
-| hist. | (stary 42d) | **2026-09-21** | 2026-09-22 | 2026-09-23 | 2026-09-24 | 2026-09-25 | 2026-09-27 | 2026-09-27 |
-| 1 | 2026-11-02 | **2026-11-02** | 2026-11-03 | 2026-11-04 | 2026-11-05 | 2026-11-06 | 2026-11-08 | 2026-11-08 |
-| 2 | 2026-12-27 | **2026-12-28** | 2026-12-29 | 2026-12-30 | 2026-12-31 | 2027-01-01 | 2027-01-03 | 2027-01-03 |
-| 3 | 2027-02-20 | **2027-02-22** | 2027-02-23 | 2027-02-24 | 2027-02-25 | 2027-02-26 | 2027-02-28 | 2027-02-28 |
-| 4 | 2027-04-16 | **2027-04-19** | 2027-04-20 | 2027-04-21 | 2027-04-22 | 2027-04-23 | 2027-04-25 | 2027-04-25 |
-| 5 | 2027-06-10 | **2027-06-14** | 2027-06-15 | 2027-06-16 | 2027-06-17 | 2027-06-18 | 2027-06-20 | 2027-06-20 |
-| 6 | 2027-08-04 | **2027-08-09** | 2027-08-10 | 2027-08-11 | 2027-08-12 | 2027-08-13 | 2027-08-15 | 2027-08-15 |
-| 7 | 2027-09-28 | **2027-10-04** | 2027-10-05 | 2027-10-06 | 2027-10-07 | 2027-10-08 | 2027-10-10 | 2027-10-10 |
-| 8 | 2027-11-22 | **2027-11-22** | 2027-11-23 | 2027-11-24 | 2027-11-25 | 2027-11-26 | 2027-11-28 | 2027-11-28 |
-| 9 | 2028-01-16 | **2028-01-17** | 2028-01-18 | 2028-01-19 | 2028-01-20 | 2028-01-21 | 2028-01-23 | 2028-01-23 |
-| 10 | 2028-03-11 | **2028-03-13** | 2028-03-14 | 2028-03-15 | 2028-03-16 | 2028-03-17 | 2028-03-19 | 2028-03-19 |
+Przykład jednego obrotu:
+
+| Krok | Kiedy |
+|------|--------|
+| Discovery | pon–pt **18:00** |
+| Backfill | pt chain **lub** nd **06:00** |
+| Excel + Drive | nd **09:00** |
+| B2B partia 1 / 2 | **następny** pon/wt **09:00** (`send_followup`) |
+
+W poniedziałek tygodnia N+1: rano send (po Excelu tygodnia N), wieczorem discovery nowego tygodnia.
 
 Wyłączone z crona: prep, pełny sync Drive. Send B2B: **ON** (pon/wt 09:00 + guard).
 

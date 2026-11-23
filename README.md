@@ -15,7 +15,7 @@ Pipeline: **Serper → strony www → cache/Excel** (+ B2B na GHA według harmon
 **Produkcja (GHA/PC):** `run_config/pl_fas_spedycja.json` — **wszystkie 16 województw**, discovery w 5 częściach (pon–pt) z `--respect-cache`.  
 **Opcja ręczna:** `--rotate-bundesland` — jedno województwo na cykl (nie używane w GHA; flaga legacy).
 
-Cadence **GHA:** od **2026-11-02**, potem co **55 dni** (tydzień wyrównany do poniedziałku). Task Scheduler na **PC** rejestruje zadania **co tydzień** (bez guarda). Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`docs/LOCAL_VS_GHA.md`](docs/LOCAL_VS_GHA.md).
+Cadence **GHA i PC:** **co tydzień** (GHA guard: `GU_CADENCE_DAYS=7` od `2026-11-02`). Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`docs/LOCAL_VS_GHA.md`](docs/LOCAL_VS_GHA.md).
 
 | Moduł | Plik |
 |-------|------|
@@ -156,8 +156,7 @@ Inne configi:
 
 ## Harmonogram
 
-**GHA:** **02–08.11.2026** jak w poprzednim planie, potem co **55 dni** (guard; start = poniedziałek markera lub kolejny).  
-**PC (Task Scheduler):** te same godziny **co tydzień** — bez guarda. Excel + Drive tylko na GHA.
+**GHA / PC:** **co tydzień** — discovery pon–pt 18:00 → backfill/Excel nd → B2B pon/wt 09:00. Excel + Drive tylko na GHA.
 
 Szczegóły: [`docs/GITHUB_ACTIONS.md`](docs/GITHUB_ACTIONS.md), [`schedule/PLAN_5_DNI.md`](schedule/PLAN_5_DNI.md), [`docs/LOCAL_VS_GHA.md`](docs/LOCAL_VS_GHA.md).
 
