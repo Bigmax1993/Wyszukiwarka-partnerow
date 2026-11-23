@@ -1,9 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Pełny crawl witryny (ta sama domena) przed weryfikacją Claude."""
+"""
+Pełny crawl witryny (ta sama domena) przed weryfikacją Claude.
+
+Co robi ten moduł
+-----------------
+Zbiera HTML z **wielu podstron jednej firmy** (BFS, tylko ta sama domena
+rejestracyjna), parsuje każdą stronę callbackiem scrapera i składa wynik
+pod Claude / filtr ICP — żeby weryfikacja nie opierała się tylko na homepage.
+
+Przepływ::
+
+    start URL → kolejka BFS → fetch_page_html → parse_html_page
+              → extract_all_internal_links (ta sama domena)
+              → format_crawl_text_for_claude (tekst do LLM)
+
+Limity: ``MAX_SITE_CRAWL_PAGES`` (domyślnie 80, env ``SITE_CRAWL_MAX_PAGES``).
+Pomija PDF/obrazy/CSS/JS, ``mailto:``, feedy WordPress itd.
+Nazwa modułu bez zmian.
+"""
 from __future__ import annotations
 
 import os
-import re
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from typing import Callable
@@ -13,12 +30,14 @@ from bs4 import BeautifulSoup  # pyright: ignore[reportMissingModuleSource]
 
 from email_targeting import get_registrable_domain
 
-# Bezpieczny limit — małe witryny GU zwykle < 40 podstron
+# Bezpieczny limit — małe witryny spedycyjne zwykle << 80 podstron.
+# Env ``SITE_CRAWL_MAX_PAGES`` może podnieść/obciąć (min. 10).
 MAX_SITE_CRAWL_PAGES = 80
 _SITE_CRAWL_MAX_ENV = (os.environ.get("SITE_CRAWL_MAX_PAGES") or "").strip()
 if _SITE_CRAWL_MAX_ENV.isdigit():
     MAX_SITE_CRAWL_PAGES = max(10, int(_SITE_CRAWL_MAX_ENV))
 
+# Rozszerzenia plików — nie kolejujemy jako „strony HTML” do parse/Claude.
 _SKIP_PATH_EXTENSIONS = (
     ".pdf",
     ".jpg",
@@ -50,6 +69,7 @@ _SKIP_PATH_EXTENSIONS = (
     ".ico",
 )
 
+# Ścieżki / schematy poza treścią oferty (API WP, feed, protokoły nie-HTTP).
 _SKIP_PATH_MARKERS = (
     "/wp-json/",
     "/feed/",
@@ -62,6 +82,15 @@ _SKIP_PATH_MARKERS = (
 
 @dataclass
 class WebsiteCrawlResult:
+    """
+    Wynik jednego BFS po witrynie.
+
+    ``pages``: URL → dict z parsera (maile, telefony, page_text, contact_urls…).
+    ``urls_visited``: kolejność udanych fetch+parse.
+    ``urls_skipped``: pusty HTML / błąd parse.
+    ``capped``: True gdy kolejka nie pusta po limicie stron.
+    """
+
     pages: dict[str, dict] = field(default_factory=dict)
     urls_visited: list[str] = field(default_factory=list)
     urls_skipped: list[str] = field(default_factory=list)
@@ -69,10 +98,16 @@ class WebsiteCrawlResult:
 
 
 def website_crawl_result_to_dict(result: WebsiteCrawlResult) -> dict:
+    """Serializacja do cache JSON (``asdict``)."""
     return asdict(result)
 
 
 def website_crawl_result_from_dict(data: dict) -> WebsiteCrawlResult:
+    """
+    Deserializacja z cache — odporna na braki pól / zły typ.
+
+    Nie-dict → pusty ``WebsiteCrawlResult`` (bezpieczny no-op dla callera).
+    """
     if not isinstance(data, dict):
         return WebsiteCrawlResult()
     return WebsiteCrawlResult(
@@ -89,6 +124,13 @@ def _normalize_crawl_url(
     site_domain: str,
     normalize_website: Callable[[str], str],
 ) -> str:
+    """
+    Czyści kandydata URL do kolejki BFS albo zwraca ``\"\"`` (odrzut).
+
+    Wymaga http(s), usuwa fragment ``#…``, odpala ``normalize_website`` scrapera,
+    filtruje rozszerzenia / markery skip oraz **obcą domenę** (tylko
+    ``get_registrable_domain == site_domain``).
+    """
     url = (raw_url or "").strip()
     if not url or url.startswith(("#", "mailto:", "tel:", "javascript:")):
         return ""
@@ -119,6 +161,13 @@ def extract_all_internal_links(
     normalize_website: Callable[[str], str],
     extra_urls: list[str] | None = None,
 ) -> list[str]:
+    """
+    Zbiera unikalne linki wewnętrzne z HTML (+ opcjonalne ``extra_urls``).
+
+    ``extra_urls`` zwykle z parsera (np. ``contact_urls``: /kontakt, /o-nas).
+    ``page_url`` służy do ``urljoin`` względnych ``href``. Kolejność: najpierw
+    extra, potem ``<a href>`` z BeautifulSoup — bez duplikatów.
+    """
     out: list[str] = []
     seen: set[str] = set()
 
@@ -149,6 +198,12 @@ def format_crawl_text_for_claude(
     purpose: str = "verify",
     per_section_max_chars: int | None = None,
 ) -> str:
+    """
+    Składa tekst z ``WebsiteCrawlResult`` pod prompt Claude (verify / extract).
+
+    Deleguje do ``claude_page_text.format_crawl_text_for_claude`` — ten moduł
+    tylko trzyma kontrakt wyniku crawla; limity znaków są w warstwie Claude.
+    """
     from claude_page_text import (
         CRAWL_SECTION_MAX_CHARS,
         format_crawl_text_for_claude as _format_for_claude,
@@ -172,8 +227,16 @@ def crawl_entire_website(
     max_pages: int = MAX_SITE_CRAWL_PAGES,
 ) -> WebsiteCrawlResult:
     """
-  BFS po całej domenie. Każda strona: fetch HTML → parse → odkryj linki wewnętrzne.
-  """
+    BFS po całej domenie startowego URL.
+
+    Każda strona: ``fetch_page_html`` → ``parse_html_page`` → odkryj linki
+    wewnętrzne (HTML + ``contact_urls`` z parse) → dorzuć do kolejki.
+    Zależności fetch/parse/normalize wstrzykuje scraper (requests, cookie
+    Playwright, ten sam parser kontaktów co hot-path).
+
+    ``on_step`` — opcjonalny progress UI. Przy wyczerpaniu limitu ustawia
+    ``result.capped`` i loguje ile URL zostało w kolejce.
+    """
     start = normalize_website(website)
     if not start:
         return WebsiteCrawlResult()
@@ -204,7 +267,7 @@ def crawl_entire_website(
         try:
             parsed = parse_html_page(url, html)
         except Exception as exc:
-            logger.info("Website-Crawl parse fehlgeschlagen %s: %s", url, exc)
+            logger.info("Website-Crawl: błąd parse %s: %s", url, exc)
             result.urls_skipped.append(url)
             continue
 
@@ -228,7 +291,7 @@ def crawl_entire_website(
     if queue:
         result.capped = True
         logger.info(
-            "Website-Crawl: Limit %s Seiten erreicht (%s übrig in Queue)",
+            "Website-Crawl: limit %s stron (w kolejce zostało %s)",
             max_pages,
             len(queue),
         )

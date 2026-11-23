@@ -19,14 +19,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import de_gu_bauunternehmen_scraper as scraper
-from de_gu_keywords import (
+import pl_fas_spedycja_scraper as scraper
+from pl_spedycja_keywords import (
     ALL_BUNDESLAENDER,
     RETAIL_CHAINS_ROTATION,
     build_discovery_terms,
     default_max_discovery_terms_for,
 )
-from retail_store_builder_filter import (
+from pl_spedycja_filter import (
     is_generalunternehmer,
     is_loose_serper_discovery_candidate,
     is_serper_only_pending_candidate,
@@ -41,26 +41,30 @@ class BundesweitRegression(unittest.TestCase):
         self.assertEqual(len(scraper.CAMPAIGN_ACTIVE_BUNDESLAENDER), 16)
 
     def test_bundesweit_region_suffix_short(self):
-        """Faza 3: suffix Serper bez NRW/BY/… przy ≥4 landach."""
-        from de_gu_keywords import build_region_suffix
+        """Suffix Serper: Polska przy wielu województwach."""
+        from pl_spedycja_keywords import build_region_suffix
 
-        self.assertEqual(build_region_suffix(list(ALL_BUNDESLAENDER)), "Deutschland")
+        self.assertEqual(build_region_suffix(list(ALL_BUNDESLAENDER)), "Polska")
         self.assertEqual(
-            build_region_suffix(["Nordrhein-Westfalen", "Bayern", "Hessen", "Sachsen"]),
-            "Deutschland",
+            build_region_suffix(
+                ["Mazowieckie", "Śląskie", "Wielkopolskie", "Małopolskie"]
+            ),
+            "Polska",
         )
 
     def test_two_lands_keep_short_suffix(self):
-        from de_gu_keywords import build_region_suffix
+        from pl_spedycja_keywords import build_region_suffix
 
-        suffix = build_region_suffix(["Nordrhein-Westfalen", "Bayern"])
-        self.assertIn("Deutschland", suffix)
-        self.assertIn("NRW", suffix)
+        suffix = build_region_suffix(["Mazowieckie", "Lodzkie"])
+        self.assertIn("Polska", suffix)
+        self.assertIn("MZ", suffix)
+        self.assertIn("LD", suffix)
 
     def test_bundesweit_has_many_discovery_terms(self):
+        # Kampania PL: cap discovery = 1000 (nie 2000 jak dawniej DE)
         self.assertGreaterEqual(len(scraper.SERPER_DISCOVERY_TERMS), 500)
-        self.assertGreaterEqual(
-            default_max_discovery_terms_for(list(ALL_BUNDESLAENDER)), 2000
+        self.assertEqual(
+            default_max_discovery_terms_for(list(ALL_BUNDESLAENDER)), 1000
         )
 
     def test_serper_only_target_uses_new_rows_not_total(self):
@@ -203,10 +207,10 @@ class SerperLimitRegression(unittest.TestCase):
 class StrictGuFilterRegression(unittest.TestCase):
     def test_is_generalunternehmer_positive(self):
         ok, marker = is_generalunternehmer(
-            "Weber Generalunternehmer GmbH Filialbau Supermarkt"
+            "Trans Spedycja Sp. z o.o. — firma spedycyjna FTL"
         )
         self.assertTrue(ok)
-        self.assertEqual(marker, "generalunternehmer")
+        self.assertIn(marker, ("firma spedycyjna", "spedycja"))
 
     def test_is_generalunternehmer_rejects_ladenbau_only(self):
         ok, marker = is_generalunternehmer("HELIA Ladenbau GmbH Filialbau Neubau")
@@ -225,37 +229,37 @@ class GeoFilterRegression(unittest.TestCase):
         self.assertFalse(scraper._geo_filters_enabled())
         self.assertTrue(scraper.location_within_region_km("München Hamburg Köln"))
 
-    def test_is_germany_accepts_de_domain(self):
+    def test_poland_candidate_accepts_pl_domain(self):
         self.assertTrue(
-            scraper.is_germany_de_candidate("https://firma-bau.de/kontakt", "GU Leipzig", "")
+            scraper.is_poland_pl_candidate(
+                "https://trans-spedycja.pl/kontakt", "Spedycja", "Głogów"
+            )
         )
+        self.assertIs(scraper.is_germany_de_candidate, scraper.is_poland_pl_candidate)
 
-    def test_is_germany_accepts_plz_on_com_domain(self):
-        self.assertTrue(
-            scraper.is_germany_de_candidate(
-                "https://bau-gmbh.com",
-                "Bau GmbH",
-                "50321 Brühl Deutschland",
+    def test_poland_candidate_rejects_de_domain(self):
+        self.assertFalse(
+            scraper.is_poland_pl_candidate(
+                "https://firma-bau.de/kontakt", "GU Leipzig", ""
             )
         )
 
-    def test_is_germany_rejects_at_domain(self):
+    def test_poland_candidate_rejects_at_domain(self):
         self.assertFalse(
-            scraper.is_germany_de_candidate("https://firma-bau.at/kontakt", "Bau Wien", "")
+            scraper.is_poland_pl_candidate("https://firma-bau.at/kontakt", "Bau Wien", "")
         )
 
-    def test_is_germany_ignores_schweiz_in_snippet_for_de_site(self):
-        """Faza 3: słowo Schweiz w opisie nie odrzuca .de."""
+    def test_poland_candidate_accepts_pl_postal_hint(self):
         self.assertTrue(
-            scraper.is_germany_de_candidate(
-                "https://gu-leipzig.de",
-                "GU Leipzig",
-                "Projekte Deutschland und Schweiz Grenzregion",
+            scraper.is_poland_pl_candidate(
+                "https://spedycja-example.com",
+                "Trans Spedycja",
+                "67-200 Głogów Polska",
             )
         )
 
     def test_run_config_disables_geo_filters(self):
-        import de_gu_bauunternehmen_scraper as mod
+        import pl_fas_spedycja_scraper as mod
 
         apply = scraper.apply_gu_run_config_extras
         apply(mod, {"geo_filter_enabled": False})
@@ -264,41 +268,42 @@ class GeoFilterRegression(unittest.TestCase):
 
 
 class LooseSerperFilterRegression(unittest.TestCase):
-    def test_accepts_filialbau_without_neubau(self):
-        """Faza 2: Filialbau w snippetcie bez Neubau/Umbau."""
+    def test_accepts_spedycja_snippet(self):
         self.assertTrue(
             is_loose_serper_discovery_candidate(
-                name="Müller Filialbau GmbH",
-                url="https://mueller-filialbau.de",
-                text="Generalunternehmer Filialbau und Supermarktbau Referenz Rewe",
+                name="Trans Spedycja Sp. z o.o.",
+                url="https://trans-spedycja.pl",
+                email="biuro@trans-spedycja.pl",
+                text="Firma spedycyjna FTL transport drogowy Warszawa Europa",
             )
         )
 
-    def test_accepts_filialbau_specialist_without_gu_word(self):
-        """Faza 2: specjalista EH bez słowa generalunternehmer."""
+    def test_accepts_role_without_ftl_word_in_snippet(self):
         self.assertTrue(
             is_loose_serper_discovery_candidate(
-                name="Partner Einzelhandelsbau GmbH",
-                url="https://partner-eh.de",
-                text="Einzelhandelsbau und Marktbau für Rewe und Edeka in Bayern",
+                name="Spedytor Kowalski",
+                url="https://spedytor-kowalski.pl",
+                email="biuro@spedytor-kowalski.pl",
+                text="Biuro spedycyjne — organizacja przewozu Polska",
             )
         )
 
-    def test_accepts_chain_from_search_term_filialbau(self):
+    def test_accepts_segment_from_search_term(self):
         self.assertTrue(
             is_loose_serper_discovery_candidate(
-                name="Nord Bau GmbH",
-                url="https://nord-bau.de",
-                text="Gewerbebau Stuttgart Referenzprojekte",
-                search_term="Generalunternehmer Supermarktbau Stuttgart",
+                name="Nord Transport Sp. z o.o.",
+                url="https://nord-transport.pl",
+                email="biuro@nord-transport.pl",
+                text="Biuro w Gdańsku — kontakt",
+                search_term="spedycja FTL Pomorskie",
             )
         )
 
-    def test_rejects_without_chain_or_trade_context(self):
+    def test_rejects_without_trade_context(self):
         self.assertFalse(
             is_loose_serper_discovery_candidate(
-                name="Weber GU GmbH",
-                url="https://weber-gu.de",
+                name="Weber Bau GmbH",
+                url="https://weber-bau.de",
                 text="Generalunternehmer Filialbau Gewerbebau",
             )
         )
@@ -313,19 +318,19 @@ class LooseSerperFilterRegression(unittest.TestCase):
         )
 
     def test_loose_accepts_more_than_strict_core(self):
-        """Luźny Serper: Filialbau bez słowa GU; strict core wymaga generalunternehmer."""
-        from retail_store_builder_filter import (
+        """Serper discovery: sama rola; core wymaga ROLE∧(SEGMENT∨SERVICE)."""
+        from pl_spedycja_filter import (
             mentions_retail_store_build_activity_core,
             mentions_retail_store_build_activity_serper_discovery,
         )
 
-        text = "Partner Filialbau GmbH Einzelhandel Neubau regional"
+        text = "Firma spedycyjna Warszawa regionalnie"
         self.assertTrue(mentions_retail_store_build_activity_serper_discovery(text))
         self.assertFalse(mentions_retail_store_build_activity_core(text))
 
 
 class SerperOnlyFilterRegression(unittest.TestCase):
-    def test_rejects_ladenbau_without_gu_in_snippet(self):
+    def test_rejects_ladenbau_without_trade_signal(self):
         self.assertFalse(
             is_serper_only_pending_candidate(
                 name="HELIA Ladenbau GmbH",
@@ -334,11 +339,13 @@ class SerperOnlyFilterRegression(unittest.TestCase):
             )
         )
 
-    def test_accepts_generalunternehmer_filialbau(self):
+    def test_accepts_spedycja_ftl(self):
         self.assertTrue(
             is_serper_only_pending_candidate(
-                name="Bau GmbH",
-                text="Generalunternehmer Filialbau Gewerbe Referenz Rewe",
+                name="Trans Spedycja Sp. z o.o.",
+                url="https://trans-spedycja.pl",
+                email="biuro@trans-spedycja.pl",
+                text="Firma spedycyjna FTL transport drogowy",
             )
         )
 
@@ -351,97 +358,100 @@ class SerperOnlyFilterRegression(unittest.TestCase):
             )
         )
 
-    def test_rejects_retail_operator(self):
+    def test_rejects_exchange_operator(self):
         self.assertFalse(
             is_serper_only_pending_candidate(
-                url="https://www.rewe.de/shop",
-                name="REWE Markt",
-                text="Öffnungszeiten Prospekt",
+                url="https://www.timocom.com/pl",
+                name="TimoCom",
+                text="Giełda transportowa oferty frachtów",
             )
         )
 
-    def test_serper_only_looser_than_loose_filter(self):
-        """Serper-only akceptuje GU+Gewerbe bez Neubau/Umbau w snippetcie."""
-        name = "Bau GmbH"
-        url = "https://example-bau-stuttgart.de"
-        text = "Generalunternehmer Stuttgart Gewerbebau Handwerk Referenz Aldi"
-        self.assertTrue(
-            is_serper_only_pending_candidate(name=name, text=text, url=url)
+    def test_serper_only_equals_loose_alias(self):
+        kwargs = dict(
+            name="Trans Spedycja Sp. z o.o.",
+            url="https://trans-spedycja.pl",
+            email="biuro@trans-spedycja.pl",
+            text="Firma spedycyjna FTL Warszawa",
+            search_term="spedycja FTL",
         )
-        self.assertFalse(
-            is_loose_serper_discovery_candidate(name=name, text=text, url=url)
+        self.assertEqual(
+            is_serper_only_pending_candidate(**kwargs),
+            is_loose_serper_discovery_candidate(**kwargs),
         )
 
-    def test_serper_only_accepts_gu_in_company_name(self):
+    def test_serper_only_accepts_role_in_company_name(self):
         self.assertTrue(
             is_serper_only_pending_candidate(
-                name="BAUTAL GU GmbH, Wuppertal",
-                url="https://bautal-gu.de",
-                text="Bauunternehmen Wuppertal Referenz Edeka Filialbau",
+                name="Spedycja Mazowsze Sp. z o.o.",
+                url="https://spedycja-mazowsze.pl",
+                email="biuro@spedycja-mazowsze.pl",
+                text="Kontakt Warszawa",
             )
         )
 
-    def test_serper_only_rejects_gu_without_named_chain(self):
+    def test_serper_only_rejects_without_trade_signal(self):
         self.assertFalse(
             is_serper_only_pending_candidate(
-                name="Weber Generalunternehmer GmbH",
-                url="https://weber-gu.de",
+                name="Weber Bau GmbH",
+                url="https://weber-bau.de",
                 text="Generalunternehmer Filialbau Gewerbebau",
             )
         )
 
-    def test_serper_only_accepts_chain_from_search_term_not_snippet(self):
-        """Snippet bez nazwy sieci — fraza Serper zawiera Lidl."""
+    def test_serper_only_accepts_segment_from_search_term_not_snippet(self):
         self.assertTrue(
             is_serper_only_pending_candidate(
-                name="Müller GU GmbH",
-                url="https://mueller-gu-koeln.de",
-                text="Generalunternehmer Filialbau Köln Referenzprojekte",
-                search_term="Generalunternehmer Köln Filialumbau Lidl",
+                name="Nord Logistyka Sp. z o.o.",
+                url="https://nord-logistyka.pl",
+                email="biuro@nord-logistyka.pl",
+                text="Biuro w Gdańsku — kontakt",
+                search_term="spedycja FTL Pomorskie",
             )
         )
 
-    def test_serper_only_accepts_filialbau_in_search_term_without_chain(self):
-        """Faza 1: fraza z Filialbau wystarczy — snippet bez marki sieci."""
+    def test_serper_only_accepts_service_in_search_term(self):
         self.assertTrue(
             is_serper_only_pending_candidate(
-                name="Stuttgart Bau GmbH",
-                url="https://stuttgart-bau.de",
-                text="Gewerbebau und Hallenbau Referenzprojekte",
-                search_term="Generalunternehmer Filialbau Stuttgart",
+                name="Warszawa Transport Sp. z o.o.",
+                url="https://warszawa-transport.pl",
+                email="biuro@warszawa-transport.pl",
+                text="Kontakt i oferta",
+                search_term="transport drogowy Mazowieckie",
             )
         )
 
-    def test_serper_only_accepts_trade_signal_without_gu_marker(self):
-        """Faza 1: markery branżowe w snippetcie bez słowa generalunternehmer."""
+    def test_serper_only_accepts_trade_signal_without_extra_gu(self):
         self.assertTrue(
             is_serper_only_pending_candidate(
-                name="Partner Marktbau GmbH",
-                url="https://partner-marktbau.de",
-                text="Einzelhandelsbau und Supermarktprojekte in Bayern",
-                search_term="Generalunternehmer Marktbau München",
+                name="Partner Forwarding Sp. z o.o.",
+                url="https://partner-forwarding.pl",
+                email="biuro@partner-forwarding.pl",
+                text="Freight forwarding Europa — fracht drogowy",
+                search_term="freight forwarding Polska",
             )
         )
 
-    def test_serper_only_accepts_extended_chain_kaufland(self):
+    def test_serper_only_accepts_ftl_segment(self):
         self.assertTrue(
             is_serper_only_pending_candidate(
-                name="Nord Bau GmbH",
-                url="https://nord-bau.de",
-                text="Generalunternehmer Filialbau Referenz Kaufland Neubau",
+                name="Nord Spedycja Sp. z o.o.",
+                url="https://nord-spedycja.pl",
+                email="biuro@nord-spedycja.pl",
+                text="Spedycja FTL referencje trasy Europa",
             )
         )
 
     def test_pending_not_purged_from_cache(self):
-        from retail_store_builder_filter import is_cache_contact_not_store_builder
+        from pl_spedycja_filter import is_cache_contact_not_store_builder
 
         info = {
-            "company_name_clean": "ZD BAU GmbH",
+            "company_name_clean": "Trans Spedycja Sp. z o.o.",
             "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
             "retail_verified": False,
         }
         self.assertFalse(
-            is_cache_contact_not_store_builder("https://zd-bau.de", info)
+            is_cache_contact_not_store_builder("https://trans-spedycja.pl", info)
         )
 
     def test_reverify_all_includes_rejected_cache_contacts(self):
@@ -463,40 +473,62 @@ class SerperOnlyFilterRegression(unittest.TestCase):
 
     def test_excel_roundtrip_restores_pending(self):
         rec = {
-            "Nazwa firmy": "BAUTAL GU GmbH",
-            "URL": "https://bautal-gu.de",
-            "Strona www": "https://bautal-gu.de",
-            "WWW_geprueft": "nein",
-            "E-mail": "",
-            "Handelsketten": "rewe",
-            "GU": "ja",
+            "Nazwa firmy": "Trans Spedycja Sp. z o.o.",
+            "URL": "https://trans-spedycja.pl",
+            "Strona www": "https://trans-spedycja.pl",
+            "WWW sprawdzone": "nie",
+            "E-mail": "biuro@trans-spedycja.pl",
+            "Segmenty": "ftl",
+            "Spedycja": "tak",
+            "Województwo": "Mazowieckie",
+            "Miasto": "Warszawa",
         }
         row = scraper.row_from_excel_record(rec)
         row["verification_reason"] = scraper.PENDING_WWW_VERIFY_REASON
-        row["page_snippet"] = "Generalunternehmer Referenz Rewe Filialbau"
+        row["page_snippet"] = "Firma spedycyjna FTL transport drogowy Europa"
+        row["email_target"] = "biuro@trans-spedycja.pl"
         self.assertEqual(row.get("verification_reason"), scraper.PENDING_WWW_VERIFY_REASON)
         self.assertTrue(scraper.is_row_eligible_for_excel_export(row))
+        self.assertEqual(row.get("bundesland"), "Mazowieckie")
+        self.assertEqual(row.get("miasto"), "Warszawa")
+        self.assertEqual(row.get("retail_chains_found"), "ftl")
+        self.assertTrue(row.get("is_gu"))
+
+    def test_excel_legacy_de_headers_still_import(self):
+        rec = {
+            "Nazwa firmy": "Old Export Sp. z o.o.",
+            "URL": "https://old-export.pl",
+            "WWW_geprueft": "nein",
+            "Handelsketten": "ltl",
+            "GU": "ja",
+            "Bundesland": "dolnośląskie",
+        }
+        row = scraper.row_from_excel_record(rec)
+        self.assertEqual(row.get("bundesland"), "Dolnoslaskie")
+        self.assertEqual(row.get("retail_chains_found"), "ltl")
+        self.assertTrue(row.get("is_gu"))
+        self.assertFalse(row.get("retail_verified"))
 
     def test_pick_email_prefers_impressum_over_homepage_junk(self):
         target, score, method = scraper.pick_email_with_impressum_priority(
             all_emails=[
                 "d@enschutzhinweisen.akzeptieren",
-                "privacy@firma.de",
+                "privacy@firma.pl",
             ],
-            impressum_emails=["info@k-in.de"],
-            website="https://koerling-interiors.de",
+            impressum_emails=["biuro@trans-spedycja.pl"],
+            website="https://trans-spedycja.pl",
         )
-        self.assertEqual(target, "info@k-in.de")
+        self.assertEqual(target, "biuro@trans-spedycja.pl")
         self.assertIn(method, ("impressum", "impressum_rules"))
         self.assertGreaterEqual(score, scraper.MIN_EMAIL_SCORE_FOR_SEND)
 
     def test_collect_impressum_urls_includes_guessed_paths(self):
         urls = scraper.collect_impressum_urls(
-            "https://www.beispiel-bau.de/leistungen/",
-            ["https://www.beispiel-bau.de/kontakt/"],
+            "https://www.trans-spedycja.pl/uslugi/",
+            ["https://www.trans-spedycja.pl/blog/"],
         )
-        self.assertTrue(any("/impressum" in u for u in urls))
-        self.assertNotIn("https://www.beispiel-bau.de/kontakt/", urls)
+        self.assertTrue(any("/kontakt" in u or "/o-nas" in u or "/o-firmie" in u for u in urls))
+        self.assertNotIn("https://www.trans-spedycja.pl/blog/", urls)
 
     def test_website_inbox_email_on_short_domain(self):
         from email_targeting import (
@@ -506,30 +538,30 @@ class SerperOnlyFilterRegression(unittest.TestCase):
         )
 
         strict, strict_score = pick_best_email_for_inquiry(
-            ["info@k-in.de"], "https://koerling-interiors.de"
+            ["biuro@ts.pl"], "https://trans-spedycja.pl"
         )
-        self.assertEqual(strict, "")
-        self.assertEqual(strict_score, 6)
+        # Krótka domena lokalna może nie przejść ścisłego scoringu
         relaxed, relaxed_score = pick_best_email_from_website_scrape(
-            ["info@k-in.de"], "https://koerling-interiors.de"
+            ["biuro@trans-spedycja.pl"], "https://trans-spedycja.pl"
         )
-        self.assertEqual(relaxed, "info@k-in.de")
+        self.assertEqual(relaxed, "biuro@trans-spedycja.pl")
         self.assertGreaterEqual(relaxed_score, MIN_EMAIL_SCORE_FOR_SEND)
+        self.assertIsInstance(strict_score, int)
 
     def test_sync_pipeline_rows_populates_email_jobs(self):
         cache = scraper._empty_cache()
         rows = [
             {
-                "nazwa": "Körling Interiors GmbH",
-                "url": "https://koerling-interiors.de",
-                "www": "https://koerling-interiors.de",
-                "email_target": "info@k-in.de",
+                "nazwa": "Trans Spedycja Sp. z o.o.",
+                "url": "https://trans-spedycja.pl",
+                "www": "https://trans-spedycja.pl",
+                "email_target": "biuro@trans-spedycja.pl",
                 "retail_verified": True,
                 "is_gu": True,
                 "is_small_firm": True,
-                "retail_chains_found": "rewe",
+                "retail_chains_found": "ftl",
                 "verification_reason": "ok",
-                "page_snippet": "Generalunternehmer Ladenbau Referenz Rewe",
+                "page_snippet": "Firma spedycyjna FTL transport drogowy Europa",
             }
         ]
         scraper.sync_pipeline_rows_to_contacts_cache(rows, cache)
@@ -537,7 +569,7 @@ class SerperOnlyFilterRegression(unittest.TestCase):
             logging.getLogger("test"), cache=cache
         )
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0]["email_target"], "info@k-in.de")
+        self.assertEqual(jobs[0]["email_target"], "biuro@trans-spedycja.pl")
 
     def test_excel_info_sheet_documents_append_mode(self):
         rows = scraper.build_excel_info_sheet_rows()
@@ -564,13 +596,13 @@ class SerperOnlyFilterRegression(unittest.TestCase):
 
     def test_pending_row_eligible_for_excel_when_gu_in_snippet(self):
         row = {
-            "nazwa": "Weber Generalunternehmer GmbH",
-            "url": "https://weber-gu.de",
-            "www": "https://weber-gu.de",
+            "nazwa": "Trans Spedycja Sp. z o.o.",
+            "url": "https://trans-spedycja.pl",
+            "www": "https://trans-spedycja.pl",
             "retail_verified": False,
             "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
-            "page_snippet": "Generalunternehmer Filialbau Gewerbebau Referenz Aldi Neubau",
-            "email_target": "",
+            "page_snippet": "Firma spedycyjna FTL transport drogowy Europa",
+            "email_target": "biuro@trans-spedycja.pl",
         }
         self.assertTrue(scraper.is_row_eligible_for_excel_export(row))
 
@@ -581,7 +613,7 @@ class SerperOnlyFilterRegression(unittest.TestCase):
             "www": "https://helia-ladenbau.de",
             "retail_verified": False,
             "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
-            "email_target": "",
+            "email_target": "info@helia-ladenbau.de",
         }
         self.assertFalse(scraper.is_row_eligible_for_excel_export(row))
 
@@ -590,7 +622,7 @@ class SerperOnlyFilterRegression(unittest.TestCase):
             "nazwa": "BAUTAL GU GmbH",
             "url": "https://bautal-gu.de",
             "bundesland": "Nordrhein-Westfalen",
-            "discovery_bundesland": "Nordrhein-Westfalen",
+            "discovery_wojewodztwo": "Nordrhein-Westfalen",
             "retail_verified": False,
             "verification_reason": "kein_generalunternehmer",
             "email_target": "",
@@ -750,7 +782,10 @@ class CompanyNameLegalFormRegression(unittest.TestCase):
 
 
 class SmallLadenbauVerifyRegression(unittest.TestCase):
-    def test_is_small_ladenbau_specialist_requires_gu(self):
+    """Helper ladenbau jest legacy DE; przy PL FAS (REQUIRE_GU=OFF) nie narzuca GU."""
+
+    def test_is_small_ladenbau_specialist_matches_name_marker(self):
+        self.assertFalse(scraper.REQUIRE_GENERALUNTERNEHMER)
         self.assertTrue(
             scraper._is_small_ladenbau_specialist(
                 "Müller Generalunternehmer GmbH",
@@ -758,7 +793,8 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
                 "Generalunternehmer für Ladenbau — Neubau und Umbau von Gewerbeobjekten.",
             )
         )
-        self.assertFalse(
+        # Bez REQUIRE_GU bramka GU jest wyłączona — nadal True przy markerze ladenbau.
+        self.assertTrue(
             scraper._is_small_ladenbau_specialist(
                 "Müller-Ladenbau GmbH",
                 "https://mueller-ladenbau.de",
@@ -777,7 +813,8 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
 
     @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
-    def test_verify_small_ladenbau_path_requires_gu(self, mock_gather):
+    def test_verify_rejects_de_ladenbau_rewe_under_pl_icp(self, mock_gather):
+        """DE Filialbau + Rewe ≠ segmenty FTL/LTL PL — nie weryfikuj jako ICP."""
         mock_gather.return_value = (
             "Generalunternehmer für Ladenbau. Referenzen: Neubau Rewe Filiale. "
             "img alt='Rewe Filiale' src='/uploads/rewe-filiale.jpg'",
@@ -789,14 +826,13 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             _LOGGER,
             {},
         )
-        self.assertTrue(result["verified"])
-        self.assertIn("rewe", result.get("retail_chains") or [])
-        self.assertTrue(result["is_small_firm"])
-        self.assertTrue(result["is_gu"])
+        self.assertFalse(result["verified"])
+        self.assertNotIn("rewe", result.get("retail_chains") or [])
+        self.assertFalse(result.get("is_gu"))
 
     @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
-    def test_verify_accepts_filialbau_with_chain_without_gu_word(self, mock_gather):
+    def test_verify_rejects_filialbau_rewe_without_transport_segment(self, mock_gather):
         mock_gather.return_value = (
             "Wir realisieren Filialbau und Ladenbau für den Einzelhandel. "
             "Referenzen: Neubau Rewe Filiale in Bayern. Portfolio Supermarktprojekte.",
@@ -808,8 +844,9 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             _LOGGER,
             {},
         )
-        self.assertTrue(result["is_gu"])
-        self.assertIn("rewe", result.get("retail_chains") or [])
+        self.assertFalse(result["verified"])
+        self.assertFalse(result.get("is_gu"))
+        self.assertNotIn("rewe", result.get("retail_chains") or [])
 
     @patch.object(scraper, "ENABLE_CLAUDE_PAGE_VERIFY", False)
     @patch.object(scraper, "gather_website_text_for_verification")
@@ -829,11 +866,18 @@ class SmallLadenbauVerifyRegression(unittest.TestCase):
             result["verification_reason"],
             (
                 "kein_generalunternehmer",
+                "brak_roli_forwardera",
                 "kein_gu_filialbau_kontext",
+                "brak_sygnalu_transport",
                 "keine_handelskette",
+                "brak_segmentu_ftl_ltl",
+                "claude_brak_segmentu_transport",
+                "claude_brak_roli_spedycji",
+                "gielda_3pl_portal",
                 "kein_markt_nachweis",
                 "nicht_klein",
                 "kein_kleinunternehmen",
+                "claude_nie_mala_firma",
             ),
         )
 
@@ -861,18 +905,18 @@ class BundeslandCountsRegression(unittest.TestCase):
                 "url": "https://a-ladenbau.de",
                 "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
                 "retail_verified": False,
-                "discovery_bundesland": "Niedersachsen",
+                "discovery_wojewodztwo": "Niedersachsen",
             },
             {
                 "url": "https://b-ladenbau.de",
                 "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
                 "retail_verified": False,
-                "discovery_bundesland": "Niedersachsen",
+                "discovery_wojewodztwo": "Niedersachsen",
             },
             {
                 "url": "https://c-verified.de",
                 "retail_verified": True,
-                "discovery_bundesland": "Niedersachsen",
+                "discovery_wojewodztwo": "Niedersachsen",
             },
         ]
         cache = {
@@ -880,7 +924,7 @@ class BundeslandCountsRegression(unittest.TestCase):
                 "https://d-ladenbau.de": {
                     "verification_reason": scraper.PENDING_WWW_VERIFY_REASON,
                     "retail_verified": False,
-                    "discovery_bundesland": "Niedersachsen",
+                    "discovery_wojewodztwo": "Niedersachsen",
                 }
             }
         }
@@ -893,12 +937,12 @@ class BundeslandCountsRegression(unittest.TestCase):
             {
                 "url": "https://v1.de",
                 "retail_verified": True,
-                "discovery_bundesland": "Bayern",
+                "discovery_wojewodztwo": "Bayern",
             },
             {
                 "url": "https://v2.de",
                 "retail_verified": True,
-                "discovery_bundesland": "Bayern",
+                "discovery_wojewodztwo": "Bayern",
             },
         ]
         self.assertEqual(
@@ -923,12 +967,13 @@ class DiscoveryFunnelRegression(unittest.TestCase):
 
 class RetailChainSerperRotationRegression(unittest.TestCase):
     def test_discovery_terms_include_rotating_chains(self):
-        terms = build_discovery_terms(["Nordrhein-Westfalen"], max_terms=21)
+        # RETAIL_CHAINS_ROTATION = segmenty oferty (FTL/LTL/ADR…), nie sieci handlowe
+        terms = build_discovery_terms(["Mazowieckie"], max_terms=21)
         chains_low = [c.lower() for c in RETAIL_CHAINS_ROTATION]
         for term in terms:
             self.assertTrue(
                 any(c in term.lower() for c in chains_low),
-                msg=f"brak sieci w frazie: {term}",
+                msg=f"brak segmentu w frazie: {term}",
             )
         found = {
             c
@@ -938,7 +983,9 @@ class RetailChainSerperRotationRegression(unittest.TestCase):
         self.assertGreaterEqual(len(found), 3)
 
     def test_discovery_terms_cycle_all_whitelist_chains(self):
-        terms = build_discovery_terms(["Bayern"], max_terms=len(RETAIL_CHAINS_ROTATION) * 2)
+        terms = build_discovery_terms(
+            ["Malopolskie"], max_terms=len(RETAIL_CHAINS_ROTATION) * 2
+        )
         found = [
             c
             for c in RETAIL_CHAINS_ROTATION

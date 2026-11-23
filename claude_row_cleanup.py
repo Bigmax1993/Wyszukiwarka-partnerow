@@ -13,19 +13,34 @@ _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def parse_claude_row_cleanup_response(text: str) -> dict:
+    """
+    Parsuje JSON cleanupu Claude → pola pipeline.
+
+    Aliasy PL: ``segmenty`` → ``handelsketten``, ``wojewodztwo`` / ``Województwo``
+    → ``bundesland`` (Excel: Segmenty / Województwo).
+    """
     raw = (text or "").strip()
     match = _JSON_BLOCK_RE.search(raw)
     payload = match.group(0) if match else raw
     data = json.loads(payload)
     if not isinstance(data, dict):
         raise ValueError("Claude row cleanup: not a JSON object")
+    bundesland = str(
+        data.get("bundesland")
+        or data.get("wojewodztwo")
+        or data.get("Województwo")
+        or ""
+    ).strip()
+    handelsketten = str(
+        data.get("handelsketten") or data.get("segmenty") or data.get("Segmenty") or ""
+    ).strip()
     return {
         "company_name_clean": str(data.get("company_name_clean") or "").strip(),
         "address": str(data.get("address") or "").strip(),
         "phone": str(data.get("phone") or "").strip(),
         "website": str(data.get("website") or "").strip(),
-        "bundesland": str(data.get("bundesland") or "").strip(),
-        "handelsketten": str(data.get("handelsketten") or "").strip(),
+        "bundesland": bundesland,
+        "handelsketten": handelsketten,
         "url": str(data.get("url") or "").strip(),
     }
 

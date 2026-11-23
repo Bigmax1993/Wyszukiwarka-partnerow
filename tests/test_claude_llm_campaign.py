@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Testy modułów Claude discovery + page verify (bez live API)."""
+"""Testy Claude discovery + page verify (bez live API) — PL FAS."""
 from __future__ import annotations
 
 import sys
@@ -7,45 +7,60 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+LIBS = ROOT / "libs"
+for p in (str(ROOT), str(LIBS)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from claude_discovery_terms import parse_discovery_term_lines, validate_discovery_term
 from contact_extract_utils import normalize_phone_contact, parse_contact_extract_response
-from page_verify import apply_page_verdict, parse_page_verify_response
+from page_verify import (
+    apply_page_verdict,
+    is_forwarder_ok_from_llm,
+    parse_page_verify_response,
+)
 
 
 class ClaudeDiscoveryTermsTest(unittest.TestCase):
     def test_parse_lines_strips_numbering(self):
-        raw = "1. Generalunternehmer Filialbau Hannover\nGU Supermarktbau Braunschweig"
+        raw = "1. spedycja FTL Warszawa\nfirma spedycyjna Radom LTL"
         lines = parse_discovery_term_lines(raw)
         self.assertEqual(len(lines), 2)
-        self.assertIn("Generalunternehmer", lines[0])
+        self.assertIn("spedycja", lines[0].lower())
 
-    def test_validate_accepts_gu_term_with_chain(self):
-        self.assertTrue(
+    def test_validate_accepts_spedycja_with_segment(self):
+        self.assertTrue(validate_discovery_term("spedycja FTL Warszawa"))
+        self.assertTrue(validate_discovery_term("firma spedycyjna Głogów LTL"))
+
+    def test_validate_rejects_without_segment(self):
+        self.assertFalse(validate_discovery_term("firma spedycyjna Warszawa"))
+
+    def test_validate_rejects_courier_or_generic(self):
+        self.assertFalse(validate_discovery_term("InPost paczkomaty Warszawa"))
+        self.assertFalse(validate_discovery_term("transport Warszawa"))
+
+    def test_validate_rejects_legacy_de_gu(self):
+        self.assertFalse(
             validate_discovery_term("Generalunternehmer Filialbau Hannover Aldi markt")
         )
-
-    def test_validate_rejects_gu_term_without_chain(self):
-        self.assertFalse(validate_discovery_term("Generalunternehmer Filialbau Hannover"))
-
-    def test_validate_rejects_ladenbau_only(self):
-        self.assertFalse(validate_discovery_term("Ladenbau Hannover GmbH"))
-
-    def test_validate_rejects_bauunternehmen_only(self):
-        self.assertFalse(validate_discovery_term("Bauunternehmen Gewerbebau Hannover"))
+        # Hybryda PL+DE też odpada (higiena discovery)
+        self.assertFalse(
+            validate_discovery_term("spedycja bauunternehmen FTL Warszawa")
+        )
+        self.assertFalse(
+            validate_discovery_term("spedycja filialbau LTL Kraków")
+        )
 
 
 class ContactExtractUtilsTest(unittest.TestCase):
     def test_parse_contact_json(self):
         raw = (
-            '{"company_name": "Bau GmbH", "emails": ["info@bau.de", "x@11880.de"], '
-            '"phones": ["+49 231 1234567"], "reason": "Impressum"}'
+            '{"company_name": "Trans Sp. z o.o.", "emails": ["biuro@trans.pl", "x@11880.de"], '
+            '"phones": ["+48 22 111 22 33"], "reason": "Kontakt"}'
         )
         parsed = parse_contact_extract_response(raw)
-        self.assertEqual(parsed["company_name"], "Bau GmbH")
-        self.assertIn("info@bau.de", parsed["emails"])
+        self.assertEqual(parsed["company_name"], "Trans Sp. z o.o.")
+        self.assertIn("biuro@trans.pl", parsed["emails"])
         self.assertNotIn("x@11880.de", parsed["emails"])
         self.assertTrue(parsed["phones"])
 
@@ -53,203 +68,205 @@ class ContactExtractUtilsTest(unittest.TestCase):
         self.assertEqual(normalize_phone_contact("2024"), "")
 
     def test_find_emails_uses_regex_only(self):
-        import de_gu_bauunternehmen_scraper as scraper
+        import pl_fas_spedycja_scraper as scraper
 
-        found = scraper.find_emails_in_text("Kontakt: info@beispiel-bau.de Impressum")
-        self.assertIn("info@beispiel-bau.de", found)
+        found = scraper.find_emails_in_text("Kontakt: biuro@trans-spedycja.pl Dane firmy")
+        self.assertIn("biuro@trans-spedycja.pl", found)
 
 
 class PageVerifyTest(unittest.TestCase):
     def test_parse_json_response(self):
         text = (
             '{"is_gu": true, "has_retail_context": true, '
-            '"primary_role": "Generalunternehmer", '
-            '"matched_gu_keywords": ["generalunternehmer"], '
-            '"matched_retail_keywords": ["filialbau"], '
-            '"matched_chains": ["rewe"], '
+            '"primary_role": "Spedytor", '
+            '"matched_gu_keywords": ["spedycja"], '
+            '"matched_retail_keywords": ["transport drogowy"], '
+            '"matched_chains": ["ftl"], '
             '"matched_negative_keywords": [], '
             '"is_small_firm": true, '
-            '"reason": "GU mit Filialbau"}'
+            '"reason": "Oferta FTL Europa"}'
         )
         parsed = parse_page_verify_response(text)
         self.assertTrue(parsed["is_gu"])
-        self.assertEqual(parsed["primary_role"], "Generalunternehmer")
+        self.assertEqual(parsed["primary_role"], "Spedytor")
+        self.assertEqual(parsed["matched_chains"], ["ftl"])
 
-    def test_apply_verdict_accepts_gu_retail(self):
+    def test_apply_verdict_accepts_spedycja_ftl(self):
         llm = {
             "is_gu": True,
             "has_retail_context": True,
-            "primary_role": "Generalunternehmer",
-            "matched_gu_keywords": ["generalunternehmer"],
-            "matched_retail_keywords": ["filialbau"],
-            "matched_chains": ["rewe"],
+            "primary_role": "Spedytor",
+            "matched_gu_keywords": ["spedycja"],
+            "matched_retail_keywords": ["transport drogowy"],
+            "matched_chains": ["ftl", "ltl"],
             "matched_negative_keywords": [],
             "is_small_firm": True,
             "reason": "OK",
         }
         ok, reason, chains = apply_page_verdict(
             llm,
-            page_text="Wir sind Generalunternehmer für Filialbau und Rewe Projekte.",
+            page_text=(
+                "Firma spedycyjna. Organizujemy transport drogowy FTL LTL Europa. "
+                "Oferta fracht ADR."
+            ),
         )
         self.assertTrue(ok)
         self.assertIn("claude", reason)
-        self.assertIn("rewe", chains)
+        self.assertTrue("ftl" in chains or "ltl" in chains)
 
-    def test_apply_verdict_accepts_filialbau_references_without_gu_word(self):
-        llm = {
-            "is_gu": True,
-            "has_retail_context": True,
-            "primary_role": "Filialbauer",
-            "matched_gu_keywords": [],
-            "matched_retail_keywords": ["filialbau", "referenz"],
-            "matched_chains": ["rewe"],
-            "matched_negative_keywords": [],
-            "is_small_firm": True,
-            "reason": "Referenz Rewe Neubau mit Fotos",
-        }
-        page = (
-            "Filialbau GmbH — unsere Projekte. Referenz: Rewe Neubau Leipzig. "
-            "Bild: /images/rewe-filiale-aussen.jpg alt=Rewe Filiale nach Umbau"
-        )
-        ok, reason, chains = apply_page_verdict(
-            llm,
-            page_text=page,
-            require_generalunternehmer=True,
-        )
-        self.assertTrue(ok)
-        self.assertIn("rewe", chains)
-
-    def test_apply_verdict_accepts_when_claude_missed_gu_but_page_has_evidence(self):
+    def test_apply_verdict_accepts_when_claude_missed_role_but_page_has_evidence(self):
+        # primary_role puste — nie wpada w REJECT_PRIMARY_ROLES („Inne”)
         llm = {
             "is_gu": False,
             "has_retail_context": False,
-            "primary_role": "Bauunternehmen",
+            "primary_role": "",
             "matched_gu_keywords": [],
             "matched_retail_keywords": [],
             "matched_chains": [],
             "matched_negative_keywords": [],
             "is_small_firm": True,
-            "reason": "unsicher",
+            "reason": "niepewne",
         }
         page = (
-            "Wir sind Filialbau-Spezialist. Referenzprojekt Aldi Neubau Dresden. "
-            "Supermarktbau und Filialumbau."
+            "Firma spedycyjna — spedycja drogowa. Transport drogowy FTL i LTL "
+            "na Europę. Organizacja przewozu, flota naczep."
         )
         ok, reason, chains = apply_page_verdict(
             llm,
             page_text=page,
-            require_generalunternehmer=True,
+            require_forwarder_role=True,
         )
         self.assertTrue(ok)
-        self.assertIn("aldi", chains)
+        self.assertTrue(any(c in chains for c in ("ftl", "ltl", "europa")))
 
-    def test_apply_verdict_rejects_gu_einzelhandel_without_named_chain(self):
+    def test_apply_verdict_rejects_without_segment(self):
         llm = {
             "is_gu": True,
             "has_retail_context": True,
             "is_small_firm": True,
-            "primary_role": "Generalunternehmer",
-            "matched_gu_keywords": ["generalunternehmer"],
-            "matched_retail_keywords": ["einzelhandel", "gewerbebau"],
+            "primary_role": "Spedytor",
+            "matched_gu_keywords": ["spedycja"],
+            "matched_retail_keywords": ["logistyka"],
             "matched_chains": [],
             "matched_negative_keywords": [],
-            "reason": "GU Einzelhandelsbau",
+            "reason": "sama logistyka",
         }
-        page = (
-            "Wijco Bau GmbH — Generalunternehmer für Gewerbe- und Einzelhandelsbau "
-            "in Deutschland. Wir realisieren Retail-Projekte regional."
-        )
+        page = "Firma spedycyjna w Polsce. Świadczymy usługi logistyczne regionalnie."
         ok, reason, chains = apply_page_verdict(
             llm,
             page_text=page,
-            require_generalunternehmer=True,
+            require_forwarder_role=True,
         )
         self.assertFalse(ok)
-        self.assertEqual(reason, "keine_handelskette")
+        self.assertEqual(reason, "brak_segmentu_ftl_ltl")
         self.assertEqual(chains, [])
 
-    def test_apply_verdict_accepts_wijco_style_karriere_netto(self):
+    def test_apply_verdict_accepts_adr_europa_segments(self):
         llm = {
             "is_gu": True,
             "has_retail_context": True,
             "is_small_firm": True,
-            "primary_role": "Generalunternehmer",
-            "matched_gu_keywords": ["generalunternehmer"],
-            "matched_retail_keywords": ["retail", "einzelhandel"],
-            "matched_chains": ["netto"],
+            "primary_role": "FreightForwarder",
+            "matched_gu_keywords": ["freight forwarder"],
+            "matched_retail_keywords": ["organizacja transportu"],
+            "matched_chains": ["adr", "europa"],
             "matched_negative_keywords": [],
-            "reason": "Auftraggeber Netto",
+            "reason": "ADR Europa",
         }
         page = (
-            "Generalunternehmer Gewerbe- und Einzelhandelsbau. "
-            "Karriere: namhafte Auftraggeber wie Netto Marken-Discount. "
-            "Retail- und Gewerbeprojekte in Deutschland. Teil der Wijco Groep."
+            "Freight forwarding. Organizacja transportu ADR, linie Europa. "
+            "Biuro spedycyjne PL–DE."
         )
         ok, reason, chains = apply_page_verdict(llm, page_text=page)
         self.assertTrue(ok)
-        self.assertIn("netto", chains)
+        self.assertTrue("adr" in chains or "europa" in chains)
 
     def test_apply_verdict_rejects_large_firm_when_claude_says_not_small(self):
         llm = {
             "is_gu": True,
             "has_retail_context": True,
             "is_small_firm": False,
-            "primary_role": "Generalunternehmer",
-            "matched_gu_keywords": ["generalunternehmer"],
-            "matched_retail_keywords": ["filialbau"],
-            "matched_chains": ["rewe"],
+            "primary_role": "Spedytor",
+            "matched_gu_keywords": ["spedycja"],
+            "matched_retail_keywords": ["ftl"],
+            "matched_chains": ["ftl"],
             "matched_negative_keywords": [],
-            "reason": "Konzern",
+            "reason": "3PL",
         }
         ok, reason, _ = apply_page_verdict(
             llm,
             page_text=(
-                "STRABAG SE — weltweit tätig, über 77.000 Mitarbeiter. "
-                "Neubau Rewe Supermarkt Filialbau."
+                "Raben Group — międzynarodowa spedycja FTL Europa, tysiące pracowników."
             ),
             require_small_firm=True,
         )
         self.assertFalse(ok)
-        self.assertIn("kleinunternehmen", reason)
+        self.assertEqual(reason, "claude_nie_mala_firma")
 
-    def test_apply_verdict_rejects_interior_fitout(self):
+    def test_apply_verdict_rejects_courier(self):
         llm = {
             "is_gu": True,
             "has_retail_context": True,
             "is_small_firm": True,
-            "primary_role": "Ladeneinrichter",
-            "matched_gu_keywords": ["generalunternehmer"],
-            "matched_retail_keywords": ["ladenbau"],
-            "matched_chains": ["rewe"],
+            "primary_role": "Kurier",
+            "matched_gu_keywords": [],
+            "matched_retail_keywords": [],
+            "matched_chains": ["ftl"],
             "matched_negative_keywords": [],
-            "reason": "Ladenbau Referenz Rewe",
+            "reason": "paczki",
         }
-        page = (
-            "Körling Interiors GmbH — Generalunternehmer Ladenbau. "
-            "Ladeneinrichtung und Shopfitting. Referenz Rewe Markt."
-        )
+        page = "Nadaj paczkę InPost DPD. Kurier last mile Warszawa."
         ok, reason, _ = apply_page_verdict(llm, page_text=page)
         self.assertFalse(ok)
-        self.assertIn("innenausbau", reason)
+        self.assertTrue(
+            "kurier" in reason.lower() or "claude_role" in reason.lower()
+        )
 
-    def test_apply_verdict_rejects_operator_context(self):
+    def test_apply_verdict_rejects_exchange_operator_context(self):
         llm = {
             "is_gu": True,
             "has_retail_context": True,
-            "primary_role": "Betreiber",
+            "primary_role": "GieldaFrachtowa",
             "matched_gu_keywords": [],
             "matched_retail_keywords": [],
             "matched_chains": [],
             "matched_negative_keywords": [],
-            "reason": "Markt",
+            "reason": "giełda",
         }
         ok, reason, _ = apply_page_verdict(
             llm,
-            page_text="REWE Markt Öffnungszeiten Prospekt Filialfinder",
-            require_generalunternehmer=True,
+            page_text="Timocom giełda frachtów — znajdź ładunek Trans.eu",
+            require_forwarder_role=True,
         )
         self.assertFalse(ok)
-        self.assertIn("einzelhandel_betrieb", reason)
+
+    def test_is_forwarder_ok_reads_legacy_is_gu_key(self):
+        self.assertTrue(is_forwarder_ok_from_llm({"is_gu": True}))
+        self.assertFalse(is_forwarder_ok_from_llm({"is_gu": False}))
+        self.assertFalse(is_forwarder_ok_from_llm({}))
+
+    def test_require_generalunternehmer_alias_still_works(self):
+        """Alias legacy nadpisuje require_forwarder_role."""
+        llm = {
+            "is_gu": True,
+            "has_retail_context": True,
+            "is_small_firm": True,
+            "primary_role": "Spedytor",
+            "matched_gu_keywords": ["spedycja"],
+            "matched_retail_keywords": [],
+            "matched_chains": ["ftl"],
+            "matched_negative_keywords": [],
+            "reason": "alias",
+        }
+        page = "Firma spedycyjna FTL Polska. Transport drogowy, flota."
+        ok, _, chains = apply_page_verdict(
+            llm,
+            page_text=page,
+            require_forwarder_role=False,
+            require_generalunternehmer=True,
+        )
+        self.assertTrue(ok)
+        self.assertIn("ftl", chains)
 
 
 if __name__ == "__main__":

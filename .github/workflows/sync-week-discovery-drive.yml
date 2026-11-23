@@ -1,11 +1,11 @@
-name: Sync tygodnia discovery na Google Drive
+﻿name: Sync tygodnia discovery na Google Drive
 
 # DISABLED: Google Drive sync off — wyniki tylko lokalnie / artefakty GHA.
 on:
   workflow_dispatch:
     inputs:
       pi_run_ids:
-        description: "Run ID de-gu-wyniki-pi (po przecinku). Domyslnie tydzien 15-21.06.2026 (bez srody - uszkodzony artefakt)."
+        description: "Run ID pl-spedycja-wyniki-pi (po przecinku). Domyslnie tydzien 15-21.06.2026 (bez srody - uszkodzony artefakt)."
         required: false
         default: "27533750486,27638016924,27713619204,27787280147,27837533068"
       week_label:
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  GDRIVE_FOLDER_ID: "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
+  GDRIVE_FOLDER_ID: "1bRCAqle6BS46YEw0fScq4P095LsJUSgL"
   GDRIVE_VERSION_XLSX: "0"
   DISABLE_GOOGLE_DRIVE: "1"
   SCRAPER_TIMEZONE: Europe/Warsaw
@@ -57,6 +57,6 @@ jobs:
       - name: Upload Wyniki artifact (tydzien, jeden Excel)
         uses: actions/upload-artifact@v4
         with:
-          name: de-gu-wyniki-week-export
+          name: pl-spedycja-wyniki-week-export
           path: |
-            Wyniki/de_gu_bauunternehmen_kontakte_*.xlsx
+            Wyniki/pl_spedycja_kontakte_*.xlsx

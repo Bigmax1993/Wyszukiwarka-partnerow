@@ -16,15 +16,15 @@ $Repo = "Bigmax1993/Wyszukiwarka-partnerow"
 
 if (-not $PiRunId) {
 
-    $PiRunId = gh run list -R $Repo --workflow="GU discovery" -L 1 --json databaseId -q ".[0].databaseId"
+    $PiRunId = gh run list -R $Repo --workflow="PL spedycja discovery" -L 1 --json databaseId -q ".[0].databaseId"
 
-    if (-not $PiRunId) { throw "Brak run GU discovery" }
+    if (-not $PiRunId) { throw "Brak run PL spedycja discovery" }
 
 }
 
 
 
-Write-Host "Czekam na zakonczenie GU discovery (run $PiRunId)..."
+Write-Host "Czekam na zakonczenie PL spedycja discovery (run $PiRunId)..."
 
 gh run watch $PiRunId -R $Repo --exit-status
 
@@ -36,7 +36,7 @@ if (-not $watchOk) {
 
     $names = @(gh api "repos/$Repo/actions/runs/$PiRunId/artifacts" --jq '.artifacts[].name' 2>$null)
 
-    if ($names -contains "de-gu-wyniki-pi") {
+    if ($names -contains "pl-spedycja-wyniki-pi") {
 
         Write-Host "Watch/timeout, ale jest artefakt pi - kontynuuje." -ForegroundColor Yellow
 

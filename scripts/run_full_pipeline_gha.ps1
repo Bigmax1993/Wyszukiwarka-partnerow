@@ -47,9 +47,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Repo = "Bigmax1993/Wyszukiwarka-partnerow"
-$DiscoveryWorkflow = "GU discovery"
+$DiscoveryWorkflow = "PL spedycja discovery"
 
-$DiscoveryArtifacts = @("de-gu-wyniki-pi")
+$DiscoveryArtifacts = @("pl-spedycja-wyniki-pi")
 
 $script:DiscoveryRunIds = @()
 
@@ -143,7 +143,7 @@ function Wait-GhaRun {
 
             Write-Host "UWAGA: $Name zakonczyl sie jako '$conclusion' (run $RunId, np. timeout 720 min)." -ForegroundColor Yellow
 
-            Write-Host "       Jest artefakt de-gu-wyniki-pi - kontynuuje pipeline (backfill itd.)." -ForegroundColor Yellow
+            Write-Host "       Jest artefakt pl-spedycja-wyniki-pi - kontynuuje pipeline (backfill itd.)." -ForegroundColor Yellow
 
             return
 
@@ -257,7 +257,7 @@ if ($DiscoveryRunId) {
 
 if (-not $SkipBackfill) {
 
-    Invoke-GhaWorkflow "GU niedziela backfill"
+    Invoke-GhaWorkflow "PL spedycja niedziela backfill"
 
 }
 
@@ -267,18 +267,18 @@ Write-Host "[POMINIETO] Sync wyniki Google Drive (DISABLE_GOOGLE_DRIVE / discove
 
 # Prep: cron OFF — Excel powstaje w niedzielnym backfillu
 Write-Host ""
-Write-Host "[POMINIETO] GU poniedzialek prep (cron OFF — użyj backfillu / excel email)." -ForegroundColor Yellow
+Write-Host "[POMINIETO] PL spedycja poniedzialek prep (cron OFF — użyj backfillu / excel email)." -ForegroundColor Yellow
 
 # DISABLED: contractor emails (DISABLE_CONTRACTOR_EMAILS=1)
 Write-Host ""
-Write-Host "[POMINIETO] GU poniedzialek send / GU wtorek send (DISABLE_CONTRACTOR_EMAILS)." -ForegroundColor Yellow
+Write-Host "[POMINIETO] PL spedycja poniedzialek send / PL spedycja wtorek send (DISABLE_CONTRACTOR_EMAILS)." -ForegroundColor Yellow
 if ($ForceResend) {
     Write-Host "  (ForceResend zignorowany — wysylka kontrahentow wylaczona)" -ForegroundColor Yellow
 }
 
 Write-Host ""
 Write-Host "Uruchamiam raport Excel (svinchak1993@gmail.com)..." -ForegroundColor Cyan
-Invoke-GhaWorkflow "GU poniedzialek excel email"
+Invoke-GhaWorkflow "PL spedycja poniedzialek excel email"
 
 Write-Host ""
 

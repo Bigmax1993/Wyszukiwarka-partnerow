@@ -26,8 +26,14 @@ def build_custom_draft_prompt(
     city_name: str = "",
     delivery_address: str = "",
 ) -> str:
+    """
+    Wybiera prompt Claude pod język szablonu.
+
+    PL FAS: domyślnie ``pl`` → ``build_custom_email_prompt_pl``.
+    ``de`` → legacy ``build_custom_email_prompt_de`` (nie używać w FAS).
+    """
     draft = (draft or "").strip()
-    if lang == "de":
+    if (lang or "pl").strip().lower() == "de":
         return build_custom_email_prompt_de(
             draft,
             company_name,
@@ -89,7 +95,7 @@ def beautify_custom_email_draft(
         fallback_subject = (
             f"Preisanfrage – {company_name}"
             if lang == "de"
-            else f"Zapytanie ofertowe – {company_name}"
+            else "Maksym / Forwarding Assistant — szybkie pytanie do spedycji"
         )
     prompt = build_custom_draft_prompt(
         draft,

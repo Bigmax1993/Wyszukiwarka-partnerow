@@ -9,7 +9,7 @@ Shared Drive (dysk zespołowy) albo upload w imieniu użytkownika (delegacja DWD
 
 Zmienne:
   GDRIVE_SERVICE_ACCOUNT_JSON / GDRIVE_SERVICE_ACCOUNT_FILE
-  GDRIVE_FOLDER_ID — docelowy folder (domyślnie GU Bauunternehmen)
+  GDRIVE_FOLDER_ID — folder końcowego Excela (domyślnie 1bRCAqle6BS46YEw0fScq4P095LsJUSgL)
   GDRIVE_SHARED_DRIVE_ID — opcjonalnie ID dysku współdzielonego (auto-wykrywanie, jeśli puste)
   GDRIVE_IMPERSONATE_EMAIL — opcjonalnie e-mail użytkownika Workspace (domain-wide delegation)
   GDRIVE_VERSION_XLSX — 1 (domyślnie): każdy .xlsx jako nowy plik z datą, bez nadpisywania
@@ -30,8 +30,8 @@ for _p in (ROOT, LIBS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from campaign_data_paths import (  # noqa: E402
-    GOOGLE_DRIVE_GU_FOLDER_ID,
+from pl_spedycja_data_paths import (  # noqa: E402
+    GOOGLE_DRIVE_FAS_FOLDER_ID,
     resolve_data_root,
     wyniki_dir,
     wyslane_dir,
@@ -49,7 +49,7 @@ _LIST_OPTS = {
     "includeItemsFromAllDrives": True,
 }
 
-_GU_FOLDER_NAME = "GU Bauunternehmen Wyniki"
+_GU_FOLDER_NAME = "PL Spedycja Wyniki"
 
 # Cache (.json) i logi zostają w artefaktach GitHub — nie na Drive.
 _GDRIVE_SKIP_SUFFIXES = frozenset({".json", ".log"})
@@ -75,7 +75,7 @@ def _upload_stamp() -> str:
 
 
 def versioned_xlsx_upload_name(filename: str, *, stamp: str | None = None) -> str:
-    """de_gu_bauunternehmen_kontakte.xlsx → de_gu_bauunternehmen_kontakte_2026-06-08_1405.xlsx"""
+    """pl_spedycja_kontakte.xlsx → pl_spedycja_kontakte_2026-06-08_1405.xlsx"""
     path = Path(filename)
     if path.suffix.lower() != ".xlsx":
         return path.name
@@ -410,7 +410,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--folder-id",
-        default=os.environ.get("GDRIVE_FOLDER_ID", GOOGLE_DRIVE_GU_FOLDER_ID),
+        default=os.environ.get("GDRIVE_FOLDER_ID", GOOGLE_DRIVE_FAS_FOLDER_ID),
     )
     args = parser.parse_args()
 

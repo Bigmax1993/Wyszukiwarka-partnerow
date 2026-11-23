@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Wysyłka pliku Excel (GU Kontakte) przez Gmail / yagmail.
+Wysyłka pliku Excel (PL FAS Kontakte) przez Gmail / yagmail.
+
+Raport wewnętrzny kampanii PL spedycja — **nie** B2B do kontrahentów.
 
 Uruchomienie:
   python scripts/send_excel_gmail.py
@@ -29,7 +31,7 @@ import kanbud_bootstrap
 
 kanbud_bootstrap.ensure_import_paths(ROOT)
 
-from campaign_data_paths import campaign_output_paths
+from pl_spedycja_data_paths import campaign_output_paths
 from mail_transport import send_smtp_email_with_attachments
 from scraper_env import get_excel_report_to, get_mail_user
 
@@ -37,7 +39,18 @@ DEFAULT_TZ = "Europe/Warsaw"
 
 
 def setup_logging() -> logging.Logger:
-    paths = campaign_output_paths(ROOT, "de_gu_bauunternehmen")
+    """
+    Logger plik + konsola dla skryptu raportu Excel.
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Zapis do ``Wyniki/pl_spedycja_scraper.log`` (ta sama ścieżka co scraper)
+    oraz stdout — GHA / lokalnie widać dry-run i błędy SMTP.
+
+    Nie dokłada handlerów ponownie, jeśli logger już je ma.
+    """
+    paths = campaign_output_paths(ROOT, "pl_spedycja")
     log_file = paths["log_file"]
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("send_excel_gmail")
@@ -54,12 +67,34 @@ def setup_logging() -> logging.Logger:
 
 
 def resolve_excel_path(explicit: str = "") -> Path:
+    """
+    Wybiera plik ``.xlsx`` do załączenia w mailu raportu.
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    CLI ``--excel`` albo domyślny output kampanii PL FAS
+    (``pl_spedycja_kontakte.xlsx`` / wariant ``*_export.xlsx``).
+
+    =====================================================================
+    PRZEBIEG
+    =====================================================================
+    1. Niepusty ``explicit`` → ten plik (musi istnieć) albo ``FileNotFoundError``.
+    2. ``campaign_output_paths(..., "pl_spedycja")["output_file"]``.
+    3. Fallback: ``{stem}_export{suffix}`` obok primary.
+    4. Brak obu → ``FileNotFoundError`` (najpierw backfill / prep).
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    ``Path`` absolute; nigdy nieistniejący plik.
+    """
     if explicit.strip():
         path = Path(explicit).expanduser()
         if path.is_file():
             return path.resolve()
         raise FileNotFoundError(f"Nie znaleziono pliku Excel: {path}")
-    paths = campaign_output_paths(ROOT, "de_gu_bauunternehmen")
+    paths = campaign_output_paths(ROOT, "pl_spedycja")
     primary = paths["output_file"]
     if primary.is_file():
         return primary.resolve()
@@ -72,9 +107,25 @@ def resolve_excel_path(explicit: str = "") -> Path:
 
 
 def count_kontakte_rows(path: Path) -> int:
+    """
+    Liczba wierszy w arkuszu ``Kontakte`` (do body maila).
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Krótka metryka w treści raportu („N wierszy”). Nazwa arkusza **legacy**
+    — writer ``pl_fas_spedycja_scraper`` nadal używa ``Kontakte``;
+    nie zmieniać tu bez zmiany ``write_excel_*``.
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    ``len(df)`` albo ``0`` przy braku arkusza / błędzie pandas (nie crashuj SMTP).
+    """
     try:
         import pandas as pd  # pyright: ignore[reportMissingImports]
 
+        # Celowo „Kontakte” — spójne z pl_fas_spedycja_scraper Excel append.
         df = pd.read_excel(path, sheet_name="Kontakte")
         return len(df.index)
     except Exception:
@@ -82,19 +133,36 @@ def count_kontakte_rows(path: Path) -> int:
 
 
 def build_email_subject(path: Path) -> str:
+    """
+    Temat maila raportu PL FAS.
+
+    Format: ``PL FAS Kontakte Excel — YYYY-MM-DD ({filename})``
+    (strefa ``Europe/Warsaw``).
+    """
     tz = ZoneInfo(DEFAULT_TZ)
     today = datetime.now(tz).strftime("%Y-%m-%d")
-    return f"GU Kontakte Excel — {today} ({path.name})"
+    return f"PL FAS Kontakte Excel — {today} ({path.name})"
 
 
 def build_email_body(path: Path, row_count: int) -> str:
+    """
+    Treść plain-text raportu wewnętrznego.
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Opis kampanii **PL FAS / spedycja drogowa** + metadane pliku
+    (nazwa, KB, wiersze Kontakte, timestamp). Bez stringów GU/DE.
+
+    ``row_count`` z ``count_kontakte_rows`` (0 = ogólny opis arkusza).
+    """
     tz = ZoneInfo(DEFAULT_TZ)
     now = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
     size_kb = path.stat().st_size / 1024
     rows_note = f"{row_count} wierszy w arkuszu Kontakte" if row_count else "arkusz Kontakte"
     return (
         f"Cześć,\n\n"
-        f"w załączniku aktualny plik Excel z kampanii GU (Generalunternehmer).\n\n"
+        f"w załączniku aktualny plik Excel z kampanii PL FAS / spedycja drogowa.\n\n"
         f"Plik: {path.name}\n"
         f"Rozmiar: {size_kb:.0f} KB\n"
         f"{rows_note}\n"
@@ -111,9 +179,31 @@ def send_excel_report(
     logger: logging.Logger | None = None,
 ) -> tuple[bool, str]:
     """
-    Raport wewnętrzny (Excel → jeden odbiorca EXCEL_REPORT_TO).
-    NIE jest to wysyłka B2B do kontrahentów.
-    Kill-switch: DISABLE_EXCEL_REPORT_EMAIL=1 (domyślnie raport WŁĄCZONY).
+    Wysyła (lub symuluje) raport Excel PL FAS na jeden adres Gmail.
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Raport **wewnętrzny** (nd 09:00 / lokalnie) — ``EXCEL_REPORT_TO``
+    (default ``svinchak1993@gmail.com``). **Nie** jest to B2B do kontrahentów
+    (osobny kill-switch: ``DISABLE_CONTRACTOR_EMAILS``).
+
+    Kill-switch raportu: ``DISABLE_EXCEL_REPORT_EMAIL=1`` → NO-OP
+    (zwraca ``(True, "disabled_excel_report_email")``; dry-run i tak pokazuje plan).
+
+    =====================================================================
+    PRZEBIEG
+    =====================================================================
+    1. Kill-switch (pomijany przy ``dry_run``).
+    2. Odbiorca: ``to_email`` albo ``get_excel_report_to()`` — jeden adres.
+    3. ``resolve_excel_path`` → subject / body / row count.
+    4. ``dry_run`` → print planu, bez SMTP.
+    5. ``send_smtp_email_with_attachments`` (``mail_type="Excel PL FAS"``).
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    ``(ok, info)`` — ``info`` to status SMTP / ``dry_run`` / powód błędu.
     """
     log = logger or setup_logging()
     try:
@@ -155,13 +245,18 @@ def send_excel_report(
         body,
         [path],
         log,
-        mail_type="Excel GU",
-        campaign="de_gu_bauunternehmen",
+        mail_type="Excel PL FAS",
+        campaign="pl_spedycja",
     )
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Wyślij Excel GU na Gmail")
+    """
+    CLI: ``--to`` / ``--excel`` / ``--dry-run`` → ``send_excel_report``.
+
+    Exit: ``0`` OK, ``1`` brak pliku / błąd SMTP / zły adres.
+    """
+    parser = argparse.ArgumentParser(description="Wyślij Excel PL FAS (Kontakte) na Gmail")
     parser.add_argument("--to", dest="to_email", default="", help="Adres odbiorcy")
     parser.add_argument("--excel", dest="excel_path", default="", help="Ścieżka do .xlsx")
     parser.add_argument("--dry-run", action="store_true", help="Bez wysyłki SMTP")
@@ -183,6 +278,7 @@ def main() -> int:
         return 0
     print(f"BŁĄD: {info}", file=sys.stderr)
     return 1
+
 
 
 if __name__ == "__main__":

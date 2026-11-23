@@ -1,8 +1,11 @@
-# WTOREK — discovery czesc 2 (kontynuacja), bez wysylki maili.
-# Task Scheduler: wtorek 15:00
+# =============================================================================
+# PO CO: wtorek — discovery część 2 (kontynuacja cache), bez wysyłki B2B.
+# Plan: schedule/PLAN_5_DNI.md
+# Task Scheduler: Spedycja_FAS_Wtorek_Discovery → wt 18:00 (Europe/Warsaw).
+# =============================================================================
 
 . "$PSScriptRoot\_common.ps1"
-Enter-GuCampaign
+Enter-FasCampaign
 
 $env:SCRAPER_TIMEZONE = "Europe/Warsaw"
 Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
@@ -12,8 +15,8 @@ if ($args.Count -gt 0 -and $args[0] -like "run_config\*") {
     $config = $args[0]
     $rest = @($args | Select-Object -Skip 1)
     Write-Host "[WTOREK] Discovery (reczny run_config): $config"
-    python de_gu_bauunternehmen_scraper.py --run-config $config @rest
+    python pl_fas_spedycja_scraper.py --run-config $config @rest
 } else {
     Write-Host "[WTOREK] Discovery czesc 2: kontynuacja (--respect-cache)"
-    python de_gu_bauunternehmen_scraper.py --run-config run_config\mfg_gu_de.json --serper-only-discovery --no-auto-email --respect-cache @args
+    python pl_fas_spedycja_scraper.py --run-config run_config\pl_fas_spedycja.json --serper-only-discovery --no-auto-email --respect-cache @args
 }

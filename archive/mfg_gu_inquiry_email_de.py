@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Jedyny dozwolony tekst maila MFG (kampanie DE GU / Filialbau).
-Nie modyfikować przez LLM ani szablony GUI — wyłącznie ten blok.
+ARCHIWUM — stały tekst maila MFG (kampanie DE GU / Filialbau).
+
+Nie używany przez ``pl_fas_spedycja_scraper`` / PL FAS.
+Kanoniczny outreach: ``fas_spedycja_inquiry_email_pl.py`` (root repo).
+
+Nie modyfikować przez LLM ani szablony GUI — wyłącznie ten blok (historyczny).
 """
 
 

@@ -11,9 +11,9 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-_GU_SNIPPET = (
-    "Generalunternehmer Filialbau Supermarkt Neubau Rewe ÔÇö "
-    "Referenzprojekt realisiert."
+_FAS_SNIPPET = (
+    "Firma spedycyjna. Transport drogowy FTL LTL Europa — "
+    "realizacje i flota."
 )
 
 
@@ -28,21 +28,32 @@ def _pipeline_row(url: str, name: str, email: str, chain: str) -> dict:
         "is_small_firm": True,
         "retail_chains_found": chain,
         "verification_reason": "claude:test",
-        "page_snippet": _GU_SNIPPET,
+        "page_snippet": _FAS_SNIPPET,
+        "bundesland": "Dolnoslaskie",
     }
 
 
 class TestExcelPipelineIntegration:
     def test_save_excel_appends_to_existing_file(self):
-        import de_gu_bauunternehmen_scraper as scraper
+        import pl_fas_spedycja_scraper as scraper
 
         with tempfile.TemporaryDirectory() as tmp:
             xlsx = Path(tmp) / "kontakte.xlsx"
             rows_existing = [
-                _pipeline_row("https://alt.de", "Alt GmbH", "alt@alt.de", "rewe")
+                _pipeline_row(
+                    "https://alt-spedycja.pl",
+                    "Alt Spedycja Sp. z o.o.",
+                    "alt@alt-spedycja.pl",
+                    "ftl",
+                )
             ]
             rows_new = [
-                _pipeline_row("https://neu.de", "Neu GmbH", "neu@neu.de", "aldi")
+                _pipeline_row(
+                    "https://neu-spedycja.pl",
+                    "Neu Spedycja Sp. z o.o.",
+                    "neu@neu-spedycja.pl",
+                    "ltl",
+                )
             ]
             logger = scraper.setup_logging()
             scraper.save_excel(rows_existing, xlsx, logger, cache={})
@@ -58,8 +69,10 @@ class TestExcelPipelineIntegration:
                 for u in df["URL"].fillna("").tolist()
                 if str(u).strip()
             }
-            assert "https://alt.de" in urls
-            assert "https://neu.de" in urls
+            assert "https://alt-spedycja.pl" in urls
+            assert "https://neu-spedycja.pl" in urls
+            assert "Województwo" in df.columns
+            assert "Segmenty" in df.columns or "Spedycja" in df.columns
             del df
             gc.collect()
 
@@ -67,11 +80,19 @@ class TestExcelPipelineIntegration:
         from scripts import send_excel_gmail as mailer
 
         with tempfile.TemporaryDirectory() as tmp:
-            xlsx = Path(tmp) / "de_gu_bauunternehmen_kontakte.xlsx"
+            xlsx = Path(tmp) / "pl_spedycja_kontakte.xlsx"
             import pandas as pd
 
             pd.DataFrame(
-                [{"Nazwa firmy": "Test", "URL": "https://x.de", "E-mail": "a@b.de"}]
+                [
+                    {
+                        "Nazwa firmy": "Test Spedycja Sp. z o.o.",
+                        "URL": "https://x.pl",
+                        "E-mail": "a@b.pl",
+                        "Województwo": "Dolnoslaskie",
+                        "Segmenty": "ftl",
+                    }
+                ]
             ).to_excel(xlsx, sheet_name="Kontakte", index=False)
             with patch.object(mailer, "resolve_excel_path", return_value=xlsx.resolve()):
                 ok, info = mailer.send_excel_report(dry_run=True)

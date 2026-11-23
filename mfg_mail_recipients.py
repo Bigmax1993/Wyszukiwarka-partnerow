@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Stałe odbiorcy kopii dla kampanii MFG (DE GU / Ost)."""
+"""
+Shim legacy: ``mfg_mail_recipients`` → ``pl_fas_mail_recipients``.
+
+``office@mfg-fliesen.de`` odpięte. Cc biura = ``FAS_OFFICE_CC_EMAIL``
+(``svinchak1993@gmail.com``).
+
+Nowy kod::
+
+  from pl_fas_mail_recipients import merge_fas_campaign_cc, FAS_OFFICE_CC_EMAIL
+"""
 from __future__ import annotations
 
-# Opcjonalny Cc biura — nie jest dodawany automatycznie (tylko przez MAIL_CC w .env).
-MFG_OFFICE_CC_EMAIL = "office@mfg-fliesen.de"
+from pl_fas_mail_recipients import (  # noqa: F401
+    FAS_OFFICE_CC_EMAIL,
+    merge_fas_campaign_cc,
+    merge_mfg_campaign_cc,
+)
 
-
-def merge_mfg_campaign_cc(to_email: str, extra_env_cc: str = "") -> list[str]:
-    """Widoczna kopia (Cc) — tylko z MAIL_CC w .env (bez automatycznego office@)."""
-    try:
-        from mail_transport import merge_mail_cc_recipients
-
-        return merge_mail_cc_recipients(to_email, extra_env_cc)
-    except Exception:
-        return []
+# Legacy nazwa stałej — wskazuje na skrzynkę FAS, nie MFG.
+MFG_OFFICE_CC_EMAIL = FAS_OFFICE_CC_EMAIL

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import de_gu_bauunternehmen_scraper as scraper  # noqa: E402
+import pl_fas_spedycja_scraper as scraper  # noqa: E402
 
 
 def main() -> int:

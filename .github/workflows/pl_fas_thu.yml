@@ -1,4 +1,4 @@
-name: GU niedziela backfill
+name: PL spedycja niedziela backfill
 
 # Discovery-only: cron nd 06:00 Europe/Warsaw - verify + backfill + Excel.
 # Guard: niedziela tygodnia cyklu (co 55 dni od 2026-11-02).
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: "Opcjonalnie run ID piątku (de-gu-wyniki-pi). Puste = najnowszy pi."
+        description: "Opcjonalnie run ID piątku (pl-spedycja-wyniki-pi). Puste = najnowszy pi."
         required: false
         type: string
 
@@ -35,7 +35,7 @@ jobs:
       active: ${{ steps.window.outputs.active }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/gu-gha-window-guard
+      - uses: ./.github/actions/pl_fas_gha_window_guard
         id: window
 
   backfill:
@@ -59,40 +59,40 @@ jobs:
           FORCED="${{ github.event_name == 'workflow_dispatch' && inputs.artifact_run_id || '' }}"
           if [ -n "$FORCED" ]; then
             RUN_ID="$FORCED"
-            ARTIFACT="de-gu-wyniki-pi"
+            ARTIFACT="pl-spedycja-wyniki-pi"
           else
             RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-              --jq '[.artifacts[] | select(.name=="de-gu-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
-            ARTIFACT="de-gu-wyniki-pi"
+              --jq '[.artifacts[] | select(.name=="pl-spedycja-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+            ARTIFACT="pl-spedycja-wyniki-pi"
           fi
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "::error::Brak artefaktu discovery (de-gu-wyniki-pi)"
+            echo "::error::Brak artefaktu discovery (pl-spedycja-wyniki-pi)"
             exit 1
           fi
           echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
           echo "Pobieram $ARTIFACT z run $RUN_ID"
 
-      - name: Download cache from discovery (piatek / de-gu-wyniki-pi)
+      - name: Download cache from discovery (piatek / pl-spedycja-wyniki-pi)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ steps.artifact_run.outputs.artifact || 'de-gu-wyniki-pi' }}
+          name: ${{ steps.artifact_run.outputs.artifact || 'pl-spedycja-wyniki-pi' }}
           github-token: ${{ github.token }}
           run-id: ${{ steps.artifact_run.outputs.run-id }}
           path: .
 
       - name: Verify pending www + backfill and rebuild Excel
         run: |
-          CFG="--run-config run_config/mfg_gu_de.json"
-          python de_gu_bauunternehmen_scraper.py $CFG --verify-pending-contacts --reverify-all-contacts
-          python de_gu_bauunternehmen_scraper.py $CFG --backfill-emails-from-cache
-          python de_gu_bauunternehmen_scraper.py $CFG --rebuild-from-cache
+          CFG="--run-config run_config/pl_fas_spedycja.json"
+          python pl_fas_spedycja_scraper.py $CFG --verify-pending-contacts --reverify-all-contacts
+          python pl_fas_spedycja_scraper.py $CFG --backfill-emails-from-cache
+          python pl_fas_spedycja_scraper.py $CFG --rebuild-from-cache
 
       - name: Upload Wyniki artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: de-gu-wyniki-thu
+          name: pl-spedycja-wyniki-thu
           path: |
             Wyniki/
             wyslane/

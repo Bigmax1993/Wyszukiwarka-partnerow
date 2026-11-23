@@ -1,7 +1,7 @@
-name: GU poniedzialek excel email
+name: PL spedycja poniedzialek excel email
 
 # Raport wewnętrzny: końcowy Excel → svinchak1993@gmail.com + Google Drive.
-# Drive: https://drive.google.com/drive/folders/1JMPyphoNX_oS_EjW7LEhf103lvvtsMUL
+# Drive: https://drive.google.com/drive/folders/1bRCAqle6BS46YEw0fScq4P095LsJUSgL
 # Cron: niedziela 09:00 (po backfillu 06:00). NIE jest to wysyłka B2B.
 # Guard: niedziela tygodnia cyklu (co 55 dni od 2026-11-02).
 on:
@@ -36,7 +36,7 @@ jobs:
       active: ${{ steps.window.outputs.active }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/gu-gha-window-guard
+      - uses: ./.github/actions/pl_fas_gha_window_guard
         id: window
 
   send-excel:
@@ -66,7 +66,7 @@ jobs:
               '[.[] | select(.name == $n)] | sort_by(.created_at) | reverse | .[0] // empty'
           }
           PICK=""
-          for NAME in de-gu-wyniki-thu de-gu-wyniki-mon; do
+          for NAME in pl-spedycja-wyniki-thu pl-spedycja-wyniki-mon; do
             CAND=$(pick_latest "$NAME")
             if [ -n "$CAND" ] && [ "$CAND" != "null" ]; then
               PICK="$CAND"
@@ -126,5 +126,5 @@ jobs:
             echo "::error::Brak pliku Excel w Wyniki/"
             exit 1
           fi
-          cp "$XLSX" /tmp/excel-drive/Wyniki/de_gu_bauunternehmen_kontakte.xlsx
+          cp "$XLSX" /tmp/excel-drive/Wyniki/pl_spedycja_kontakte.xlsx
           python scripts/gdrive_upload_wyniki.py --campaign-dir /tmp/excel-drive --folder-id "$GDRIVE_FOLDER_ID"

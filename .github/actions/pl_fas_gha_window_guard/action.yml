@@ -1,0 +1,128 @@
+name: PL FAS GHA schedule window guard
+description: >-
+  Cron: aktywny co 55 dni od 2026-11-02.
+  Tryb pipeline (domyślny): tydzień cyklu pon–pt discovery + niedziela backfill/excel.
+  Tryb send_followup (env FAS_GUARD_MODE=send_followup): pon/wt 09:00
+  w tygodniu PO niedzieli Excel — B2B partia 1/2 według harmonogramu.
+  workflow_dispatch zawsze active=true.
+  Opcjonalnie: GU_CADENCE_ANCHOR, GU_CADENCE_DAYS (domyślnie 55).
+outputs:
+  active:
+    description: "true = uruchom pipeline, false = pomiń scheduled"
+    value: ${{ steps.check.outputs.active }}
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        TZ=Europe/Warsaw
+        export TZ
+
+        if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          echo "Guard: workflow_dispatch → active=true"
+          echo "active=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        ANCHOR="${GU_CADENCE_ANCHOR:-2026-11-02}"
+        CADENCE_DAYS="${GU_CADENCE_DAYS:-55}"
+        MODE="${FAS_GUARD_MODE:-pipeline}"
+        DOW=$(date +%u)   # 1=Mon … 7=Sun
+        TODAY=$(date +%Y-%m-%d)
+        MONDAY=$(date -d "$TODAY - $((DOW - 1)) days" +%Y-%m-%d)
+        PREV_MONDAY=$(date -d "$MONDAY - 7 days" +%Y-%m-%d)
+
+        echo "Guard: mode=$MODE today=$TODAY (DOW=$DOW) monday=$MONDAY prev_mon=$PREV_MONDAY anchor=$ANCHOR every=${CADENCE_DAYS}d"
+
+        ANCHOR_EPOCH=$(date -d "$ANCHOR" +%s)
+        MONDAY_EPOCH=$(date -d "$MONDAY" +%s)
+        DAYS_MON=$(( (MONDAY_EPOCH - ANCHOR_EPOCH) / 86400 ))
+
+        cycle_monday_for_n() {
+          local n="$1"
+          local RAW_EPOCH=$(( ANCHOR_EPOCH + n * CADENCE_DAYS * 86400 ))
+          local RAW RAW_DOW
+          RAW=$(date -d "@$RAW_EPOCH" +%Y-%m-%d)
+          RAW_DOW=$(date -d "$RAW" +%u)
+          if [ "$RAW_DOW" -eq 1 ]; then
+            echo "$RAW"
+          else
+            date -d "$RAW + $((8 - RAW_DOW)) days" +%Y-%m-%d
+          fi
+        }
+
+        find_cycle_n_for_monday() {
+          local TARGET_MON="$1"
+          local TARGET_EPOCH DAYS_T n_lo n_hi n CM
+          TARGET_EPOCH=$(date -d "$TARGET_MON" +%s)
+          DAYS_T=$(( (TARGET_EPOCH - ANCHOR_EPOCH) / 86400 ))
+          if [ "$DAYS_T" -lt -6 ]; then
+            return 1
+          fi
+          n_lo=$(( (DAYS_T - 6) / CADENCE_DAYS ))
+          n_hi=$(( (DAYS_T + CADENCE_DAYS + 6) / CADENCE_DAYS ))
+          [ "$n_lo" -lt 0 ] && n_lo=0
+          for n in $(seq "$n_lo" "$n_hi"); do
+            CM=$(cycle_monday_for_n "$n")
+            if [ "$CM" = "$TARGET_MON" ]; then
+              echo "$n"
+              return 0
+            fi
+          done
+          return 1
+        }
+
+        ACTIVE=false
+        REASON=""
+
+        if [ "$MODE" = "send_followup" ]; then
+          # Harmonogram B2B: po nd Excel → następny pon 09:00 (1) i wt 09:00 (2).
+          PREV_N=""
+          if PREV_N=$(find_cycle_n_for_monday "$PREV_MONDAY"); then
+            if [ "$DOW" -eq 1 ] || [ "$DOW" -eq 2 ]; then
+              ACTIVE=true
+              REASON="send follow-up po cyklu n=$PREV_N (discovery/excel tydzień $PREV_MONDAY → send $MONDAY DOW=$DOW)"
+            else
+              REASON="send_followup: tylko pon/wt po cyklu (dziś DOW=$DOW)"
+            fi
+          else
+            REASON="send_followup: poprzedni pon $PREV_MONDAY nie jest poniedziałkiem cyklu"
+          fi
+        elif [ "$DAYS_MON" -lt -6 ]; then
+          REASON="przed pierwszym cyklem (anchor $ANCHOR)"
+        else
+          MATCH_N=""
+          if MATCH_N=$(find_cycle_n_for_monday "$MONDAY"); then
+            MATCH_RAW=$(cycle_monday_for_n "$MATCH_N")
+            # raw marker may differ; keep cycle monday for reason
+            if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
+              ACTIVE=true
+              REASON="tydzień cyklu n=$MATCH_N discovery (pon $MONDAY)"
+            elif [ "$DOW" -eq 7 ]; then
+              ACTIVE=true
+              REASON="niedziela domknięcia cyklu n=$MATCH_N (pon $MONDAY)"
+            else
+              REASON="sobota — brak jobów pipeline (cykl n=$MATCH_N, pon $MONDAY)"
+            fi
+          else
+            if [ "$DAYS_MON" -lt 0 ]; then
+              NEXT_N=0
+            else
+              NEXT_N=$(( DAYS_MON / CADENCE_DAYS + 1 ))
+            fi
+            NEXT_MON=$(cycle_monday_for_n "$NEXT_N")
+            REASON="poza cyklem co ${CADENCE_DAYS}d (następny pon cyklu ≈ $NEXT_MON)"
+          fi
+        fi
+
+        if [ "$ACTIVE" = "true" ]; then
+          echo "Guard: active=true ($REASON)"
+          echo "active=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Guard: active=false ($REASON)"
+          echo "active=false" >> "$GITHUB_OUTPUT"
+        fi

@@ -1,0 +1,15 @@
+{
+  "config_type": "pl_spedycja",
+  "campaign_id": "pl_fas_spedycja",
+  "lang": "pl",
+  "city_name": "Polska",
+  "delivery_address": "Polska (wybrane województwa)",
+  "active_bundeslaender": [
+    "Slaskie",
+    "Malopolskie",
+    "Dolnoslaskie"
+  ],
+  "min_contacts_target": 150,
+  "enable_auto_email": false,
+  "dry_run_email": false
+}

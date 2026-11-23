@@ -6,29 +6,33 @@ Krótka mapa różnic — żeby nie mieszać cadence i zakresów jobów.
 
 | | GitHub Actions | PC (`register_tasks_5_dni.ps1`) |
 |--|----------------|----------------------------------|
-| Godziny | pon–pt 18:00, nd 06:00 (+ nd 09:00 Excel) | pon–pt 18:00, nd 06:00 |
+| Godziny discovery/backfill | pon–pt 18:00, nd 06:00 (+ nd 09:00 Excel) | pon–pt 18:00, nd 06:00 |
+| B2B send | **pon/wt 09:00** po Excelu (`send_followup`) | **brak** — nie rejestrowane |
 | Okres | **co 55 dni** od `2026-11-02` (guard; wyrównanie do pon) | **co tydzień** (bez guarda) |
 | Najbliższe cykle GHA | **02–08.11.2026**, **28.12.2026–03.01.2027**, **22–28.02.2027** (pełna lista w [`GITHUB_ACTIONS.md`](GITHUB_ACTIONS.md#kalendarz-uruchomień-gha-europewarsaw)) | co tydzień bez ograniczenia |
 | Excel Gmail + Drive xlsx | **nd 09:00** (tylko GHA) | **brak** — nie rejestrowane |
 
-Obowiązujące godziny PC bierze `register_tasks_5_dni.ps1`. Komentarze w nagłówkach `schedule/run_*_discovery.ps1` mogą być historyczne.
+Obowiązujące godziny PC bierze `register_tasks_5_dni.ps1` (nazwy tasków: `Spedycja_FAS_*`; legacy `Kanbud_GU_*` usuwane przy rejestracji).
 
 ## Discovery
 
 | | GHA | PC |
 |--|-----|-----|
-| Config | `run_config/mfg_gu_de.json` (16 landów) | to samo |
+| Config | `run_config/pl_fas_spedycja.json` (16 woj.; **1. = Dolnoslaskie**) | to samo |
+| Filtr ICP | `pl_spedycja_filter.py` (PL) | to samo — [`FILTER_ICP.md`](FILTER_ICP.md) |
+| Prompty Claude | `claude_prompts.py` (PL FAS) | to samo — [`CLAUDE_PROMPTS.md`](CLAUDE_PROMPTS.md) |
+| Cookie baner | `playwright_cookie_consent.py` (Chromium pl-PL) | to samo — [`COOKIE_CONSENT.md`](COOKIE_CONSENT.md) |
 | Flagi | `--serper-only-discovery` (+ `--respect-cache` w kontynuacji) | to samo w `run_*_discovery.ps1` |
-| Rotacja 1 land | **nie** | **nie** (tylko ręczne `--rotate-bundesland`) |
-| Wyniki | artefakt `de-gu-wyniki-pi` | lokalny `Wyniki/` |
+| Rotacja 1 województwo | **nie** | **nie** (tylko ręczne `--rotate-bundesland`; order start: DS) |
+| Wyniki | artefakt `pl-spedycja-wyniki-pi` | lokalny `Wyniki/` |
 
 ## Backfill
 
-| | GHA (`de_gu_thu.yml`) | PC (`schedule/run_czwartek.ps1`) |
+| | GHA (`pl_fas_thu.yml`) | PC (`schedule/run_czwartek.ps1`) |
 |--|----------------------|----------------------------------|
 | Kiedy | chain zaraz po **pt discovery** + cron nd 06:00 | nd 06:00 Task Scheduler |
-| Zakres | `--verify-pending-contacts --reverify-all-contacts` + `--run-config mfg_gu_de.json` | uproszczony: `--verify-pending-contacts` (bez pełnego reverify / bez run-config w skrypcie) |
-| Artefakt | `de-gu-wyniki-thu` | lokalny `Wyniki/` |
+| Zakres | `--verify-pending-contacts --reverify-all-contacts` + `--run-config pl_fas_spedycja.json` | uproszczony: `--verify-pending-contacts` (bez pełnego reverify / bez run-config w skrypcie) |
+| Artefakt | `pl-spedycja-wyniki-thu` | lokalny `Wyniki/` |
 
 Nazwa pliku `run_czwartek.ps1` jest legacy — to **niedzielny backfill**, nie discovery czwartku (`run_czwartek_discovery.ps1`).
 
@@ -37,12 +41,14 @@ Nazwa pliku `run_czwartek.ps1` jest legacy — to **niedzielny backfill**, nie d
 | Funkcja | GHA | PC |
 |---------|-----|-----|
 | Raport Excel → Gmail | nd 09:00 ON | ręcznie: `scripts/send_excel_gmail.py` |
-| Upload końcowego `.xlsx` | nd 09:00 ON (`GDRIVE_FOLDER_ID`) | lokalnie przy `DISABLE_GOOGLE_DRIVE=0` |
-| Pełny sync `Wyniki/` | OFF | OFF (domyślnie) |
-| Send B2B | OFF (`disabled_manually` + `if: false`; brak chain z discovery) | OFF (`DISABLE_CONTRACTOR_EMAILS=1`) |
+| Cache JSON + log | lokalnie / artefakt (nie Drive) | lokalne `Wyniki/` w repo |
+| Upload końcowego `.xlsx` | nd 09:00 ON → folder `1bRCAq…` (`GDRIVE_FOLDER_ID`) | ręcznie: `gdrive_upload_wyniki.py` |
+| Załączniki B2B | oferta `1t6m…` + prezentacja `164qb…` (przy send) | to samo / `FAS_EMAIL_ATTACHMENT_PATH` + `FAS_EMAIL_ATTACHMENT_EXTRA_PATH` |
+| Pełny sync `Wyniki/` | OFF | OFF |
+| Send B2B | **ON** — pon/wt 09:00 (`send_followup`) | OFF default (`DISABLE_CONTRACTOR_EMAILS=1`); ręcznie `run_*_send.ps1` |
 
 ## Kiedy używać czego
 
-- **Produkcja kampanii / cadence 55 dni:** GHA (guard + artefakty + Excel/Drive).
+- **Produkcja kampanii / cadence 55 dni:** GHA (guard + artefakty + Excel/Drive + B2B).
 - **Dev / częstsze testy:** PC Task Scheduler lub ręczne `python … --run-config …`.
 - **Nie zakładaj**, że PC „sam” ograniczy się do tygodnia cyklu GHA — trzeba to wyłączyć / nie rejestrować zadań poza cyklem.

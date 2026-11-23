@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_name:
-        description: "Opcjonalnie wymus artefakt (np. de-gu-wyniki-thu)"
+        description: "Opcjonalnie wymus artefakt (np. pl-spedycja-wyniki-thu)"
         required: false
         type: string
 
@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  GDRIVE_FOLDER_ID: "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
+  GDRIVE_FOLDER_ID: "1bRCAqle6BS46YEw0fScq4P095LsJUSgL"
   GDRIVE_VERSION_XLSX: "1"
   DISABLE_GOOGLE_DRIVE: "1"
   SCRAPER_TIMEZONE: Europe/Warsaw
@@ -35,7 +35,7 @@ jobs:
       active: ${{ steps.window.outputs.active }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/gu-gha-window-guard
+      - uses: ./.github/actions/pl_fas_gha_window_guard
         id: window
 
   upload:
@@ -71,7 +71,7 @@ jobs:
           if [ -n "$FORCED" ]; then
             PICK=$(pick_latest "$FORCED")
           else
-            for NAME in de-gu-wyniki-thu de-gu-wyniki-wed de-gu-wyniki-mon de-gu-wyniki-tue de-gu-wyniki-fri; do
+            for NAME in pl-spedycja-wyniki-thu pl-spedycja-wyniki-wed pl-spedycja-wyniki-mon pl-spedycja-wyniki-tue pl-spedycja-wyniki-fri; do
               CAND=$(pick_latest "$NAME")
               if [ -n "$CAND" ] && [ "$CAND" != "null" ]; then
                 PICK="$CAND"
@@ -149,4 +149,4 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/gha_chain_workflow.sh "GU poniedzialek prep"
+        run: bash scripts/gha_chain_workflow.sh "PL spedycja poniedzialek prep"

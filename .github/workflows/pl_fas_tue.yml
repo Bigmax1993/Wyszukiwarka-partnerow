@@ -1,0 +1,160 @@
+name: PL spedycja poniedzialek send
+
+# B2B partia 1 — cron pon 09:00 Europe/Warsaw.
+# Harmonogram: discovery pon–pt → backfill → Excel nd → (następny) pon send 1 → wt send 2.
+# Guard: FAS_GUARD_MODE=send_followup (tydzień PO niedzieli Excel, co 55 dni).
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+      timezone: Europe/Warsaw
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: "Opcjonalnie run ID źródła (np. backfill thu). Puste = najnowszy thu/mon."
+        required: false
+        type: string
+      artifact_name:
+        description: "Nazwa artefaktu źródła (domyślnie preferuj pl-spedycja-wyniki-thu)"
+        required: false
+        type: string
+        default: ""
+      force_resend:
+        description: Ponowna wysylka (ignoruj suppression i sent)
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: gu-pipeline
+  cancel-in-progress: false
+
+env:
+  SCRAPER_TIMEZONE: Europe/Warsaw
+  FAS_GUARD_MODE: send_followup
+  DISABLE_SEND_WINDOW: "1"
+  DISABLE_CONTRACTOR_EMAILS: "0"
+  FAS_EMAIL_ATTACHMENT_PATH: ${{ github.workspace }}/assets/campaign/FAS_zalacznik_kampania.pptx
+  FAS_EMAIL_ATTACHMENT_EXTRA_PATH: ${{ github.workspace }}/assets/campaign/FAS_prezentacja.pptx
+  MFG_EMAIL_ATTACHMENT_PATH: ${{ github.workspace }}/assets/campaign/FAS_zalacznik_kampania.pptx
+
+  KANBUD_PROJECT_ROOT: ${{ github.workspace }}/libs
+  SMTP_HOST: ragakomputer.home.pl
+  SMTP_PORT: "465"
+  SMTP_SSL: "1"
+  IMAP_HOST: ragakomputer.home.pl
+  IMAP_PORT: "993"
+  IMAP_SSL: "1"
+  MAIL_ARCHIVE_IMAP: "1"
+
+jobs:
+  guard:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    outputs:
+      active: ${{ steps.window.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pl_fas_gha_window_guard
+        id: window
+
+  send:
+    needs: guard
+    if: ${{ needs.guard.outputs.active == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-scraper
+
+      - name: Resolve artifact run (prefer thu backfill, fallback mon/pi)
+        id: artifact_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FORCED="${{ github.event_name == 'workflow_dispatch' && inputs.artifact_run_id || '' }}"
+          FORCED_NAME="${{ github.event_name == 'workflow_dispatch' && inputs.artifact_name || '' }}"
+
+          if [ -n "$FORCED" ]; then
+            ARTIFACT="${FORCED_NAME:-pl-spedycja-wyniki-thu}"
+            echo "run-id=$FORCED" >> "$GITHUB_OUTPUT"
+            echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+            echo "Pobieram $ARTIFACT z run $FORCED (wymuszone)"
+            exit 0
+          fi
+
+          ALL=$(gh api "repos/${{ github.repository }}/actions/artifacts" \
+            --paginate --jq '.artifacts[] | select(.expired==false)')
+          pick_latest() {
+            local name="$1"
+            echo "$ALL" | jq -s --arg n "$name" \
+              '[.[] | select(.name == $n)] | sort_by(.created_at) | reverse | .[0] // empty'
+          }
+          PICK=""
+          if [ -n "$FORCED_NAME" ]; then
+            PICK=$(pick_latest "$FORCED_NAME")
+          else
+            for NAME in pl-spedycja-wyniki-thu pl-spedycja-wyniki-mon pl-spedycja-wyniki-pi; do
+              CAND=$(pick_latest "$NAME")
+              if [ -n "$CAND" ] && [ "$CAND" != "null" ]; then
+                PICK="$CAND"
+                break
+              fi
+            done
+          fi
+          if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
+            echo "::error::Brak artefaktu thu/mon/pi (uruchom backfill lub discovery)"
+            exit 1
+          fi
+          ARTIFACT=$(echo "$PICK" | jq -r '.name')
+          RUN_ID=$(echo "$PICK" | jq -r '.workflow_run.id')
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          echo "Pobieram $ARTIFACT z run $RUN_ID"
+
+      - name: Download cache from zrodlo
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.artifact_run.outputs.artifact }}
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.artifact_run.outputs.run-id }}
+          path: .
+
+      - name: "Pobierz załącznik FAS z Drive (fallback lokalny)"
+        env:
+          GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+          GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+          GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+        run: |
+          pip install -r requirements-drive.txt
+          mkdir -p assets/campaign
+          if python scripts/export_fas_email_attachment.py; then
+            echo "OK: oferta + prezentacja FAS z Drive"
+          else
+            echo "UWAGA: Drive niedostępne (OAuth) — ustaw FAS_EMAIL_ATTACHMENT_PATH / EXTRA lub assets/campaign/*.pptx"
+          fi
+          test -f assets/campaign/FAS_zalacznik_kampania.pptx
+          test -f assets/campaign/FAS_prezentacja.pptx
+
+      - name: Send emails partia 1 (do 300/dzien, okno 8-18 Warsaw)
+        env:
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+        run: |
+          ARGS="--send-emails-only --ignore-send-window"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_resend }}" = "true" ]; then
+            ARGS="$ARGS --force-resend"
+          fi
+          python pl_fas_spedycja_scraper.py $ARGS
+
+      - name: Upload Wyniki artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pl-spedycja-wyniki-tue
+          path: |
+            Wyniki/
+            wyslane/

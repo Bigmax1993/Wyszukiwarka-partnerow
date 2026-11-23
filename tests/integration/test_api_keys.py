@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Testy integracyjne: klucze API (Serper, Anthropic)."""
+"""Testy integracyjne: klucze API (Serper, Anthropic). Gmail/Drive: test_gmail_gdrive_api.py."""
 from __future__ import annotations
 
 import os
@@ -25,7 +25,7 @@ def test_serper_api_key_works():
     response = requests.post(
         SERPER_API_URL,
         headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-        json={"q": "Generalunternehmer Filialbau Leipzig", "gl": "de", "hl": "de", "num": 1},
+        json={"q": "spedycja FTL Głogów", "gl": "pl", "hl": "pl", "num": 1},
         timeout=30,
     )
     assert response.status_code == 200, response.text[:300]

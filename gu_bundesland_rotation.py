@@ -2,7 +2,7 @@
 """
 Rotacja Bundesländer — jeden land na cykl discovery (np. piątek).
 
-Stan: Wyniki/de_gu_bundeslaender_rotation.json
+Stan: Wyniki/gu_bundesland_rotation.json
 """
 from __future__ import annotations
 
@@ -11,12 +11,30 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from de_gu_keywords import BUNDESLAND_CONFIG, configure_campaign_bundeslaender
+from pl_spedycja_keywords import BUNDESLAND_CONFIG, configure_campaign_bundeslaender
 
-# Kolejność fal (duże rynki → mniejsze landy)
-BUNDESLAND_ROTATION_ORDER: tuple[str, ...] = tuple(BUNDESLAND_CONFIG.keys())
+# Kolejność rotacji 1 woj./cykl — start od Dolnośląskiego (jak pl_fas_spedycja.json).
+BUNDESLAND_ROTATION_ORDER: tuple[str, ...] = (
+    "Dolnoslaskie",
+    "Mazowieckie",
+    "Lodzkie",
+    "Wielkopolskie",
+    "Slaskie",
+    "Malopolskie",
+    "Pomorskie",
+    "Zachodniopomorskie",
+    "Lubuskie",
+    "Kujawsko-Pomorskie",
+    "Warminsko-Mazurskie",
+    "Podlaskie",
+    "Lubelskie",
+    "Podkarpackie",
+    "Swietokrzyskie",
+    "Opolskie",
+)
+assert set(BUNDESLAND_ROTATION_ORDER) == set(BUNDESLAND_CONFIG.keys())
 
-STATE_FILENAME = "de_gu_bundeslaender_rotation.json"
+STATE_FILENAME = "gu_bundesland_rotation.json"
 DEFAULT_MIN_CONTACTS_SINGLE_LAND = 20
 
 

@@ -1,12 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-Okno wysyłki e-mail i strefa czasu — konfiguracja przez zmienne środowiskowe (GitHub Actions, cron, Task Scheduler).
+Okno wysyłki e-mail i strefa czasu — konfiguracja przez zmienne środowiskowe.
 
-Przykłady:
-  DISABLE_SEND_WINDOW=1          → wysyłka o każdej godzinie (zalecane dla CI/cron o 2:00)
+Co robi ten moduł
+-----------------
+To **strażnik godzin wysyłki** dla scrapera: czyta env (GHA / cron / Task Scheduler)
+i odpowiada na pytanie „czy teraz wolno wysyłać maile B2B?”.
+
+- ``load_send_window_config()`` — wczytuje start/koniec okna, strefę, flagę DISABLE
+- ``current_local_hour()`` — aktualna godzina w ``Europe/Warsaw`` (albo lokalna OS)
+- ``is_within_send_window()`` — ``True`` = scraper może wysyłać; ``False`` = poczekaj
+
+Nie wysyła maili sam, nie rusza SMTP ani treści — tylko decyzja czasowa.
+Nie dotyczy raportu Excel na Gmail (osobne flagi ``DISABLE_EXCEL_REPORT_EMAIL``).
+Przy kampanii discovery-only / ``DISABLE_CONTRACTOR_EMAILS=1`` i tak nie ma B2B,
+ale okno zostaje na rollback wysyłki.
+
+Po co: job o 2:00 UTC nie powinien „wyglądać” jak spam o północy w PL —
+albo ustawiasz ``SCRAPER_TIMEZONE=Europe/Warsaw`` + godziny biurowe,
+albo ``DISABLE_SEND_WINDOW=1`` (zalecane w CI, gdy cron i tak kontroluje start).
+
+Przykłady env::
+
+  DISABLE_SEND_WINDOW=1          → wysyłka o każdej godzinie (zalecane dla CI/cron)
+  SCRAPER_IGNORE_SEND_WINDOW=1   → alias tego samego
   SEND_WINDOW_START_HOUR=0       → od północy
-  SEND_WINDOW_END_HOUR=24        → do północy (cała doba)
-  SCRAPER_TIMEZONE=Europe/Warsaw → godzina okna wg strefy (nie UTC serwera)
+  SEND_WINDOW_END_HOUR=24        → do północy (cała doba przy starcie 0)
+  SCRAPER_TIMEZONE=Europe/Warsaw → godzina okna wg PL (nie UTC runnera)
+
+Domyślnie (bez DISABLE): 8–18 w lokalnej strefie procesu albo ``SCRAPER_TIMEZONE``.
+Nazwa modułu bez zmian.
 """
 from __future__ import annotations
 
@@ -21,11 +44,20 @@ except ImportError:  # pragma: no cover
 
 
 def _truthy(val: str | None) -> bool:
+    """Czy wartość env jest „włączona” (``1`` / ``true`` / ``yes`` / ``on``)."""
     return (val or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass(frozen=True)
 class SendWindowConfig:
+    """
+    Snapshot okna wysyłki z env (immutable).
+
+    ``start_hour`` / ``end_hour``: godziny 0–23 / 1–24 (koniec półotwarty).
+    ``disabled=True``: ignoruj godziny — zawsze wolno wysyłać.
+    ``timezone``: IANA (np. ``Europe/Warsaw``); pusty = lokalny zegar OS.
+    """
+
     start_hour: int
     end_hour: int
     disabled: bool
@@ -33,6 +65,13 @@ class SendWindowConfig:
 
 
 def load_send_window_config() -> SendWindowConfig:
+    """
+    Buduje ``SendWindowConfig`` z bieżącego środowiska procesu.
+
+    ``DISABLE_SEND_WINDOW`` lub ``SCRAPER_IGNORE_SEND_WINDOW`` → ``disabled``.
+    Start/end z ``SEND_WINDOW_*_HOUR`` (fallback 8 i 18); złe wartości → default.
+    Clamp: start 0…23, end 1…24. Strefa z ``SCRAPER_TIMEZONE`` (może być pusta).
+    """
     disabled = _truthy(os.getenv("DISABLE_SEND_WINDOW")) or _truthy(
         os.getenv("SCRAPER_IGNORE_SEND_WINDOW")
     )
@@ -56,6 +95,12 @@ def load_send_window_config() -> SendWindowConfig:
 
 
 def current_local_hour(timezone: str = "") -> int:
+    """
+    Bieżąca godzina (0–23) w podanej strefie albo lokalnej OS.
+
+    Kolejność: argument ``timezone`` → env ``SCRAPER_TIMEZONE`` → ``datetime.now()``.
+    Błędna nazwa IANA / brak ``zoneinfo`` → cichy fallback na lokalny zegar.
+    """
     tz = (timezone or os.getenv("SCRAPER_TIMEZONE") or "").strip()
     if tz and ZoneInfo is not None:
         try:
@@ -66,7 +111,16 @@ def current_local_hour(timezone: str = "") -> int:
 
 
 def is_within_send_window(cfg: SendWindowConfig | None = None) -> bool:
-    """True = wolno wysyłać maile teraz (wg lokalnej strefy lub DISABLE_SEND_WINDOW)."""
+    """
+    ``True`` = wolno wysyłać maile teraz.
+
+    Przy ``cfg.disabled`` zawsze ``True``. Inaczej porównuje
+    ``current_local_hour(cfg.timezone)`` z ``[start_hour, end_hour)``.
+    Gdy ``start >= end`` (np. 22–6): okno przez północ
+    (``hour >= start`` **lub** ``hour < end``).
+
+    ``cfg=None`` → świeży odczyt env przez ``load_send_window_config()``.
+    """
     c = cfg or load_send_window_config()
     if c.disabled:
         return True

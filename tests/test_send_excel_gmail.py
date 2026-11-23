@@ -25,10 +25,19 @@ class SendExcelGmailTest(unittest.TestCase):
             )
 
     def test_build_email_subject_contains_filename(self):
-        path = Path("de_gu_bauunternehmen_kontakte.xlsx")
+        path = Path("pl_spedycja_kontakte.xlsx")
         subject = mailer.build_email_subject(path)
-        self.assertIn("GU Kontakte Excel", subject)
+        self.assertIn("PL FAS Kontakte Excel", subject)
         self.assertIn(path.name, subject)
+
+    def test_build_email_body_pl_fas(self):
+        path = Path("pl_spedycja_kontakte.xlsx")
+        with patch.object(Path, "stat") as st:
+            st.return_value.st_size = 2048
+            body = mailer.build_email_body(path, 3)
+        self.assertIn("PL FAS / spedycja drogowa", body)
+        self.assertNotIn("Generalunternehmer", body)
+        self.assertIn(path.name, body)
 
 
 if __name__ == "__main__":

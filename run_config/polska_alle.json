@@ -1,0 +1,26 @@
+{
+  "config_type": "pl_spedycja",
+  "campaign_id": "pl_fas_spedycja",
+  "lang": "pl",
+  "active_bundeslaender": [
+    "Mazowieckie",
+    "Lodzkie",
+    "Wielkopolskie",
+    "Dolnoslaskie",
+    "Slaskie",
+    "Malopolskie",
+    "Pomorskie",
+    "Zachodniopomorskie",
+    "Lubuskie",
+    "Kujawsko-Pomorskie",
+    "Warminsko-Mazurskie",
+    "Podlaskie",
+    "Lubelskie",
+    "Podkarpackie",
+    "Swietokrzyskie",
+    "Opolskie"
+  ],
+  "min_contacts_target": 300,
+  "enable_auto_email": false,
+  "dry_run_email": true
+}

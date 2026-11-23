@@ -7,12 +7,25 @@ from datetime import datetime, timedelta
 
 from claude_prompts import build_discovery_terms_prompt as _build_discovery_terms_prompt
 from claude_client import claude_generate_text
-from de_gu_keywords import BUNDESLAND_CONFIG, RETAIL_CHAINS_ROTATION
-from retail_store_builder_filter import STRICT_GU_MARKERS, is_generalunternehmer
+from pl_spedycja_keywords import (
+    BUNDESLAND_CONFIG,
+    RETAIL_CHAINS_ROTATION as TRANSPORT_SEGMENTS,
+    SERPER_NEGATIVE_TERMS,
+)
+from pl_spedycja_filter import is_forwarder_role
 from scraper_env import get_anthropic_api_key
 
 DISCOVERY_MAX_TERM_LEN = 55
 DISCOVERY_MIN_TERM_LEN = 12
+# Fallback gdy lista województw/regionów pusta (prompt + klucz cache).
+DEFAULT_DISCOVERY_LAND = "Polska"
+# Higiena: Claude czasem dokłada stare DE GU — nie do fraz Serper PL FAS.
+_LEGACY_DE_DISCOVERY_MARKERS = (
+    "bauunternehmen",
+    "filialbau",
+    "generalunternehmer",
+    "general-unternehmer",
+)
 _PARSE_LINE_RE = re.compile(r"^\s*(?:\d+[\.\)]\s*)?(.+?)\s*$")
 
 
@@ -30,22 +43,32 @@ def parse_discovery_term_lines(text: str) -> list[str]:
 
 
 def validate_discovery_term(term: str) -> bool:
+    """
+    Czy fraza Serper pasuje do ICP PL spedycja (FAS).
+
+    Rdzeń (kolejność):
+      1. długość DISCOVERY_MIN/MAX_TERM_LEN
+      2. rola spedytora — ``is_forwarder_role``
+      3. segment oferty — FTL/LTL/ADR/… (``TRANSPORT_SEGMENTS``)
+      4. bez ``SERPER_NEGATIVE_TERMS`` (kurier, giełda, praca, …)
+      5. higiena: bez legacy DE (bauunternehmen / filialbau / …)
+    """
     t = (term or "").strip()
     if len(t) < DISCOVERY_MIN_TERM_LEN or len(t) > DISCOVERY_MAX_TERM_LEN:
         return False
     low = t.lower()
-    if not is_generalunternehmer(low)[0]:
+    # 2) Rola PL: spedycja / spedytor / freight forwarder …
+    if not is_forwarder_role(low)[0]:
         return False
-    if "bauunternehmen" in low and not any(
-        m.strip() in low for m in STRICT_GU_MARKERS if m.strip()
-    ):
+    # 3) Segment transportu (legacy symbol: RETAIL_CHAINS_ROTATION)
+    segments_low = [s.lower() for s in TRANSPORT_SEGMENTS]
+    if not any(seg in low for seg in segments_low):
         return False
-    from de_gu_keywords import SERPER_NEGATIVE_TERMS
-
-    if any(neg in low for neg in SERPER_NEGATIVE_TERMS if len(neg) >= 4):
+    # 4) Negatives kampanii PL
+    if any(neg.lower() in low for neg in SERPER_NEGATIVE_TERMS if len(neg) >= 4):
         return False
-    chains_low = [c.lower() for c in RETAIL_CHAINS_ROTATION]
-    if not any(chain in low for chain in chains_low):
+    # 5) Higiena — nie mieszaj DE GU do discovery PL
+    if any(m in low for m in _LEGACY_DE_DISCOVERY_MARKERS):
         return False
     return True
 
@@ -70,12 +93,12 @@ def build_discovery_terms_prompt(
     exclude_terms: list[str] | None = None,
 ) -> str:
     city_list = cities or _cities_for_lands(lands)
-    land_str = ", ".join(lands) if lands else "Deutschland"
+    land_str = ", ".join(lands) if lands else DEFAULT_DISCOVERY_LAND
     city_str = ", ".join(city_list[:8]) if city_list else "—"
     exclude_block = ""
     if exclude_terms:
         exclude_block = (
-            "\nBereits verwendet (nicht wiederholen):\n"
+            "\nJuż użyte (nie powtarzaj):\n"
             + "\n".join(f"- {t}" for t in exclude_terms[:20])
         )
     return _build_discovery_terms_prompt(
@@ -120,7 +143,7 @@ def get_cached_discovery_terms(
 
 
 def store_cached_discovery_terms(cache: dict, land: str, terms: list[str]) -> None:
-    land_key = (land or "").strip() or "Deutschland"
+    land_key = (land or "").strip() or DEFAULT_DISCOVERY_LAND
     _cache_bucket(cache)[land_key] = {
         "at": datetime.now().isoformat(),
         "terms": list(terms),
@@ -138,7 +161,7 @@ def generate_claude_discovery_terms(
     exclude_terms: list[str] | None = None,
 ) -> list[str]:
     """Zwraca zwalidowane frazy Serper (max terms_requested)."""
-    land_key = (lands[0] if lands else "").strip() or "Deutschland"
+    land_key = (lands[0] if lands else "").strip() or DEFAULT_DISCOVERY_LAND
     if use_cache:
         cached = get_cached_discovery_terms(cache, land_key, cache_days=cache_days)
         if cached:

@@ -1,16 +1,105 @@
 # -*- coding: utf-8 -*-
 """
-Filtr kontaktów komercyjnych (DE): wyklucza urzędy, samorządy, izby, uczelnie, portale.
-Używany w kampanii GU DE Ost — tylko firmy prywatne (GmbH/UG/AG …).
+Filtr kontaktów komercyjnych — kampania PL FAS / spedycja.
+
+=============================================================================
+PO CO TEN MODUŁ
+=============================================================================
+Odcina urzędy, samorządy, izby, uczelnie, katalogi i śmieci regex od
+prawdziwych firm (biura spedycyjne). Używany przy parse kontaktów Claude,
+rankingu maili i czyszczeniu cache Serper/contacts.
+
+Typowi wołający: ``contact_extract_utils.filter_commercial_emails``,
+``pl_fas_spedycja_scraper`` (walidacja leadu / cache).
+
+=============================================================================
+CO JEST „KOMERCYJNE” (PL FAS)
+=============================================================================
+- Forma prawna PL (Sp. z o.o., S.A., sp. j./k./p.) lub DE/EU w nazwie
+- Własna domena firmowa (mail ≈ host www)
+- Heurystyka domeny: spedycja / transport / logist / forward / fracht
+  (+ legacy DE: gmbh / bau / …)
+
+=============================================================================
+LISTY — PL + DE HIGIENA
+=============================================================================
+Exact domains, markery domen i nazwy: **najpierw PL** (gov.pl, BIP, UM,
+katalogi, giełdy). Wpisy DE zostają — stary Serper/cache czasem wraca DE.
+
+=============================================================================
+GŁÓWNE BRAMKI
+=============================================================================
+``is_non_commercial_*``     → True = odrzuć (urząd/portal)
+``is_junk_scraped_email``   → True = fałszywy regex (cookies/JS)
+``filter_commercial_emails``→ lista maili po junk + non-commercial + dedupe
+``is_valid_commercial_company_contact`` → True = prywatna firma OK do outreach
 """
 from __future__ import annotations
 
 import re
 from urllib.parse import urlparse
 
-# Dokładne domeny (organizacje, portale, miasta, branżowe stowarzyszenia)
+# Dokładne domeny (organizacje, portale, miasta, branżowe stowarzyszenia).
+# PL FAS: gov/katalogi PL na początku; DE zostaje jako higiena (stary Serper/cache).
 NON_COMMERCIAL_EMAIL_DOMAINS_EXACT = frozenset(
     {
+        # --- PL: rząd / samorząd / instytucje ---
+        "gov.pl",
+        "sejm.gov.pl",
+        "senat.gov.pl",
+        "premier.gov.pl",
+        "mf.gov.pl",
+        "gov.mf.pl",
+        "zus.pl",
+        "krus.gov.pl",
+        "stat.gov.pl",
+        "pip.gov.pl",
+        "uokik.gov.pl",
+        "uke.gov.pl",
+        "nfz.gov.pl",
+        "pfron.gov.pl",
+        "kprm.gov.pl",
+        "mswia.gov.pl",
+        "biznes.gov.pl",
+        "pracuj.gov.pl",
+        "warszawa.pl",
+        "um.warszawa.pl",
+        "bip.warszawa.pl",
+        "krakow.pl",
+        "um.krakow.pl",
+        "gdansk.pl",
+        "um.gdansk.pl",
+        "wroclaw.pl",
+        "um.wroclaw.pl",
+        "poznan.pl",
+        "um.poznan.pl",
+        "lodz.pl",
+        "uml.lodz.pl",
+        "lublin.pl",
+        "um.lublin.pl",
+        "szczecin.pl",
+        "um.szczecin.pl",
+        "katowice.eu",
+        "um.katowice.pl",
+        "bialystok.pl",
+        "um.bialystok.pl",
+        # --- PL: katalogi / portale B2B (nie firma) ---
+        "panoramafirm.pl",
+        "pkt.pl",
+        "aleo.com",
+        "krs-online.com.pl",
+        "krs-online.pl",
+        "pracuj.pl",
+        "olx.pl",
+        "gumtree.pl",
+        "allegro.pl",
+        "biznesfinder.pl",
+        "firmy.net",
+        "yellowpages.pl",
+        "timocom.com",
+        "trans.eu",
+        "teleroute.com",
+        # --- DE / legacy (higiena) ---
         "leipzig.de",
         "dresden.de",
         "berlin.de",
@@ -52,8 +141,81 @@ NON_COMMERCIAL_EMAIL_DOMAINS_EXACT = frozenset(
     }
 )
 
-# Fragment domeny e-mail / URL (urząd, izba, uczelnia, przetargi …)
+# Fragment domeny e-mail / URL (urząd, izba, uczelnia, przetargi …).
+# PL na górze; DE poniżej (higiena).
 NON_COMMERCIAL_DOMAIN_MARKERS = (
+    # --- PL: samorząd / BIP / gov ---
+    "gov.pl",
+    ".gov.pl",
+    "bip.",
+    ".bip.",
+    "bip-",
+    # Urzędy miast/gmin — tylko z kropką przed hostem (unikaj false-positive: plug.pl)
+    ".um.",
+    ".ug.",
+    "um.warszawa",
+    "um.krakow",
+    "um.gdansk",
+    "um.wroclaw",
+    "um.poznan",
+    "um.lublin",
+    "um.szczecin",
+    "um.katowice",
+    "um.bialystok",
+    "uml.lodz",
+    "ump.",
+    "starostwo",
+    "powiat.",
+    "powiat-",
+    "wojewoda",
+    "wojewodztwo",
+    "województwo",
+    "ministerstwo",
+    "ministerstwo-",
+    "kancelaria.",
+    "sejm.",
+    "senat.",
+    "zus.pl",
+    "krus.",
+    "nfz.",
+    "pup.",
+    "wup.",
+    "pup-",
+    "urzad.",
+    "urząd.",
+    "urzad-",
+    "gmina.",
+    "gmina-",
+    "miasto.",
+    # --- PL: edukacja / izby ---
+    "politechnika",
+    "uniwersytet",
+    "uczelnia",
+    "akademia.",
+    "sgh.waw.pl",
+    "pjatk.",
+    "izba-",
+    "izbahandlowa",
+    "izba.gospodarcza",
+    "kig.pl",
+    "pracodawcy",
+    # --- PL: katalogi / giełdy / ogłoszenia ---
+    "panoramafirm",
+    "panorama-firm",
+    "pkt.pl",
+    "aleo.com",
+    "krs-online",
+    "pracuj.pl",
+    "olx.pl",
+    "biznesfinder",
+    "firmy.net",
+    "yellowpages",
+    "timocom",
+    "trans.eu",
+    "teleroute",
+    "facebook.com",
+    "linkedin.com",
+    # --- DE / legacy ---
     "vergabemarktplatz",
     "vergabe.",
     "ausschreibung",
@@ -154,8 +316,56 @@ NON_COMMERCIAL_DOMAIN_MARKERS = (
     "evergabe-online",
 )
 
-# Nazwa / tytuł Serper (bez formy prawnej = często urząd/instytucja)
+# Nazwa / tytuł Serper (bez formy prawnej = często urząd/instytucja).
+# PL na górze; DE poniżej (higiena).
 NON_COMMERCIAL_NAME_MARKERS = (
+    # --- PL: urząd / samorząd / instytucje ---
+    "urząd ",
+    "urzad ",
+    "urząd miasta",
+    "urzad miasta",
+    "urząd gminy",
+    "urzad gminy",
+    "urząd marszałkowski",
+    "gmina ",
+    "powiat ",
+    "starostwo",
+    "województwo ",
+    "wojewodztwo ",
+    "wojewoda ",
+    "ministerstwo ",
+    "kancelaria premiera",
+    "sejm ",
+    "senat ",
+    "zus ",
+    "krus ",
+    "nfz ",
+    "pup ",
+    "wup ",
+    "powiatowy urząd pracy",
+    "wojewódzki urząd pracy",
+    "uczelnia ",
+    "uniwersytet ",
+    "politechnika ",
+    "akademia ",
+    "szkoła wyższa",
+    "izba ",
+    "izba gospodarcza",
+    "izba handlowa",
+    "krajowa izba",
+    "stowarzyszenie ",
+    "fundacja ",
+    "panorama firm",
+    "katalog firm",
+    "baza firm",
+    "ogłoszenia ",
+    "oferty pracy",
+    "pracuj.pl",
+    "timocom",
+    "trans.eu",
+    "giełda transportowa",
+    "giełda frachtów",
+    # --- DE / legacy ---
     "stadt ",
     "stadt,",
     "gemeinde ",
@@ -242,13 +452,102 @@ NON_COMMERCIAL_NAME_MARKERS = (
     "baut markt",
 )
 
+# PL + DE/EU — sygnał „prywatna firma” w nazwie (nie urząd / portal).
 _COMMERCIAL_LEGAL_FORM = re.compile(
-    r"(?:GmbH|UG(?:\s*\(haftungsbeschränkt\))?|AG|GbR|e\.?\s*K\.?|KG|OHG|PartG|Co\.\s*KG|mbH|SE)\b",
+    r"(?:"
+    r"Sp(?:[óo]łka)?\s*\.?\s*z\s*\.?\s*o\s*\.?\s*o\.?|"
+    r"S\.?\s*A\.?|"
+    r"sp\s*\.?\s*j\.?|"
+    r"sp\s*\.?\s*k\.?|"
+    r"sp\s*\.?\s*p\.?|"
+    r"GmbH|UG(?:\s*\(haftungsbeschränkt\))?|AG|GbR|"
+    r"e\.?\s*K\.?|KG|OHG|PartG|Co\.\s*KG|mbH|SE"
+    r")\b",
     re.IGNORECASE,
 )
 
+# Soft-pass w is_non_commercial_name: forma prawna + rola PL + ≥3 tokeny.
+# Zastępuje stary wyjątek DE (generalunternehmer / gewerbebau + GmbH).
+_PL_COMMERCIAL_ROLE_MARKERS = (
+    "spedycja",
+    "spedytor",
+    "spedycyjn",  # spedycyjna / spedycyjny
+    "forwarding",
+    "forwarder",
+    "freight forward",
+    "transport drogowy",
+    "fracht",
+)
+
+
+def _build_short_name_geo_markers() -> tuple[str, ...]:
+    """
+    Krótkie nazwy Serper bez formy prawnej + geo → często portal / urząd.
+
+    Miasta i województwa z ``pl_spedycja_keywords.BUNDESLAND_CONFIG`` (PL FAS);
+    DE geo zostaje jako higiena starego cache.
+    """
+    from pl_spedycja_keywords import BUNDESLAND_CONFIG
+
+    markers: list[str] = []
+    for land, cfg in BUNDESLAND_CONFIG.items():
+        markers.append(land.lower())
+        for city in cfg.get("cities") or ():
+            c = str(city).strip().lower()
+            if c:
+                markers.append(c)
+    # Ogólne PL (portal / admin) bez formy prawnej
+    markers.extend(
+        (
+            "województwo",
+            "wojewodztwo",
+            "powiat",
+            "gmina",
+            "katalog firm",
+            "ogłoszenia",
+            "baza firm",
+        )
+    )
+    # DE / legacy higiena
+    markers.extend(
+        (
+            "erfurt",
+            "leipzig",
+            "potsdam",
+            "cottbus",
+            "chemnitz",
+            "dresden",
+            "halle",
+            "brandenburg",
+            "thüringen",
+            "sachsen",
+            "berlin",
+            "gewerbe",
+            "referenz",
+            "projekt",
+            "mittelstand",
+        )
+    )
+    # Unikalne, bez bardzo krótkich kodów (MZ/LD itd. nie bierzemy z short)
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in markers:
+        if len(m) < 4 or m in seen:
+            continue
+        seen.add(m)
+        out.append(m)
+    return tuple(out)
+
+
+_SHORT_NAME_GEO_MARKERS = _build_short_name_geo_markers()
+
 
 def _normalize_host(url_or_email: str) -> str:
+    """
+    Wyciąga host z URL albo z domeny e-mail (po ``@``).
+
+    Lowercase, bez ``www.``, bez ścieżki. Pusty string przy złym wejściu.
+    """
     text = (url_or_email or "").strip().lower()
     if "@" in text:
         text = text.split("@", 1)[1]
@@ -263,7 +562,13 @@ def _normalize_host(url_or_email: str) -> str:
 
 
 def is_non_commercial_email(email: str) -> bool:
-    """True = urząd/instytucja — nie zbierać, nie wysyłać."""
+    """
+    True = e-mail urzędu / portalu / katalogu — nie zbierać, nie wysyłać.
+
+    Przebieg: exact domain → markery w hoście → TLD ``.gov.pl`` / ``.gov.de``
+    → wzorce DE stadt/kreis → wzorce PL ``um.`` / ``bip.`` / starostwo.
+    Brak ``@`` lub pusta domena → True (odrzut bezpieczny).
+    """
     low = (email or "").strip().lower()
     if not low or "@" not in low:
         return True
@@ -275,15 +580,24 @@ def is_non_commercial_email(email: str) -> bool:
         return True
     if any(marker in domain for marker in NON_COMMERCIAL_DOMAIN_MARKERS):
         return True
-    # Podstawowe domeny rządowe / edukacyjne
-    if domain.endswith((".gov.de", ".bund.de", ".bund.de", ".edu", ".ac.uk")):
+    # Podstawowe domeny rządowe / edukacyjne (PL + DE + EDU)
+    if domain.endswith((".gov.pl", ".gov.de", ".bund.de", ".edu", ".ac.uk")):
         return True
     if re.search(r"\.(stadt|gemeinde|kreis|landkreis)\.", domain):
+        return True
+    # PL: host urzędu miasta/gminy / BIP / starostwo (np. um.warszawa.pl, bip.gmina…)
+    if re.search(r"(^|\.)(um|ug|uml|ump|bip|starostwo)\.", domain):
         return True
     return False
 
 
 def is_non_commercial_website(url: str) -> bool:
+    """
+    True = strona wygląda na urząd / portal (nie firma prywatna).
+
+    Te same listy co przy e-mailu + PDF na hoście samorządowym/gov.
+    Pusty host → False (brak sygnału — nie odrzucaj „na ślepo”).
+    """
     host = _normalize_host(url)
     if not host:
         return False
@@ -291,53 +605,57 @@ def is_non_commercial_website(url: str) -> bool:
         return True
     if any(marker in host for marker in NON_COMMERCIAL_DOMAIN_MARKERS):
         return True
-    if host.endswith((".gov.de", ".bund.de")):
+    if host.endswith((".gov.pl", ".gov.de", ".bund.de")):
         return True
     path_low = (url or "").lower()
     if "/pdfs/" in path_low or path_low.endswith(".pdf"):
         if any(
             x in host
-            for x in ("stadt", "gemeinde", "landkreis", "vergabe", "bund", "land.")
+            for x in (
+                "stadt",
+                "gemeinde",
+                "landkreis",
+                "vergabe",
+                "bund",
+                "land.",
+                "gov.pl",
+                "bip.",
+                "um.",
+                "starostwo",
+            )
         ):
             return True
     return False
 
 
 def is_non_commercial_name(name: str) -> bool:
+    """
+    True = nazwa wygląda na urząd / portal / katalog (nie prywatna firma).
+
+    Soft-pass PL FAS: jeśli w nazwie jest forma prawna (Sp. z o.o. / S.A. / …)
+    **oraz** rola spedycji (``_PL_COMMERCIAL_ROLE_MARKERS``) **oraz** ≥3 tokeny
+    → traktuj jako firmę nawet gdy złapał marker „izba ” / „katalog” itd.
+
+    Stary soft-pass DE (``generalunternehmer`` + GmbH) usunięty — same GU/Bau
+    bez roli PL zostają non-commercial.
+    """
     text = " ".join((name or "").split()).strip()
     if not text:
         return False
     low = text.lower()
     if any(marker in low for marker in NON_COMMERCIAL_NAME_MARKERS):
-        # „Müller Generalunternehmer GmbH“ = firma; samo „Generalunternehmer“ = tytuł/portál
+        # Firma PL: forma prawna + rola spedycji + wystarczająco długa nazwa
         if _COMMERCIAL_LEGAL_FORM.search(text) and any(
-            m in low for m in ("generalunternehmer", "gewerbebau", "generalbau")
+            m in low for m in _PL_COMMERCIAL_ROLE_MARKERS
         ):
             name_parts = [p for p in re.split(r"\W+", low) if len(p) >= 2]
             if len(name_parts) >= 3:
                 return False
         return True
-    # Krótkie nazwy bez formy prawnej często = miasto/portal
+    # Krótkie nazwy bez formy prawnej + geo PL (lub DE higiena) → miasto/portal
     if not _COMMERCIAL_LEGAL_FORM.search(text):
         if len(text.split()) <= 3 and any(
-            x in low
-            for x in (
-                "erfurt",
-                "leipzig",
-                "potsdam",
-                "cottbus",
-                "chemnitz",
-                "dresden",
-                "halle",
-                "brandenburg",
-                "thüringen",
-                "sachsen",
-                "berlin",
-                "gewerbe",
-                "referenz",
-                "projekt",
-                "mittelstand",
-            )
+            x in low for x in _SHORT_NAME_GEO_MARKERS
         ):
             return True
     return False
@@ -349,7 +667,12 @@ def is_non_commercial_contact(
     url: str = "",
     name: str = "",
 ) -> bool:
-    """True = odrzuć (urząd/instytucja/portale — nie firma komercyjna)."""
+    """
+    True = odrzuć kontakt (urząd / instytucja / portal — nie firma).
+
+    OR po polach: najpierw e-mail, potem URL, potem nazwa Serper.
+    Puste pole = pomiń tę bramkę.
+    """
     if email and is_non_commercial_email(email):
         return True
     if url and is_non_commercial_website(url):
@@ -391,7 +714,12 @@ _JUNK_SCRAPED_EMAIL_LOCAL_MARKERS = (
 
 
 def is_junk_scraped_email(email: str) -> bool:
-    """Fałszywe trafienia regex (baner cookies, JS w HTML)."""
+    """
+    True = fałszywe trafienie regex (baner cookies, JS, lazyload, SVG…).
+
+    Nie jest to filtr ICP — tylko higiena HTML. Lokal/domena z markerów
+    junk, zbyt długi local-part, dziwne TLD → odrzut.
+    """
     low = (email or "").strip().lower()
     if not low or "@" not in low:
         return True
@@ -420,6 +748,13 @@ def is_junk_scraped_email(email: str) -> bool:
 
 
 def filter_commercial_emails(candidates: list[str]) -> list[str]:
+    """
+    Zwraca unikalne maile komercyjne (kolejność zachowana).
+
+    Przebieg per kandydat: normalizacja lower → junk scrape →
+    ``is_non_commercial_email`` → dedupe. Używane m.in. po Claude contact
+    extract i regexie w scraperze.
+    """
     out: list[str] = []
     for raw in candidates or []:
         e = (raw or "").strip().lower()
@@ -435,6 +770,12 @@ def filter_commercial_emails(candidates: list[str]) -> list[str]:
 
 
 def _contact_fields_from_cache(place_url: str, info: dict | None) -> tuple[str, str, str]:
+    """
+    Wyciąga ``(email, url, name)`` z wpisu cache contacts scrapera.
+
+    Klucze legacy: ``email_target`` / ``emails_found``, ``official_website``,
+    ``company_name_clean`` → ``company_name`` → ``company_name_raw``.
+    """
     if not isinstance(info, dict):
         return "", (place_url or "").strip(), ""
     email = (info.get("email_target") or "").strip()
@@ -459,8 +800,19 @@ def is_valid_commercial_company_contact(
     name: str = "",
 ) -> bool:
     """
-    True = wyłącznie prywatna firma (Bau/GU z własną domeną lub GmbH/UG/AG w nazwie).
-    False = urząd, portal, izba, Gründerzentrum, tytuł projektu bez firmy.
+    True = prywatna firma OK pod outreach PL FAS.
+    False = urząd, portal, izba, inkubator, sam tytuł bez firmy.
+
+    Przebieg
+    --------
+    1. ``is_non_commercial_contact`` → False (odrzut).
+    2. Forma prawna w nazwie (PL/DE) → True.
+    3. Brak maila → False.
+    4. Mail non-commercial → False.
+    5. Mail na tej samej domenie co www (root ≥4 znaków) → True.
+    6. Heurystyka domeny: spedycja/transport/logist/forward/fracht
+       (+ legacy DE gmbh/bau/…) → True.
+    7. Inaczej False.
     """
     if is_non_commercial_contact(email=email, url=url, name=name):
         return False
@@ -479,13 +831,22 @@ def is_valid_commercial_company_contact(
         edom_root = edom.split(".")[0]
         if len(edom_root) >= 4:
             return True
-    if re.search(r"(?:gmbh|bau|ug|ag|gewerbe)", edom):
+    # Heurystyka domeny maila: PL spedycja/logistyka + legacy DE bau/gmbh
+    if re.search(
+        r"(?:spedycja|spedytor|transport|logist|forward|fracht|"
+        r"gmbh|bau|ug|ag|gewerbe)",
+        edom,
+    ):
         return True
     return False
 
 
 def is_cache_contact_institution(place_url: str, info: dict | None) -> bool:
-    """Czy rekord contacts w JSON należy usunąć (nie jest prywatną firmą)."""
+    """
+    True = wpis contacts w JSON cache należy usunąć (nie prywatna firma).
+
+    Odwrotność ``is_valid_commercial_company_contact`` po polach z cache.
+    """
     if not isinstance(info, dict):
         return True
     email, url, name = _contact_fields_from_cache(place_url, info)
@@ -493,6 +854,11 @@ def is_cache_contact_institution(place_url: str, info: dict | None) -> bool:
 
 
 def is_cache_serper_entry_institution(entry) -> bool:
+    """
+    True = wynik Serper (dict url/title albo sam URL) wygląda na instytucję.
+
+    Używane przy czyszczeniu cache discovery — nie trzymać portali/urzędów.
+    """
     if isinstance(entry, dict):
         url = entry.get("url") or entry.get("link") or ""
         title = entry.get("title") or ""

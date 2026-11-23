@@ -20,12 +20,12 @@ for _p in (ROOT, SCRIPTS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from campaign_data_paths import GOOGLE_DRIVE_GU_FOLDER_ID  # noqa: E402
+from pl_spedycja_data_paths import GOOGLE_DRIVE_FAS_FOLDER_ID  # noqa: E402
 import export_week_discovery_all_to_excel as week_export  # noqa: E402
 import gdrive_upload_wyniki as gdrive  # noqa: E402
 from recover_pi_cache_contacts import recover_contacts_from_cache_file  # noqa: E402
 
-_KONTAKTE_PREFIX = "de_gu_bauunternehmen_kontakte"
+_KONTAKTE_PREFIX = "pl_spedycja_kontakte"
 
 
 def _list_kontakte_xlsx(service, folder_id: str) -> list[dict]:
@@ -78,7 +78,7 @@ def main() -> int:
     parser.add_argument("--week-label", default="2026-06-15_2026-06-21")
     parser.add_argument(
         "--folder-id",
-        default=os.environ.get("GDRIVE_FOLDER_ID", GOOGLE_DRIVE_GU_FOLDER_ID),
+        default=os.environ.get("GDRIVE_FOLDER_ID", GOOGLE_DRIVE_FAS_FOLDER_ID),
     )
     parser.add_argument(
         "--dry-run",

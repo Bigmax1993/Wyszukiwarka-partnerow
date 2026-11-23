@@ -42,7 +42,7 @@ $Log = Join-Path (Split-Path $PSScriptRoot -Parent) "Wyniki\gha_pipeline_run.log
 
 
 
-$DiscoveryArtifacts = @("de-gu-wyniki-pi")
+$DiscoveryArtifacts = @("pl-spedycja-wyniki-pi")
 
 
 
@@ -294,7 +294,7 @@ Write-Log "=== Pelny pipeline GHA (discovery juz trwa: $DiscoveryRunId) ==="
 
 
 
-Wait-Workflow "GU discovery" $DiscoveryRunId
+Wait-Workflow "PL spedycja discovery" $DiscoveryRunId
 
 
 

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import de_gu_bauunternehmen_scraper as scraper  # noqa: E402
+import pl_fas_spedycja_scraper as scraper  # noqa: E402
 
 
 def _norm_name(name: str) -> str:
@@ -110,13 +110,13 @@ def main() -> int:
         "--prior-cache",
         type=Path,
         required=True,
-        help="Sciezka do cache z ostatniej wysylki (de-gu-wyniki-tue)",
+        help="Sciezka do cache z ostatniej wysylki (pl-spedycja-wyniki-tue)",
     )
     parser.add_argument(
         "--target-cache",
         type=Path,
         default=scraper.CACHE_FILE,
-        help="Cache docelowy (domyslnie Wyniki/de_gu_bauunternehmen_cache.json)",
+        help="Cache docelowy (domyslnie Wyniki/pl_spedycja_cache.json)",
     )
     args = parser.parse_args()
 

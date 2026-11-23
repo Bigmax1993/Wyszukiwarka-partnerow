@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Scal artefakty de-gu-wyniki-pi z kilku dni discovery i zapisz WSZYSTKIE firmy z cache do Excela.
+Scal artefakty pl-spedycja-wyniki-pi z kilku dni discovery i zapisz WSZYSTKIE firmy z cache do Excela.
 
 Pomija ostre filtry eksportu (skipped / bez maila też trafiają do arkusza).
 """
@@ -24,8 +24,9 @@ for _p in (ROOT, LIBS, SCRIPTS):
 from recover_pi_cache_contacts import recover_contacts_from_cache_file  # noqa: E402
 
 from libs.scraper_email_replies import ReplySyncConfig, write_excel_with_reply_styles  # noqa: E402
+from pl_spedycja_filter import get_discovery_wojewodztwo  # noqa: E402
 
-import de_gu_bauunternehmen_scraper as scraper  # noqa: E402
+import pl_fas_spedycja_scraper as scraper  # noqa: E402
 
 
 def _contact_to_pipeline_row(place_url: str, info: dict) -> dict:
@@ -60,8 +61,12 @@ def _contact_to_pipeline_row(place_url: str, info: dict) -> dict:
             "phones_found": info.get("phones_found") or phone,
             "full_address": info.get("full_address") or "",
             "adres": info.get("full_address") or "",
-            "bundesland": info.get("bundesland") or info.get("discovery_bundesland") or "",
-            "discovery_bundesland": info.get("discovery_bundesland") or "",
+            "bundesland": (
+                info.get("bundesland")
+                or get_discovery_wojewodztwo(info)
+                or ""
+            ),
+            "discovery_wojewodztwo": get_discovery_wojewodztwo(info),
             "retail_verified": bool(info.get("retail_verified")),
             "verification_reason": (info.get("verification_reason") or "").strip(),
             "page_snippet": (info.get("page_snippet") or "").strip(),
@@ -90,10 +95,10 @@ def _pipeline_row_to_export(row: dict) -> dict:
     reason = (row.get("verification_reason") or "").strip()
     return {
         **table,
-        "WWW_geprueft": "ja" if row.get("retail_verified") else "nein",
-        "Kleinunternehmen": "ja" if row.get("is_small_firm") else "nein",
-        "GU": "ja" if row.get("is_gu") or scraper._row_has_gu_signal(row) else "nein",
-        "GU_Marker": (row.get("gu_marker") or "").strip(),
+        "WWW sprawdzone": scraper._excel_yes_no(bool(row.get("retail_verified"))),
+        "Spedycja": scraper._excel_yes_no(
+            bool(row.get("is_gu") or scraper._row_has_gu_signal(row))
+        ),
         "Status": scraper._excel_status_label(row),
         "Weryfikacja": reason[:200] if reason else "",
     }
@@ -114,7 +119,7 @@ def _download_pi_artifact(run_id: str, dest: Path, *, repo: str) -> Path | None:
         "-R",
         repo,
         "-n",
-        "de-gu-wyniki-pi",
+        "pl-spedycja-wyniki-pi",
         "-D",
         str(dest),
     ]
@@ -122,7 +127,7 @@ def _download_pi_artifact(run_id: str, dest: Path, *, repo: str) -> Path | None:
     if proc.returncode != 0:
         logging.warning("Pomijam run %s: %s", run_id, (proc.stderr or proc.stdout).strip())
         return None
-    cache_path = dest / "Wyniki" / "de_gu_bauunternehmen_cache.json"
+    cache_path = dest / "Wyniki" / "pl_spedycja_cache.json"
     return cache_path if cache_path.is_file() else None
 
 
@@ -204,8 +209,8 @@ def write_excel(rows: list[dict], cache: dict, logger: logging.Logger, output: P
     cfg = ReplySyncConfig(
         cache_path=scraper.CACHE_FILE,
         xlsx_path=out,
-        lang="de",
-        campaign_id="de_gu_bauunternehmen",
+        lang="pl",
+        campaign_id="pl_spedycja",
     )
     write_excel_with_reply_styles(
         out,
@@ -229,7 +234,7 @@ def main() -> int:
     parser.add_argument(
         "--run-ids",
         required=True,
-        help="Lista run ID (de-gu-wyniki-pi), po przecinku",
+        help="Lista run ID (pl-spedycja-wyniki-pi), po przecinku",
     )
     parser.add_argument(
         "--repo",
@@ -245,7 +250,7 @@ def main() -> int:
         "--output",
         type=Path,
         default=None,
-        help="Sciezka docelowego Excela (domyslnie Wyniki/de_gu_bauunternehmen_kontakte.xlsx)",
+        help="Sciezka docelowego Excela (domyslnie Wyniki/pl_spedycja_kontakte.xlsx)",
     )
     args = parser.parse_args()
 

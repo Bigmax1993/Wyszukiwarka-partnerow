@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 Pobiera artefakt GU (ta sama kolejnosc co sync-google-drive.yml) i wgrywa na Google Drive.
 
@@ -31,14 +31,14 @@ if ($driveFlag -notin @("0", "false", "False", "no", "off", "OFF")) {
 }
 
 $Repo = "Bigmax1993/Wyszukiwarka-partnerow"
-$DriveFolder = "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
+$DriveFolder = "1bRCAqle6BS46YEw0fScq4P095LsJUSgL"
 
 # Ta sama kolejnosc co .github/workflows/sync-google-drive.yml
 $ArtifactOrder = @(
-    "de-gu-wyniki-thu",
-    "de-gu-wyniki-mon",
-    "de-gu-wyniki-tue",
-    "de-gu-wyniki-fri"
+    "pl-spedycja-wyniki-thu",
+    "pl-spedycja-wyniki-mon",
+    "pl-spedycja-wyniki-tue",
+    "pl-spedycja-wyniki-fri"
 )
 
 Write-Host "=== Szukam artefaktu GU (thu -> mon -> tue -> fri) ===" -ForegroundColor Cyan

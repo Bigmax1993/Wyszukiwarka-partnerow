@@ -1,7 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-Killer-Prompts für Claude Sonnet — GU/Filialbau-Kampagne DE.
-Jeder Prompt: eine Aufgabe, strikt JSON — Portale/PDF/Operatoren ablehnen.
+Prompty Claude (Sonnet / Haiku) dla kampanii PL spedycja drogowa (FAS).
+
+Moduł **nie woła API** — tylko buduje teksty promptów. Wywołania LLM są
+w ``claude_page_verify``, ``claude_row_cleanup``, ``claude_discovery_terms``,
+``email_custom_template``.
+
+Funkcje publiczne:
+  - ``prioritize_page_text_for_verify`` — skracanie crawla (priorytet ICP),
+  - ``build_page_verify_prompt`` — werdykt ICP strony (JSON),
+  - ``build_row_cleanup_prompt`` — QA pól przed Excel (JSON),
+  - ``build_contact_extract_prompt`` — e-mail/telefon z www (JSON),
+  - ``build_discovery_terms_prompt`` — frazy Serper (linie tekstu),
+  - ``build_custom_email_prompt_pl`` / ``_de`` — personalizacja maila (JSON).
+
+Keywordy pomocnicze (role, segmenty, negatywy) biorą się z
+``campaign_keyword_profile`` + ``TRANSPORT_SEGMENT_MARKERS`` — ten sam
+słownik co filtr regex / Serper.
+
+Klucze JSON legacy DE (``is_gu``, ``has_retail_context``, ``matched_chains``,
+``bundesland``, ``handelsketten``) zostają dla scrapera; semantyka = PL FAS.
 """
 from __future__ import annotations
 
@@ -16,16 +34,28 @@ from campaign_keyword_profile import (
     retail_context_keywords_sample,
     small_company_markers_sample,
 )
+from pl_spedycja_filter import TRANSPORT_SEGMENT_MARKERS
 
-_REQUIRED_CHAINS = "aldi, rewe, edeka, netto, penny, kaufland, lidl, norma"
+# Whitelist segmentów do matched_chains / Segmenty Excel (legacy: Handelskette).
+_REQUIRED_CHAINS = ", ".join(TRANSPORT_SEGMENT_MARKERS)
+# Limit znaków wyciągu wklejanego do promptu verify / contact.
 PAGE_VERIFY_MAX_CHARS = 18000
 CONTACT_EXTRACT_MAX_CHARS = 16000
+# Priorytet linii/sekcji przy extract kontaktów (nie przy page-verify).
 _CONTACT_EXTRACT_TEXT_PRIORITY = (
-    "impressum",
     "kontakt",
+    "dane-firmy",
+    "dane firmy",
+    "o-firmie",
+    "o firmie",
+    "o-nas",
+    "o nas",
+    "biuro",
+    "spedycja",
+    "nip",
+    "impressum",
     "contact",
     "anschrift",
-    "geschäftsführ",
     "datenschutz",
     "mailto",
     "@",
@@ -36,26 +66,46 @@ _CONTACT_EXTRACT_TEXT_PRIORITY = (
     "e-mail",
     "email",
 )
+# Domyślne keywordy priorytetu przy skracaniu crawla pod page-verify (PL FAS).
+# Bez Aldi/Filialbau/Rewe — te nie powinny wypychać sekcji ICP spedycji.
 _PAGE_VERIFY_TEXT_PRIORITY = (
-    "referenz",
-    "projekt",
-    "auftraggeber",
-    "netto",
-    "rewe",
-    "aldi",
-    "lidl",
-    "kaufland",
-    "penny",
-    "edeka",
-    "einzelhandel",
-    "retail",
-    "filial",
-    "supermarkt",
-    "discounter",
-    "generalunternehmer",
-    "gewerbebau",
-    "karriere",
-    "stellen",
+    "spedycja",
+    "spedytor",
+    "firma spedycyjna",
+    "biuro spedycyjne",
+    "freight",
+    "forwarding",
+    "forwarder",
+    "ftl",
+    "ltl",
+    "fracht",
+    "transport drogowy",
+    "transport",
+    "całopojazdowy",
+    "calopojazdowy",
+    "grupaż",
+    "grupaz",
+    "adr",
+    "chłodnia",
+    "chlodnia",
+    "cross-dock",
+    "crossdock",
+    "dyspozytor",
+    "dyspozytornia",
+    "europa",
+    "oferta",
+    "o nas",
+    "o-nas",
+    "o firmie",
+    "o-firmie",
+    "usługi",
+    "uslugi",
+    "flota",
+    "naczepa",
+    "plandeka",
+    "plandełka",
+    "linie",
+    "kierunki",
 )
 
 
@@ -65,7 +115,48 @@ def prioritize_page_text_for_verify(
     max_chars: int = PAGE_VERIFY_MAX_CHARS,
     priority_keywords: tuple[str, ...] | None = None,
 ) -> str:
-    """Wichtige Zeilen zuerst — innerhalb max_chars (Keywords konfigurierbar)."""
+    """
+    Skraca tekst crawla pod limit tokenów Claude — najpierw treść ICP PL.
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Pełny crawl domeny (``website_full_crawl``) często przekracza budżet
+    kontekstu modelu. Bez priorytetu Claude dostaje losowy ogon (blog,
+    cookies, stopka) zamiast oferty FTL/LTL / strony Kontakt.
+
+    =====================================================================
+    GDZIE UŻYWANE
+    =====================================================================
+    - ``build_page_verify_prompt`` — domyślne ``_PAGE_VERIFY_TEXT_PRIORITY``,
+    - ``build_contact_extract_prompt`` — ``_CONTACT_EXTRACT_TEXT_PRIORITY``.
+
+    =====================================================================
+    ARGUMENTY
+    =====================================================================
+    page_text:
+        Surowy wyciąg (często z markerami ``=== https://… ===`` na sekcję).
+    max_chars:
+        Twardy limit długości wyniku (domyślnie ``PAGE_VERIFY_MAX_CHARS``).
+    priority_keywords:
+        Krotka podciągów (lowercase match). ``None`` → keywordy verify PL.
+        Dla kontaktów przekaż ``_CONTACT_EXTRACT_TEXT_PRIORITY``.
+
+    =====================================================================
+    ALGORYTM
+    =====================================================================
+    1) Pusty / krótki tekst ≤ max_chars → zwróć bez zmian.
+    2) Są sekcje ``=== http…`` → podziel na bloki URL; bloki z keywordem
+       idą na początek, reszta na koniec; sklej ``\\n\\n``.
+    3) Brak markerów URL → to samo na poziomie linii (sklej spacją).
+    4) Wynik dłuższy niż max_chars → obetnij i doklej ``...``.
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    String gotowy do wklejenia w prompt (może kończyć się ``...``).
+    Nie mutuje wejścia; nie woła sieci.
+    """
     keys = priority_keywords or _PAGE_VERIFY_TEXT_PRIORITY
     raw = (page_text or "").strip()
     if len(raw) <= max_chars:
@@ -109,6 +200,59 @@ def build_page_verify_prompt(
     serper_blob: str = "",
     pages_crawled: int = 0,
 ) -> str:
+    """
+    Buduje prompt Claude do weryfikacji ICP strony www (PL FAS).
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Po crawl + (opcjonalnie) Serper scraper pyta model: „czy to małe biuro
+    spedycyjne z ofertą FTL/LTL / Europa / ADR, a nie kurier / giełda / 3PL?".
+    Werdykt steruje ``retail_verified``, ``is_gu``, segmentami w Excelu.
+
+    =====================================================================
+    SEMANTYKA PÓL JSON (nazwy legacy DE — nie zmieniać kluczy)
+    =====================================================================
+    is_gu              → rola spedytora / freight forwardera (True/False)
+    has_retail_context → ma usługi drogowe ICP w ofercie
+    matched_chains     → segmenty whitelist (ftl, ltl, adr, …) — małe litery
+    is_small_firm      → nie globalny 3PL (Raben, Schenker, …)
+    primary_role       → Spedytor | Kurier | GieldaFrachtowa | …
+    matched_*_keywords → cytaty z wyciągu (nie wymyślać)
+    reason             → 1–2 zdania PL
+
+    =====================================================================
+    ARGUMENTY
+    =====================================================================
+    company_name, website:
+        Identyfikacja leada (trafia do nagłówka kontekstu).
+    page_text:
+        Pełny / częściowy crawl; skracany przez ``prioritize_page_text_for_verify``.
+    max_chars:
+        Budżet znaków wyciągu w prompcie.
+    serper_blob:
+        Opcjonalny tytuł+snippet z discovery (doklejany w headerze).
+    pages_crawled:
+        Liczba stron; ``0`` → szacunek z liczby markerów ``=== http``.
+
+    =====================================================================
+    CO SKŁADA PROMPT
+    =====================================================================
+    1) Header kontekstu (``build_claude_context_header``),
+    2) automatyczny excerpt dowodów (``build_automatic_evidence_excerpt``),
+    3) próbki keywordów z ``campaign_keyword_profile``,
+    4) instrukcja PL + drzewo decyzyjne + schema JSON,
+    5) skrócony wyciąg strony.
+
+    =====================================================================
+    ZWRACA / KONTRAKT
+    =====================================================================
+    Sam string promptu. Model ma odpowiedzieć **czystym JSON** (bez Markdown).
+    Parsowanie: ``claude_page_verify`` / pipeline scrapera.
+
+    Wywołujący typowo: ``claude_page_verify.claude_verify_company_page``,
+    wrapper ``page_verify.build_page_verify_prompt``.
+    """
     from claude_page_text import (
         build_automatic_evidence_excerpt,
         build_claude_context_header,
@@ -126,93 +270,104 @@ def build_page_verify_prompt(
     )
     evidence = build_automatic_evidence_excerpt(raw)
     snippet = prioritize_page_text_for_verify(raw, max_chars=max_chars)
-    gu_kw = ", ".join(gu_required_keywords_sample())
-    retail_kw = ", ".join(retail_context_keywords_sample())
-    chain_kw = ", ".join(retail_chain_keywords_sample())
+    role_kw = ", ".join(gu_required_keywords_sample())
+    service_kw = ", ".join(retail_context_keywords_sample())
+    segment_kw = ", ".join(retail_chain_keywords_sample())
     neg_kw = ", ".join(negative_keywords_sample())
     small_kw = ", ".join(small_company_markers_sample())
     large_kw = ", ".join(large_company_markers_sample())
-    return f"""ROLLE
-Du bist Senior-Due-Diligence-Analyst für B2B-Outreach an kleine Generalunternehmer in Deutschland,
-die Lebensmittelmärkte / Filialen NEU BAUEN oder UMBAUEN (Filialbau, Supermarktbau, Marktneubau, Hochbau).
-KEIN Ziel: Ladeneinrichtung, Shopfitting, Innenausbau, Einzelhandels-Betreiber, Portale, Medien.
+    return f"""ROLA
+Jesteś analitykiem due-diligence B2B dla outreachu do małych/średnich biur
+spedycyjnych w Polsce (organizacja transportu drogowego FTL/LTL, Europa,
+cross-dock, ADR, chłodnia — Forwarding Assistant / FAS).
 
-WICHTIG — „Generalunternehmer" steht NICHT immer auf der Website!
-Entscheidend: PROJEKTNACHWEIS für Markt-/Filial-BAU (Schale/Hochbau), nicht nur Innenausstattung.
+NIE jesteś celem: kurierzy paczkowi (InPost/DPD/DHL Express jako produkt),
+giełdy frachtów (Timocom, Trans.eu), portale ogłoszeń, media logistyczne,
+same firmy produkcyjne z flotą własną, oferty pracy HR, urzędy.
 
-AUFGABE
-Lies den vollständigen Website-Auszug (alle gecrawlten Unterseiten, markiert mit „=== URL ===").
-Inkl. Bildpfade, alt-Texte, Galerie-Beschriftungen, Karriere-Stellen. Passt die Firma?
-Antworte NUR mit einem JSON-Objekt — kein Markdown, kein Kommentar.
+WAŻNE — słowo „spedycja” nie zawsze widnieje w H1.
+Decyduje DOWÓD usług: oferta spedycji / linie / flota / FTL / LTL / ADR /
+temperatura / organizacja przewozu — nie sam logo 3PL.
 
-WAS ZÄHLT ALS NACHWEIS (Referenzen / Portfolio — KEIN fester Tab nötig)
-• Neubau/Umbau/Sanierung eines Marktgebäudes (Filialbau, Supermarktbau, Marktneubau)
-• Fotos/Galerie: Baustelle, Außenansicht Markt, Eröffnung, Rohbau — nicht nur Regale/Möbel
-• Projektbeschreibungen: „Neubau Rewe …", „Umbau Aldi …", „Filialbau für Netto"
-• Karriere mit Auftraggeber einer erlaubten Kette (z. B. Netto Marken-Discount)
+ZADANIE
+Przeczytaj pełny wyciąg ze strony (wszystkie podstrony crawla, oznaczone
+„=== URL ==="). Uwzględnij ścieżki obrazów, alt, galerie floty, sekcje Oferta / O nas.
+Czy firma pasuje do ICP? Odpowiedz TYLKO obiektem JSON — bez Markdown, bez komentarza.
 
-SOFORT is_gu=false / has_retail_context=false
-• Ladeneinrichtung, Shopfitting, Innenausbau, Ladenausstattung, Möbelbau, Store Design
-• Nur Innenausstattung eines Marktes — auch wenn Rewe/Aldi genannt wird
-• Betreiber/Händler (Öffnungszeiten, Prospekt, Filialfinder), Medienportal, Vergabeportal
+CO LICZY SIĘ JAKO DOWÓD (oferta — nie musi być osobna zakładka „Referencje")
+• Opis usług: spedycja drogowa, FTL, LTL, grupaż, fracht, transport międzynarodowy
+• Flota / naczepy / plandeki / chłodnie / ADR jako usługa (nie tylko „nasze ciężarówki producenta")
+• Linie / kierunki (PL–DE, Europa), cross-dock, dyspozytornia
+• Sekcje Oferta / Usługi / O firmie wskazujące organizację transportu dla klientów
 
-ENTSCHEIDUNGSBAUM (in dieser Reihenfolge)
-1) Innenausbau/Shopfitting dominiert → is_gu=false
-2) primary_role = Betreiber/Händler/Medienportal/Ladeneinrichter → is_gu=false
-3) Kein BAU/Auftragnehmer → is_gu=false
-4) Baufirma ja, aber KEIN Markt-/Filial-Bauprojekt → has_retail_context=false
-5) Nur Büro/Wohn ohne Supermarkt/Discounter/Filiale → has_retail_context=false
-6) Passt: is_gu=true, has_retail_context=true, matched_chains nicht leer
-7) Größe → is_small_firm
+NATYCHMIAST is_gu=false / has_retail_context=false
+• Kurier paczkowy / last-mile (InPost, DPD, DHL Express, Orlen Paczka) jako główny produkt
+• Giełda frachtów / marketplace (Timocom, Trans.eu, TimoCom) bez własnego biura spedycji
+• Portal ogłoszeń, media, blog branżowy, pracuj.pl / oferty kierowcy
+• Producent / hurtownia z wyłącznie flotą własną (bez oferty spedycji dla klientów)
+• Przeprowadzki, autokary, OSK, urzędy
 
-HANDELSKETTE — PFLICHT (Whitelist)
-Erlaubt NUR: {_REQUIRED_CHAINS}
-• has_retail_context=true NUR mit Bauprojekt (Neubau/Umbau Marktgebäude) UND mindestens einer Kette in matched_chains
-• matched_chains: nur Kleinbuchstaben, nur wenn Kette WÖRTLICH als Projekt/Auftraggeber genannt
-• Ohne benannte Kette aus der Whitelist → has_retail_context=false
+DRZEWO DECYZYJNE (w tej kolejności)
+1) Kurier / giełda / portal / HR / urząd dominuje → is_gu=false
+2) primary_role = Kurier / GieldaFrachtowa / PortalOgloszeniowy / MediaLogistyczne /
+   TylkoFlotaWlasna / Producent / HR / Urzad → is_gu=false
+3) Brak roli spedytora / freight forwardera → is_gu=false
+4) Jest „logistyka", ale BRAK usług drogowych ICP (FTL/LTL/fracht/ADR/…) →
+   has_retail_context=false
+5) Pasuje: is_gu=true, has_retail_context=true, matched_chains niepuste
+6) Wielkość → is_small_firm
 
-FELD is_small_firm — DU ENTSCHEIDEST (Pflichtfeld)
-Ziel: kleine / regionale Baufirma — KEIN Weltkonzern.
-is_small_firm=true bei z. B.:
-• Familienunternehmen, inhabergeführt, Meisterbetrieb, regional, Mittelstand, GmbH mit einem Standort
-• Typisch < 250 Mitarbeiter — auch wenn „Groep"/„Gruppe"/Muttergesellschaft erwähnt wird
-is_small_firm=false bei z. B.:
-• STRABAG, Hochtief, Goldbeck, Implenia, PORR, börsennotiert, > 500 MA, global player
+SEGMENTY — WHITELIST (matched_chains)
+Dozwolone TYLKO: {_REQUIRED_CHAINS}
+• has_retail_context=true TYLKO gdy widać usługę drogową ICP ORAZ ≥1 segment
+  z whitelisty w matched_chains (słowo występuje w wyciągu)
+• matched_chains: małe litery; kanonicznie preferuj: ftl, ltl, adr, fracht, grupaz,
+  chlodnia, europa, calopojazdowy — tylko gdy WPROST w tekście
+• Bez nazwanego segmentu z whitelisty → has_retail_context=false
 
-KLEIN-INDIZIEN: {small_kw}
-GROSS-INDIZIEN: {large_kw}
+POLE is_small_firm — TY DECYDUJESZ (obowiązkowe)
+Cel: lokalne / regionalne biuro spedycji — NIE globalny 3PL.
+is_small_firm=true np.:
+• firma rodzinna, biuro w jednym mieście, polska spedycja, właściciel, < ~250 osób
+is_small_firm=false np.:
+• Raben, DB Schenker, DHL, DPD, InPost, GEODIS, Kuehne+Nagel, DSV, PEKAES,
+  FM Logistic, holding, giełda globalna
 
-FELD is_gu — Bedeutung
-true = Generalunternehmer / Bauunternehmen Hochbau/Filialbau (NICHT Ladeneinrichter).
+MAŁE — INDYCJE: {small_kw}
+DUŻE — INDYCJE: {large_kw}
 
-FELD has_retail_context — Bedeutung
-true = Bauprojekt für Lebensmittelmarkt/Filiale einer Whitelist-Kette.
+POLE is_gu (nazwa legacy) — znaczenie w tej kampanii
+true = biuro spedycyjne / freight forwarder / organizator transportu drogowego
+(NIE kurier paczkowy, NIE sama flota producenta).
 
-IM ZWEIFEL: is_gu=false, has_retail_context=false.
+POLE has_retail_context (nazwa legacy) — znaczenie
+true = ma usługi drogowe ICP (FTL/LTL/fracht/ADR/… z whitelisty) w ofercie.
 
-HILFS-SCHLÜSSELWÖRTER (nicht alle müssen vorkommen)
-[GU — optional]
-{gu_kw}
+W WĄTPLIWOŚCI: is_gu=false, has_retail_context=false.
 
-[RETAIL / FILIALBAU / PROJEKTE]
-{retail_kw}
+SŁOWA POMOCNICZE (nie muszą wystąpić wszystkie)
+[ROLA SPEDYCJI]
+{role_kw}
 
-[SIECI als Projekt — Pflicht-Whitelist]
-{chain_kw}
+[USŁUGI / KONTEKST TRANSPORTOWY]
+{service_kw}
 
-[ODRZUĆ wenn dominiert]
+[SEGMENTY — whitelist]
+{segment_kw}
+
+[ODRZUĆ gdy dominuje]
 {neg_kw}
 
-BEISPIELE
-✓ JA: „Filialbau seit 1990" + Galerie Rewe/Aldi Neubau Fotos
-✓ JA: „Referenzprojekte: Kaufland Umbau Halle, Penny Neubau"
-✓ JA: Karriere „Auftraggeber Netto Marken-Discount" + Generalunternehmer Einzelhandelsbau → matched_chains=[netto]
-✗ NEIN: „Körling Interiors — Ladeneinrichtung für Rewe" (Innenausbau)
-✗ NEIN: „Ladenbau Büros, Praxen, Hotels" ohne Marktprojekt mit Whitelist-Kette
-✗ NEIN: GU Einzelhandelsbau ohne Aldi/Rewe/Edeka/Netto/Penny/Kaufland/Norma im Text
-✗ NEIN: STRABAG SE, 77.000 Mitarbeiter → is_small_firm=false
+PRZYKŁADY
+✓ TAK: „Spedycja drogowa FTL/LTL Europa" + sekcja Oferta
+✓ TAK: „Organizujemy transport całopojazdowy i grupaż; ADR; chłodnia"
+✓ TAK: „Freight forwarding PL–DE" + flota / linie → matched_chains=[ftl] lub [europa]
+✗ NIE: „Nadaj paczkę InPost / DPD" (kurier)
+✗ NIE: „Giełda Timocom — znajdź fracht" (marketplace)
+✗ NIE: „Pracuj jako kierowca — oferty pracy" (HR)
+✗ NIE: Raben / DB Schenker jako główny podmiot → is_small_firm=false
 
-FELDER JSON (exakt diese Keys)
+POLA JSON (dokładnie te klucze)
 {{
   "matched_gu_keywords": [],
   "matched_retail_keywords": [],
@@ -225,21 +380,23 @@ FELDER JSON (exakt diese Keys)
   "reason": ""
 }}
 
-REGELN
-• matched_*: nur Begriffe aus dem Auszug (inkl. Bild-URLs/alt) — nichts erfinden
-• matched_retail_keywords: z. B. filialbau, referenz, galerie, neubau, supermarkt, umbau
-• matched_chains: nur Kleinbuchstaben (rewe, aldi, …), nur wenn als Projekt genannt
-• primary_role: Generalunternehmer, Bauunternehmen, Filialbauer, Betreiber, Medienportal, …
-• reason: max. 2 Sätze — welcher Projektnachweis (oder warum abgelehnt)
+REGUŁY
+• matched_*: tylko pojęcia z wyciągu (w tym URL/alt) — nic nie wymyślaj
+• matched_gu_keywords: np. spedycja, spedytor, freight forwarder, dyspozytornia
+• matched_retail_keywords: np. transport drogowy, organizacja przewozu, flota, oferta
+• matched_chains: segmenty whitelist (ftl, ltl, adr, …) — małe litery
+• primary_role: Spedytor, FreightForwarder, Kurier, GieldaFrachtowa, PortalOgloszeniowy,
+  MediaLogistyczne, TylkoFlotaWlasna, Producent, HR, Urzad, Inne
+• reason: max. 2 zdania PL — jaki dowód oferty (lub dlaczego odrzut)
 
-KONTEXT
+KONTEKST
 {header}
 
-AUTOMATISCHE DOWODY (Vorauswahl aus Crawl)
+AUTOMATISCHE DOWODY (wstępna selekcja z crawla)
 {evidence}
 
-WEBSITE-AUSZUG (alle Unterseiten, === URL ===)
-{snippet or "(leer)"}
+WYCIĄG ZE STRONY (wszystkie podstrony, === URL ===)
+{snippet or "(pusty)"}
 """
 
 
@@ -254,50 +411,111 @@ def build_row_cleanup_prompt(
     handelsketten: str = "",
     url: str = "",
 ) -> str:
-    return f"""ROLLE
-Du bist Daten-QA-Leiter vor dem Excel-Export. Dein Output landet 1:1 in der Tabelle „Kontakte".
-Fehlerhafte Zeilen kosten echte B2B-Mails an falsche Empfänger — sei gnadenlos präzise.
+    """
+    Buduje prompt Claude do QA / czyszczenia wiersza przed Excel Kontakte.
 
-ZIELGRUPPE (nur diese Firmen dürfen einen Namen behalten)
-Kleine Generalunternehmer / Bauunternehmen mit Filialbau, Supermarktbau, Neubau oder Umbau von Märkten
-(Aldi, Rewe, Edeka, Netto, Penny, Kaufland, Norma als Projekt-Referenz — keine Ladeneinrichtung).
-KEINE Einzelhandels-Märkte als Betreiber. KEINE Portale. KEINE PDF-Titel. KEINE Städte als „Firmenname".
+    =====================================================================
+    PO CO
+    =====================================================================
+    Serper i crawl zostawiają śmieci: tytuły PDF, podwójne telefony, SEO-nazwy.
+    Cleanup ma dać jedną czystą nazwę + formę prawną, jeden telefon PL,
+    kanoniczne www, województwo z listy i segmenty (ftl/ltl/…).
 
-AUFGABE
-Bereinige die Eingabefelder für Excel. Antworte NUR mit einem JSON-Objekt — kein Markdown.
+    Błędny wiersz = realny mail B2B do złego odbiorcy — stąd ostre reguły
+    „KILLER” na ``company_name_clean``.
 
-SCHEMA (exakt, alle Keys, leere Strings erlaubt)
+    =====================================================================
+    MAPOWANIE EXCEL ↔ JSON (kluczy JSON nie zmieniać)
+    =====================================================================
+    bundesland     → kolumna „Województwo" (wartość z ``states``)
+    handelsketten  → kolumna „Segmenty" (whitelist ``_REQUIRED_CHAINS``)
+    company_name_clean, address, phone, website, url → pola Kontakte
+
+    Parser (``claude_row_cleanup.parse_claude_row_cleanup_response``) akceptuje
+    też aliasy PL: ``wojewodztwo`` / ``segmenty``.
+
+    =====================================================================
+    ARGUMENTY (wszystkie keyword-only poza domyślnymi)
+    =====================================================================
+    company, address, phone, email, website, url:
+        Surowe wartości z pipeline (email tylko do plausibility — nie wraca w JSON).
+    states:
+        Lista dozwolonych województw, już sformatowana ze scrapera
+        (np. ``"Mazowieckie, Dolnoslaskie, …"`` = ``PL_WOJEWODZTWA``).
+    handelsketten:
+        Aktualne segmenty z wiersza (``retail_chains_found``); w prompcie
+        powtórzone też jako ``segmenty=`` dla czytelności modelu.
+
+    =====================================================================
+    FORMY PRAWNE / TELEFON
+    =====================================================================
+    Wymagane: Sp. z o.o., S.A., sp.j., … albo GmbH/AG (gdy firma DE w PL).
+    Telefon: dokładnie jeden numer PL (+48 lub 0…).
+
+    =====================================================================
+    ZWRACA / KONTRAKT
+    =====================================================================
+    String promptu. Odpowiedź modelu = JSON ze schema w treści.
+    Wrapper scrapera: ``build_claude_row_cleanup_prompt`` →
+    ``claude_cleanup_row_fields``.
+    """
+    segments_whitelist = _REQUIRED_CHAINS
+    return f"""ROLA
+Jesteś liderem QA danych przed eksportem do Excela. Twój output trafia 1:1
+do arkusza „Kontakte". Błędne wiersze = prawdziwe maile B2B do złych firm —
+bądź bezlitośnie precyzyjny.
+
+GRUPA DOCELOWA (tylko te firmy mogą zachować nazwę)
+Małe/średnie biura spedycyjne w Polsce: organizacja transportu drogowego
+FTL/LTL, fracht, grupaż, ADR, chłodnia, linie Europa — nie kurier paczkowy,
+nie giełda Timocom/Trans.eu, nie portal, nie sama flota producenta.
+ŻADNYCH tytułów PDF. ŻADNYCH miast jako „nazwa firmy". ŻADNYCH ogłoszeń pracy.
+
+ZADANIE
+Wyczyść pola wejściowe pod Excel. Odpowiedz TYLKO obiektem JSON — bez Markdown.
+
+SCHEMA (dokładnie te klucze; puste stringi dozwolone)
 {{"company_name_clean":"","address":"","phone":"","website":"","bundesland":"","handelsketten":"","url":""}}
 
-═══ company_name_clean — KILLER-REGELN (höchste Priorität) ═══
-ERLAUBT: Offizieller Firmenname + Rechtsform in EINER Zeile.
-Rechtsform PFLICHT: GmbH, UG, AG, GbR, e.K., KG, OHG, PartG, Co. KG, SE.
-OK: „Müller Filialbau GmbH", „SuS Bau GmbH", „Wiessner Baugeschäft GmbH"
-NICHT OK: „Generalunternehmer Leipzig", „ALDI Neubau Borna", „Gewerbebau", reiner Ladenbau ohne GU
+Uwaga mapowania Excel (NIE zmieniaj nazw kluczy JSON):
+• bundesland → kolumna „Województwo"
+• handelsketten → kolumna „Segmenty" (ftl, ltl, adr, …)
 
-SOFORT company_name_clean = "" bei:
-• PDF/Dokument: [PDF], Bebauungsplan, Auswirkungsanalyse, „Seite X von Y"
+═══ company_name_clean — REGUŁY KILLER (najwyższy priorytet) ═══
+DOZWOLONE: oficjalna nazwa firmy + forma prawna w JEDNEJ linii.
+Forma prawna WYMAGANA (PL lub DE):
+  Sp. z o.o., Spółka z o.o., S.A., sp.j., sp.k., sp.p., sp. z o.o. sp.k.,
+  GmbH, UG, AG, GbR, e.K., KG, OHG, PartG, Co. KG, SE.
+OK: „Trans Spedycja Sp. z o.o.", „Euro Fracht S.A.", „Logistyka Nowak sp.j."
+NIE OK: „Spedycja Warszawa", „FTL Europa", „Transport", sam kurier / giełda
+
+NATYCHMIAST company_name_clean = "" gdy:
+• PDF/dokument: [PDF], „strona X z Y", plan zagospodarowania, analiza
 • Software/IT: PDF-XChange, Adobe, Microsoft, Tracker, shop@pdf-*
-• Portale/Kataloge: 11880, GelbeSeiten, Wikipedia, Vergabemarktplatz, Nexxt-Change, IHK-Listen, Top-10-Listen
-• Nur Ort/Projekt/Headline: „Erfurt", „Penny Neubau", Zeitungstitel ohne Firma
-• URL, E-Mail, Emoji, Marketing-Slogan, Doppelpunkt am Ende
+• Portale/katalogi: 11880, Panorama Firm, Wikipedia, pracuj.pl, Timocom, Trans.eu
+• Samo miasto/nagłówek: „Głogów", „Spedycja FTL", tytuł artykułu bez firmy
+• URL, e-mail, emoji, slogan marketingowy, dwukropek na końcu
 
-Ableitung nur aus Impressum-Kontext erlaubt, wenn Eingabe Müll ist — NIEMALS erfinden.
-Unsicher → "".
+Wyprowadzenie nazwy tylko z kontekstu danych firmy / kontaktu, gdy wejście
+to śmieci — NIGDY nie wymyślaj. Wątpliwość → "".
 
-═══ Excel-Spalten (Formatierung) ═══
-• address → „Straße, PLZ Ort" (Deutschland) oder ""
-• phone → genau EINE deutsche Nummer (+49 oder 0…), kein Fax, kein „Tel./Fax", kein Doppelwert
-• website → https://firmendomain.tld (Root, keine Unterseite, kein Verzeichnis, kein PDF)
-• url → identisch zur Basis-URL (https://domain.tld)
-• bundesland → GENAU ein Wert aus: [{states}] — sonst ""
-• handelsketten → nur Kleinbuchstaben, kommagetrennt: rewe, aldi, edeka, netto, penny, kaufland, lidl, norma — oder ""
-• email_nur_info: NICHT in JSON übernehmen — nur zur Plausibilitätsprüfung
+═══ Kolumny Excel (formatowanie) ═══
+• address → „ul. Nazwa 1, 00-001 Miasto" (Polska) lub "" — nie zmyślaj ulicy
+• phone → dokładnie JEDEN numer PL (+48 … lub 0…), bez faksu, bez „Tel./Fax",
+  bez dwóch numerów w jednej komórce
+• website → https://domenafirmowa.pl (root, bez podstrony, bez katalogu, bez PDF)
+• url → identyczny z bazowym www (https://domena.pl)
+• bundesland → DOKŁADNIE jedna wartość z listy województw: [{states}] — inaczej ""
+  (to pole = Województwo w Excelu)
+• handelsketten → małe litery, po przecinku, TYLKO segmenty z whitelisty:
+  {segments_whitelist}
+  — albo "" (to pole = Segmenty w Excelu; nie wpisuj sieci handlowych Aldi/Rewe)
+• email_nur_info: NIE wstawiaj do JSON — tylko do kontroli wiarygodności
 
-NEGATIV-BEISPIELE (alles → leere Felder oder Name "")
-Eingabe name=„PDF Bauantrag Stadt Erfurt" → company_name_clean=""
-Eingabe name=„REWE Markt Süd" → company_name_clean=""
-Eingabe phone=„Tel 0341 123, Fax 0341 456" → phone=„+49 341 123" (nur erste Tel.)
+PRZYKŁADY NEGATYWNE
+Wejście name=„PDF ogłoszenie przetarg transport" → company_name_clean=""
+Wejście name=„InPost paczkomaty Warszawa" → company_name_clean=""
+Wejście phone=„Tel +48 22 111 22 33, Fax +48 22 444" → phone=„+48 22 111 22 33"
 
 EINGABE
 name={company}
@@ -306,6 +524,7 @@ phone={phone}
 website={website}
 url={url}
 handelsketten={handelsketten}
+segmenty={handelsketten}
 email_nur_info={email}
 """
 
@@ -315,6 +534,56 @@ def build_contact_extract_prompt(
     website: str,
     page_text: str,
 ) -> str:
+    """
+    Buduje prompt Claude do ekstrakcji e-maili i telefonów z crawla (PL FAS).
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Regex / mailto nie zawsze wyłapie obfuskowane kontakty albo wybierze
+    zły adres (noreply, portal). Model czyta wyciąg i zwraca listy
+    ``emails``, ``phones``, ``impressum_emails`` — potem ranking w scraperze
+    (``pick_best_email_*``).
+
+    =====================================================================
+    PRIORYTET SEKCJI (PL, nie tylko Impressum DE)
+    =====================================================================
+    /kontakt → /dane-firmy → /o-firmie → /o-nas → biuro / NIP →
+    Impressum / RODO / legal.
+
+    Tekst skracany z ``_CONTACT_EXTRACT_TEXT_PRIORITY`` (kontakt, biuro,
+    spedycja, nip, …).
+
+    =====================================================================
+    ODRZUTY W INSTRUKCJI DLA MODELU
+    =====================================================================
+    - noreply / no-reply / mailer-daemon,
+    - giełdy (Timocom, Trans.eu),
+    - portale kurierskie (InPost/DPD jako domena portalu, nie lead),
+    - katalogi, PDF-viewer.
+
+    Telefony: format PL (+48 lub 0…), max 3 unikalne; faks pomijany gdy
+    jest zwykły Tel.
+
+    =====================================================================
+    ARGUMENTY
+    =====================================================================
+    company_name, website:
+        Kontekst w headerze (``build_claude_context_header``).
+    page_text:
+        Crawl domeny; priorytetyzowany pod kontakt, limit
+        ``CONTACT_EXTRACT_MAX_CHARS``.
+
+    =====================================================================
+    ZWRACA / KONTRAKT JSON
+    =====================================================================
+    Prompt string. Model →::
+
+        {"company_name":"","emails":[],"phones":[],"impressum_emails":[],"reason":""}
+
+    ``impressum_emails`` = podzbiór z sekcji Kontakt/Dane firmy/O firmie/RODO
+    (nazwa pola legacy). Wywołanie: warstwa Claude contact extract w scraperze.
+    """
     from claude_page_text import build_claude_context_header, extract_crawl_section_urls
 
     raw = page_text or ""
@@ -329,34 +598,40 @@ def build_contact_extract_prompt(
         max_chars=CONTACT_EXTRACT_MAX_CHARS,
         priority_keywords=_CONTACT_EXTRACT_TEXT_PRIORITY,
     )
-    return f"""ROLLE
-Du bist Kontakt-Rechercheur für B2B-Outreach an kleine Generalunternehmer in Deutschland.
-Deine einzige Aufgabe: E-Mail-Adressen und Telefonnummern aus dem Website-Auszug finden.
+    return f"""ROLA
+Jesteś researcherem kontaktów B2B do outreachu do małych biur spedycyjnych w Polsce.
+Jedyna misja: znaleźć adresy e-mail i numery telefonów w wyciągu ze strony.
 
-KONTEXT
+KONTEKST
 {header}
 
-REGELN (streng)
-• Nur Daten extrahieren, die WÖRTLICH im Auszug stehen — nichts erfinden, nichts raten.
-• Impressum- und Kontaktseiten haben höchste Priorität.
-• mailto:-Links und sichtbare @-Adressen zählen.
-• Telefon: deutsche Nummern (+49 oder 0…), keine Fax-Zeilen wenn eine normale Tel.-Zeile existiert.
-• Keine Portale (11880, GelbeSeiten), keine noreply/no-reply, keine PDF-Viewer-Adressen.
-• Local-Part (vor @): 1–50 Zeichen — längere Adressen ignorieren.
-• Wenn nichts gefunden: leere Listen.
+REGUŁY (ściśle)
+• Wyciągaj TYLKO dane widoczne WPROST w tekście — nic nie wymyślaj, nic nie zgaduj.
+• Najwyższy priorytet stron/sekcji (w tej kolejności):
+  /kontakt, /dane-firmy, /o-firmie, /o-nas, biuro, NIP — potem Impressum / legal / RODO.
+• Liczą się linki mailto: oraz widoczne adresy z @.
+• Telefon: numery PL (+48 lub 0…); bez faksu, gdy jest zwykły Tel.; max. 3 unikalne.
+• ODRZUĆ e-maile:
+  – noreply / no-reply / donotreply / mailer-daemon,
+  – giełdy i marketplace (timocom, trans.eu, trans.eu, freight exchange),
+  – portale kurierskie / paczkowe (inpost, dpd.pl jako domena kontaktowa portalu,
+    dhl.com formularze, orlenpaczka) gdy to nie domena firmowa leada,
+  – katalogi (11880, panorama firm, panorfirm), PDF-viewer / adobe / pdf-xchange.
+• Local-part (przed @): 1–50 znaków — dłuższe ignoruj.
+• Gdy nic nie ma: puste listy.
 
-OUTPUT (nur JSON, kein Markdown)
+OUTPUT (tylko JSON, bez Markdown)
 {{"company_name":"","emails":[],"phones":[],"impressum_emails":[],"reason":""}}
 
-Felder:
-• company_name — offizieller Firmenname nur wenn klar im Impressum/Kontakt genannt, sonst ""
-• emails — alle gültigen Firmen-E-Mails aus dem Text
-• impressum_emails — Teilmenge von emails, die aus Impressum/Datenschutz/Legal kommen
-• phones — max. 3 eindeutige Telefonnummern
-• reason — max. 1 Satz (z. B. „Impressum info@…" oder „keine Kontakte im Auszug")
+Pola:
+• company_name — oficjalna nazwa tylko gdy jasno w Kontakt / Dane firmy / O firmie, inaczej ""
+• emails — wszystkie poprawne firmowe e-maile z tekstu
+• impressum_emails — podzbiór emails z Kontakt / Dane firmy / O firmie / Impressum / RODO
+• phones — max. 3 unikalne telefony PL
+• reason — max. 1 zdanie PL (np. „Kontakt biuro@…" lub „brak kontaktów w wyciągu")
 
-WEBSITE-AUSZUG (vollständiger Domain-Crawl)
-{snippet or "(leer)"}
+WYCIĄG ZE STRONY (pełny crawl domeny)
+{snippet or "(pusty)"}
 """
 
 
@@ -369,46 +644,102 @@ def build_discovery_terms_prompt(
     exclude_block: str = "",
     max_term_len: int = 55,
 ) -> str:
+    """
+    Buduje prompt Claude do **uzupełnienia** fraz Serper (discovery PL FAS).
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Szablony z ``pl_spedycja_keywords`` / ``SERPER_TEMPLATE_PATTERNS`` dają
+    bazę zapytań. Gdy wynik discovery jest słaby, Claude dogrywa dodatkowe
+    linie w tym samym stylu PL: ``spedycja FTL {miasto}`` — **nie**
+    ``Generalunternehmer Filialbau Aldi``.
+
+    Walidacja po stronie ``claude_discovery_terms.validate_discovery_term``
+    (rola spedycji + segment z rotacji).
+
+    =====================================================================
+    ARGUMENTY
+    =====================================================================
+    lands:
+        Lista województw (klucze ``BUNDESLAND_CONFIG``); w prompcie używana
+        głównie pośrednio — kontekst to ``land_str`` / ``city_str``.
+    city_str:
+        Miasta po przecinku (np. z wrappera ``claude_discovery_terms``).
+    land_str:
+        Województwo(a) jako tekst do bloku KONTEKST.
+    terms_requested:
+        Dokładna liczba linii, których ma wygenerować model.
+    exclude_block:
+        Opcjonalny blok „już użyte — nie powtarzaj" (doklejany do promptu).
+    max_term_len:
+        Max długość jednej frazy (domyślnie 55, jak ``DISCOVERY_MAX_TERM_LEN``).
+
+    =====================================================================
+    OBOWIĄZKI W TREŚCI PROMPTU DLA MODELU
+    =====================================================================
+    - trzymać się szablonów PL (``{city}`` / ``{chain}``),
+    - marker roli + segment z ``_REQUIRED_CHAINS``,
+    - język polski, bez JSON (same linie tekstu).
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    String promptu. Output modelu = N linii zapytań (nie JSON).
+    Wrapper: ``claude_discovery_terms.build_discovery_terms_prompt``.
+    """
     templates = "\n".join(f"- {t}" for t in SERPER_TEMPLATE_PATTERNS[:10])
-    gu_kw = ", ".join(gu_required_keywords_sample(max_items=6))
-    retail_kw = ", ".join(retail_context_keywords_sample(max_items=8))
+    role_kw = ", ".join(gu_required_keywords_sample(max_items=6))
+    service_kw = ", ".join(retail_context_keywords_sample(max_items=8))
     neg_kw = ", ".join(negative_keywords_sample(max_items=8))
-    return f"""ROLLE
-Du generierst Google-Suchanfragen (Serper API) für die Discovery kleiner GU im Filialbau in Deutschland.
-Jede Zeile = eine Suchanfrage. Qualität vor Quantität.
+    sample_city = city_str.split(",")[0].strip() if city_str else "Głogów"
+    return f"""ROLA
+Generujesz zapytania Google (Serper API) do discovery małych biur spedycyjnych
+w Polsce (FTL/LTL, fracht, Europa). Każda linia = jedno zapytanie.
+Jakość przed ilością. Język zapytań: polski.
 
-KONTEXT
-Bundesland: {land_str}
-Städte: {city_str}
+KONTEKST
+Województwo: {land_str}
+Miasta: {city_str}
 
-VORLAGEN (Varianten, {{city}} durch echte Stadt ersetzen)
+SZABLONY (warianty — {{city}} / {{chain}} zamień na prawdziwe miasto i segment)
+Trzymaj się tych wzorców; NIE wymyślaj zapytań DE typu „Generalunternehmer Filialbau Aldi".
 {templates}
 
-PFLICHT pro Zeile
-• Mindestens ein GU-Marker: {gu_kw}
-• Mindestens eine Handelskette WÖRTLICH: {_REQUIRED_CHAINS} (rotieren — nicht immer Aldi)
-• Retail/Filialbau-Kontext erwünscht: {retail_kw}
-• Max {max_term_len} Zeichen
-• Deutsch, keine Nummerierung, keine Anführungszeichen, keine leeren Zeilen
+OBOWIĄZEK w każdej linii
+• Co najmniej jeden marker roli spedycji: {role_kw}
+• Co najmniej jeden segment WPROST z whitelisty: {_REQUIRED_CHAINS}
+  (rotuj — nie zawsze „ftl"; używaj też ltl, adr, europa, …)
+• Kontekst usług mile widziany: {service_kw}
+• Max {max_term_len} znaków
+• Polski, bez numeracji, bez cudzysłowów, bez pustych linii
+• Używaj miast z listy powyżej (lub bliskich w tym województwie)
 
-VERBOTEN
+ZAKAZANE
 • {neg_kw}
-• Reines „Bauunternehmen" oder „Ladenbau" OHNE Generalunternehmer/GU/Filialbau-Marker
-• Doppelte oder fast identische Zeilen
+• Same „transport" / „logistyka" BEZ markera spedycji / FTL / LTL
+• Kurier paczkowy, InPost, DPD jako produkt, giełda Timocom/Trans.eu
+• Duplikaty lub niemal identyczne linie
+• Niemieckie frazy GU / Filialbau / Aldi / Rewe / Ladenbau
 {exclude_block}
 
-GUTE BEISPIELE
+DOBRE PRZYKŁADY
+spedycja FTL {sample_city}
+firma spedycyjna {sample_city} LTL
+spedycja drogowa Warszawa transport FTL
+biuro spedycyjne {sample_city} Europa
+organizacja transportu {sample_city} ADR
+
+ZŁE PRZYKŁADY
 Generalunternehmer Filialbau Hannover Aldi markt
 GU Supermarktbau Rewe Neubau Braunschweig
-Generalunternehmer Filialbau {city_str.split(",")[0].strip() if city_str else "Leipzig"} Netto markt
-
-SCHLECHTE BEISPIELE
-Bauunternehmen Gewerbebau Hannover
-Ladenbau Innenausbau München
-REWE Markt Hannover
+transport Warszawa
+InPost paczkomaty {sample_city}
+Timocom giełda frachtów
 
 OUTPUT
-Genau {terms_requested} Zeilen — eine Anfrage pro Zeile, sonst NICHTS (kein JSON, kein Kommentar).
+Dokładnie {terms_requested} linii — jedno zapytanie na linię, poza tym NIC
+(bez JSON, bez komentarza).
 """
 
 
@@ -419,10 +750,46 @@ def build_custom_email_prompt_de(
     city_name: str = "",
     delivery_address: str = "",
 ) -> str:
+    """
+    Buduje prompt personalizacji maila B2B po **niemiecku** — LEGACY.
+
+    =====================================================================
+    STATUS W KAMPANII PL FAS
+    =====================================================================
+    Nie jest domyślną ścieżką. ``email_custom_template.build_custom_draft_prompt``
+    wybiera tę funkcję tylko gdy ``lang == "de"``. Kampania Forwarding
+    Assistant używa ``build_custom_email_prompt_pl``.
+
+    Zostawione dla starych szablonów DE / testów kompatybilności.
+    **Nie rozwijamy** treści pod spedycję PL.
+
+    =====================================================================
+    ZACHOWANIE
+    =====================================================================
+    Minimalna adaptacja szablonu (1–2 zdania kontekstu), bez wymyślania
+    cen, bez zmiany podpisu. Output modelu: JSON ``subject`` + ``body``.
+
+    =====================================================================
+    ARGUMENTY
+    =====================================================================
+    draft:
+        Surowy tekst maila od użytkownika / GUI.
+    company_name:
+        Nazwa adresata (wstawiana w sekcji EMPFÄNGER).
+    city_name, delivery_address:
+        Opcjonalny kontekst projektu / adresu dostawy (bez zmian faktów).
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    String promptu DE. Parser: ``parse_llm_email_json`` w
+    ``libs/email_custom_template.py``.
+    """
     ctx_city = f"Projektstadt: {city_name}. " if city_name else ""
     ctx_addr = f"Lieferadresse (unverändert): {delivery_address}. " if delivery_address else ""
     return f"""ROLLE
 Du bist B2B-Texter für formelle Preisanfragen auf Deutsch. Minimal anpassen, nicht umschreiben.
+(Legacy-Prompt — Hauptkampagne PL FAS nutzt die polnische Variante.)
 
 EMPFÄNGER
 {company_name}
@@ -454,28 +821,221 @@ def build_custom_email_prompt_pl(
     city_name: str = "",
     delivery_address: str = "",
 ) -> str:
-    ctx_city = f"Miasto/inwestycja: {city_name}. " if city_name else ""
-    ctx_addr = f"Adres dostawy (bez zmian): {delivery_address}. " if delivery_address else ""
-    return f"""ROLLE
-Jesteś redaktorem B2B dla oficjalnych zapytań ofertowych po polsku. Minimalna personalizacja.
+    """
+    Buduje prompt generowania maila outreach PL FAS (oferta systemu).
+
+    =====================================================================
+    PO CO
+    =====================================================================
+    Claude pisze **ludzki, mało formalny** mail do biura spedycyjnego:
+    najpierw przedstawienie, potem ból (niepełne zapytania FTL w skrzynce),
+    potem Forwarding Assistant. Szablon = wzorzec stylu + obowiązkowe fakty
+    (``fas_spedycja_inquiry_email_pl``).
+
+    =====================================================================
+    GDZIE UŻYWANE
+    =====================================================================
+    ``libs/email_custom_template`` / ``generate_email_content`` w scraperze.
+    Nie dotyczy maili przypominających (``scraper_email_replies``).
+
+    =====================================================================
+    REGUŁY (skrót)
+    =====================================================================
+    - ton: Cześć / Pozdrawiam — bez „Szanowni Państwo", bez korpo-frazy,
+    - personalizuj 1–2 zdania pod firmę/miasto (z kontekstu),
+    - obowiązkowo zachowaj: „FAS nie wymyśla stawki, kwotę podajecie Wy.",
+    - podpis 1:1 (Maksym Swinczak / swinczakdata.pl / telefon),
+    - zakaz: ceny, promocja/pilne, kurier/giełda.
+
+    =====================================================================
+    ZWRACA
+    =====================================================================
+    Prompt → JSON ``subject`` + ``body``.
+    """
+    ctx_city = f"Miasto / region: {city_name}. " if city_name else ""
+    ctx_addr = (
+        f"Dodatkowy kontekst (bez zmian faktów): {delivery_address}. "
+        if delivery_address
+        else ""
+    )
+    return f"""ROLA
+Piszesz krótki, ludzki mail B2B po polsku — jak od człowieka do spedytora,
+nie jak z CRM. Kampania: oferta systemu Forwarding Assistant (FAS) dla
+małych biur spedycyjnych FTL (ogarnianie zapytań z maila + Telegram HITL).
 
 ADRESAT
 {company_name}
 {ctx_city}{ctx_addr}
 
-ZADANIE
-Dostosuj szablon (1–2 zdania kontekstu). Popraw styl. ZACHOWAJ wszystkie fakty: ilości, daty, adresy, frakcje, telefony, podpis.
+STRUKTURA (kolejność obowiązkowa)
+1) Przedstawienie: Maksym Swinczak / Forwarding Assistant
+2) Dlaczego do tej firmy (1 zdanie z nazwy / miasta / FTL-Europa jeśli pasuje)
+3) Ból: niepełne „ile za trasę?”, braki wagi/palet, Excel, stawka i tak ręcznie
+4) Co robi FAS: kompletuje zlecenie, dopytuje, rzuca fracht na Telegrama
+5) Obowiązkowe zdanie DOKŁADNIE: FAS nie wymyśla stawki, kwotę podajecie Wy.
+6) CTA: krótki pokaz, bez długiej prezentacji; załącznik
+7) Podpis 1:1 ze szablonu (imię, swinczakdata.pl, telefon) — bez zmian
+
+TON
+• mało formalny: „Cześć", „dajcie znać", „pokażę na szybko"
+• bez: Szanowni Państwo, niniejszym, pragnę wyrazić, synergia, innowacyjny
+• naturalne zdania, nie lista bulletów
 
 ZAKAZ
-• Wymyślanie cen
-• Słowa: gratis, promocja, pilne, kliknij
-• Zmiana treści podpisu
+• Wymyślanie cen, stawek frachtu, rabatów
+• Słowa: gratis, promocja, pilne, kliknij, „najlepsza oferta"
+• Zmiana podpisu / telefonu / strony
+• Twierdzenie, że FAS to kurier paczkowy albo giełda frachtów
+• Usuwanie zdania o tym, że FAS nie wymyśla stawki
 
 OUTPUT (tylko JSON)
 {{"subject":"...","body":"..."}}
-subject: max 78 znaków, bez Re:/Przypomnienie
-body: pełny mail gotowy do wysyłki, plain text
+subject: max 78 znaków, konkretny, bez Re:/Przypomnienie
+body: pełny mail plain text, gotowy do wysyłki
 
-SZABLON
+WZORZEC STYLU I FAKTÓW (możesz lekko parafrazować treść poza podpisem
+i poza obowiązkowym zdaniem o stawce; zachowaj sens 1:1)
 {draft}
 """
+
+
+def debug_claude_prompts(
+    *,
+    company: str = "Trans Spedycja Sp. z o.o.",
+    website: str = "https://trans-spedycja.pl",
+    city: str = "Głogów",
+    land: str = "Dolnoslaskie",
+    page_snippet: str | None = None,
+) -> dict:
+    """
+    Diagnostyka modułu promptów PL FAS (bez wywołania API).
+
+    Zwraca dict: limity, keywordy priorytetu, długości promptów, flagi
+    sanity (brak DE GU w verify, obecność Województwo/Segmenty w cleanup, …).
+    CLI: ``python claude_prompts.py`` / ``python claude_prompts.py --preview verify``.
+    """
+    page = page_snippet or (
+        "=== https://trans-spedycja.pl/oferta ===\n"
+        "Firma spedycyjna. Spedycja drogowa FTL LTL Europa. Organizacja transportu ADR.\n"
+        "=== https://trans-spedycja.pl/kontakt ===\n"
+        "biuro@trans-spedycja.pl +48 76 111 22 33\n"
+    )
+    states = "Dolnoslaskie, Mazowieckie, Lodzkie, Wielkopolskie"
+    prompts = {
+        "page_verify": build_page_verify_prompt(
+            company, website, page, serper_blob=f"spedycja FTL {city}", pages_crawled=2
+        ),
+        "row_cleanup": build_row_cleanup_prompt(
+            company=company,
+            address=f"ul. Test 1, {city}",
+            phone="+48 76 111 22 33",
+            email="biuro@trans-spedycja.pl",
+            website=website,
+            states=states,
+            handelsketten="ftl, ltl",
+            url=website,
+        ),
+        "contact_extract": build_contact_extract_prompt(company, website, page),
+        "discovery_terms": build_discovery_terms_prompt(
+            [land],
+            city_str=f"{city}, Wrocław",
+            land_str=land,
+            terms_requested=5,
+        ),
+        "email_pl": build_custom_email_prompt_pl(
+            "Cześć,\n\nZnam ten ból: ile za trasę?\n"
+            "FAS nie wymyśla stawki, kwotę podajecie Wy.\n\n"
+            "Pozdrawiam\nMaksym Swinczak\nswinczakdata.pl\n+48 516 513 965",
+            company,
+            city_name=city,
+        ),
+        "email_de_legacy": build_custom_email_prompt_de("Hallo", company),
+    }
+    prioritized = prioritize_page_text_for_verify(page, max_chars=500)
+    checks = {
+        "verify_has_drzewo": "DRZEWO DECYZYJNE" in prompts["page_verify"],
+        "verify_no_filialbau": "Filialbau" not in prompts["page_verify"],
+        "verify_has_ftl": "ftl" in prompts["page_verify"].lower(),
+        "cleanup_has_wojewodztwo": "Województwo" in prompts["row_cleanup"],
+        "cleanup_has_segmenty": "Segmenty" in prompts["row_cleanup"],
+        "cleanup_has_plus48": "+48" in prompts["row_cleanup"],
+        "contact_has_kontakt_path": "/kontakt" in prompts["contact_extract"],
+        "contact_no_wortlich": "WÖRTLICH" not in prompts["contact_extract"],
+        "discovery_has_wojewodztwo": "Województwo:" in prompts["discovery_terms"],
+        "discovery_no_bundesland_label": "Bundesland:" not in prompts["discovery_terms"],
+        "email_pl_fas": "Forwarding Assistant" in prompts["email_pl"]
+        and "FAS nie wymyśla stawki" in prompts["email_pl"],
+        "email_de_legacy_marker": "Legacy" in prompts["email_de_legacy"],
+        "priority_no_aldi": "aldi" not in _PAGE_VERIFY_TEXT_PRIORITY,
+        "priority_has_spedycja": "spedycja" in _PAGE_VERIFY_TEXT_PRIORITY,
+    }
+    return {
+        "campaign": "pl_fas_spedycja",
+        "limits": {
+            "PAGE_VERIFY_MAX_CHARS": PAGE_VERIFY_MAX_CHARS,
+            "CONTACT_EXTRACT_MAX_CHARS": CONTACT_EXTRACT_MAX_CHARS,
+        },
+        "required_chains_preview": _REQUIRED_CHAINS[:120] + ("…" if len(_REQUIRED_CHAINS) > 120 else ""),
+        "page_verify_priority_count": len(_PAGE_VERIFY_TEXT_PRIORITY),
+        "contact_priority_count": len(_CONTACT_EXTRACT_TEXT_PRIORITY),
+        "page_verify_priority_sample": list(_PAGE_VERIFY_TEXT_PRIORITY[:8]),
+        "contact_priority_sample": list(_CONTACT_EXTRACT_TEXT_PRIORITY[:8]),
+        "prompt_lengths": {k: len(v) for k, v in prompts.items()},
+        "prioritized_excerpt_preview": prioritized[:240],
+        "checks": checks,
+        "checks_ok": all(checks.values()),
+        "prompts": prompts,
+    }
+
+
+def _cli_debug(argv: list[str] | None = None) -> int:
+    """CLI: ``python claude_prompts.py [--preview NAME] [--json]``."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(
+        description="Debug claude_prompts (PL FAS) — bez wywołania Anthropic API."
+    )
+    parser.add_argument(
+        "--preview",
+        choices=(
+            "page_verify",
+            "row_cleanup",
+            "contact_extract",
+            "discovery_terms",
+            "email_pl",
+            "email_de_legacy",
+            "none",
+        ),
+        default="none",
+        help="Wypisz pełny tekst wybranego promptu na stdout",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Cały raport debug (bez pełnych promptów) jako JSON",
+    )
+    args = parser.parse_args(argv)
+    report = debug_claude_prompts()
+    if args.json:
+        slim = {k: v for k, v in report.items() if k != "prompts"}
+        print(json.dumps(slim, ensure_ascii=False, indent=2))
+        return 0 if report["checks_ok"] else 1
+    print("=== claude_prompts debug (PL FAS) ===")
+    print(f"checks_ok: {report['checks_ok']}")
+    for k, v in report["checks"].items():
+        print(f"  [{'OK' if v else 'FAIL'}] {k}")
+    print("limits:", report["limits"])
+    print("prompt_lengths:", report["prompt_lengths"])
+    print("page_verify_priority_sample:", report["page_verify_priority_sample"])
+    print("required_chains_preview:", report["required_chains_preview"])
+    print("--- prioritized excerpt ---")
+    print(report["prioritized_excerpt_preview"])
+    if args.preview != "none":
+        print(f"\n=== PREVIEW: {args.preview} ===\n")
+        print(report["prompts"][args.preview])
+    return 0 if report["checks_ok"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_debug())

@@ -1,65 +1,90 @@
-﻿# Google Drive — wyniki kampanii GU
+﻿# Google Drive — kampania PL spedycja (Forwarding Assistant)
 
 ## Stan aktualny
 
 | Element | Status |
 |---------|--------|
-| Pełny sync `Wyniki/` (cache, log, `wyslane`) | **DISABLED** — joby `if: false` w `sync-google-drive.yml` / `sync-week-discovery-drive.yml` + `DISABLE_GOOGLE_DRIVE=1` |
-| Końcowy Excel po raporcie Gmail | **WŁĄCZONY** — `GU poniedzialek excel email` (nd 09:00 w tygodniu cyklu GHA) |
-| Lokalny kill-switch | `DISABLE_GOOGLE_DRIVE=1` (domyślnie); krok Excel→Drive ustawia `0` tylko dla `.xlsx` |
-| Cron pełnego sync | **brak** w YAML (tylko `workflow_dispatch`); pon 06:00 = opis **rollback**, nie stan obecny |
+| Cache JSON + log | **tylko lokalnie w repo** (`Wyniki/`) — `pl_spedycja_data_paths.resolve_data_root` **nie** kieruje na Drive |
+| Pełny sync `Wyniki/` | **DISABLED** (`if: false` + `DISABLE_GOOGLE_DRIVE=1`) |
+| Końcowy Excel kontaktów | **WŁĄCZONY** — nd 09:00 (tydzień cyklu GHA) → folder poniżej |
+| Załączniki maila B2B | **2 pliki** Drive (oferta + prezentacja) — pobierane przy GHA send / `export_fas_email_attachment.py` |
+| Kill-switch | `DISABLE_GOOGLE_DRIVE=1` (domyślnie); krok Excel→Drive ustawia `0` tylko na upload `.xlsx` |
 
-## Foldery
+## Foldery / pliki Drive
 
-| Folder | ID | Użycie |
-|--------|-----|--------|
-| [GU Bauunternehmen](https://drive.google.com/drive/folders/1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf) | `1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf` | Domyślny GU (pełny sync / lokalnie / hardcoded w disabled workflowach i reprocess) |
-| Folder raportu Excel | secret `GDRIVE_FOLDER_ID` (komentarz YAML: `1JMPyphoNX_oS_EjW7LEhf103lvvtsMUL`) | Upload końcowego `de_gu_bauunternehmen_kontakte.xlsx` z nd 09:00 |
+| Cel | Link / ID | Użycie |
+|-----|-----------|--------|
+| **Końcowy Excel kontaktów** | [`1bRCAqle6BS46YEw0fScq4P095LsJUSgL`](https://drive.google.com/drive/folders/1bRCAqle6BS46YEw0fScq4P095LsJUSgL?usp=drive_link) | Upload `pl_spedycja_kontakte.xlsx` (nd 09:00). Secret GHA: `GDRIVE_FOLDER_ID`. Default w `pl_spedycja_data_paths.GOOGLE_DRIVE_FAS_FOLDER_ID` (alias legacy: `GOOGLE_DRIVE_GU_*`). |
+| **Załącznik 1 — oferta** | [`1t6m-M49t4w0RuLzc8rWebwjldLUMMRW3`](https://drive.google.com/file/d/1t6m-M49t4w0RuLzc8rWebwjldLUMMRW3/view?usp=drive_link) | Oferta FAS — `EMAIL_ATTACHMENT_DRIVE_FILE_ID`. Lokalnie: `FAS_zalacznik_kampania.pptx`. |
+| **Załącznik 2 — prezentacja** | [`164qbEQOTyO8VTgfZr2wtIVTY-zttk6u7`](https://drive.google.com/file/d/164qbEQOTyO8VTgfZr2wtIVTY-zttk6u7/view?usp=drive_link) | Dodatkowa prezentacja w mailach B2B — `EMAIL_ATTACHMENT_EXTRA_DRIVE_FILE_ID`. Lokalnie: `FAS_prezentacja.pptx`. |
 
 ## Co trafia na Drive dziś
 
 | Plik | Kiedy |
 |------|--------|
-| `de_gu_bauunternehmen_kontakte.xlsx` | Niedziela 09:00 (cykl 6-tyg. GHA) — po Gmail, bez `dry_run` |
+| `pl_spedycja_kontakte.xlsx` | Niedziela 09:00 (cykl GHA) — po raporcie Gmail, bez `dry_run` |
 
-Cache, logi i `wyslane/` **nie** są uploadowane w tym trybie (zostają w artefaktach GHA).
+**Nie** na Drive: `pl_spedycja_cache.json`, logi, `wyslane/` (lokalnie / artefakty GHA).
+
+## Lokalne ścieżki (repo)
+
+| Plik | Ścieżka |
+|------|---------|
+| Cache | `Wyniki/pl_spedycja_cache.json` |
+| Log | `Wyniki/pl_spedycja_scraper.log` |
+| Excel (lokalny append) | `Wyniki/pl_spedycja_kontakte.xlsx` |
+| Oferta B2B (cache) | `Wyniki/FAS_zalacznik_kampania.pptx` (lub `assets/campaign/`) |
+| Prezentacja B2B (cache) | `Wyniki/FAS_prezentacja.pptx` (lub `assets/campaign/`) |
+
+`Wyniki/` jest w `.gitignore` — na GitHubie zwykle artefakty workflow, nie commit.
 
 ## Pełny sync (OFF — rollback)
 
-Gdy włączysz ponownie `sync-google-drive.yml`:
+Gdy włączysz `sync-google-drive.yml`:
 
 | Reguła | Wartość |
 |--------|---------|
 | Trigger dziś | tylko `workflow_dispatch` |
-| Cron (gdy dodasz z powrotem) | historycznie poniedziałek 06:00 Europe/Warsaw |
-| Źródło | `de-gu-wyniki-thu` |
-| Fallback | `thu` → `wed` → `mon` → `tue` → `fri` |
-| Folder | `1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf` |
+| Źródło | `pl-spedycja-wyniki-thu` (+ fallbacki) |
+| Folder | ten sam co Excel: `1bRCAq…` |
 | Zakres | cały `Wyniki/` + opcjonalnie `wyslane/` |
 
-Rollback: `DISABLE_GOOGLE_DRIVE=0` + usuń `if: false` w workflowach sync (+ opcjonalnie przywróć `schedule`).
+Rollback: `DISABLE_GOOGLE_DRIVE=0` + usuń `if: false` (+ opcjonalnie `schedule`).
 
 ## Sposoby uploadu
 
 | Sposób | Status |
 |--------|--------|
-| **GHA — excel email** | **ON** — tylko `.xlsx` → `secrets.GDRIVE_FOLDER_ID` |
-| **GHA — Sync wyniki Google Drive** | DISABLED (`if: false`, bez crona) |
-| **GHA — reprocess bez Serper** | ręcznie; folder GU `1tP8oUi…` (nie secret raportu); wymaga jawnego `DISABLE_GOOGLE_DRIVE=0` w kroku |
+| **GHA — excel email** | **ON** — tylko `.xlsx` → `secrets.GDRIVE_FOLDER_ID` = `1bRCAq…` |
+| **GHA — Sync wyniki** | DISABLED |
+| **GHA — reprocess** | ręcznie; ten sam folder Excela; wymaga `DISABLE_GOOGLE_DRIVE=0` w kroku |
 | **Lokalnie** | `python scripts/gdrive_upload_wyniki.py --campaign-dir .` (wymaga `DISABLE_GOOGLE_DRIVE=0`) |
-| **PC + Drive for desktop** | `KANBUD_GOOGLE_DRIVE_GU_PATH` (ignorowane gdy flaga=1) |
 
 ## Zmienne / secrets
 
 | Zmienna | Opis |
 |---------|------|
-| `DISABLE_GOOGLE_DRIVE` | `1` = zero Drive poza jawnym override w kroku Excel |
-| `GDRIVE_FOLDER_ID` | Folder docelowy (secret wymagany dla nd 09:00) |
-| `GDRIVE_OAUTH_*` | OAuth Desktop — wymagane dla nd 09:00 |
-| `GDRIVE_SERVICE_ACCOUNT_JSON` / `_FILE` | Shared Drive / lokalnie |
-| `GDRIVE_IMPERSONATE_EMAIL` / `GDRIVE_SHARED_DRIVE_ID` | opcjonalne (disabled pełny sync) |
-| `GDRIVE_VERSION_XLSX` | Wersjonowanie xlsx (excel step: `0`) |
-| `KANBUD_GOOGLE_DRIVE_GU_PATH` | Drive for desktop |
-| `KANBUD_DATA_DIR` | Lokalny katalog danych |
+| `DISABLE_GOOGLE_DRIVE` | `1` = brak Drive poza jawnym krokiem Excel |
+| `GDRIVE_FOLDER_ID` | **musi** być `1bRCAqle6BS46YEw0fScq4P095LsJUSgL` (nd 09:00) |
+| `GDRIVE_OAUTH_*` | OAuth — upload Excela / pobranie oferty+prezentacji |
+| `GDRIVE_SERVICE_ACCOUNT_JSON` / `_FILE` | opcjonalnie (pełny sync OFF) |
+| `KANBUD_DATA_DIR` | opcjonalny lokalny root (nie folder Drive) |
+| `FAS_EMAIL_ATTACHMENT_PATH` | lokalna **oferta** zamiast Drive (preferowany) |
+| `FAS_EMAIL_ATTACHMENT_EXTRA_PATH` | lokalna **prezentacja** (plik 2) |
+| `MFG_EMAIL_ATTACHMENT_PATH` | alias legacy oferty (nadal działa) |
+| `KANBUD_GOOGLE_DRIVE_FAS_PATH` | opcjonalny (PC schedule); `resolve_data_root` i tak ignoruje Drive env |
 
 Setup OAuth: `python scripts/gdrive_oauth_setup.py`
+
+Testy / debug ścieżek:
+
+```powershell
+python -m pytest tests/unit/test_pl_spedycja_data_paths.py tests/unit/test_pl_fas_email_attachment.py -q
+python pl_spedycja_data_paths.py .
+```
+
+API live (folder Excela + załączniki B2B + Gmail SMTP/IMAP — wymaga sekretów):
+
+```powershell
+python -m pytest tests/integration/test_gmail_gdrive_api.py -m api_live -v --tb=short
+```

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       pi_run_ids:
-        description: "Run ID de-gu-wyniki-pi (po przecinku)"
+        description: "Run ID pl-spedycja-wyniki-pi (po przecinku)"
         required: false
         default: "27533750486,27638016924,27713619204,27787280147,27837533068"
       week_label:
@@ -13,7 +13,7 @@ on:
         required: false
         default: "2026-06-15_2026-06-21"
       prior_send_run_id:
-        description: "Run ID ostatniej wysylki (de-gu-wyniki-tue). Puste = najnowszy tue."
+        description: "Run ID ostatniej wysylki (pl-spedycja-wyniki-tue). Puste = najnowszy tue."
         required: false
         default: "27933438260"
       skip_verify:
@@ -30,7 +30,9 @@ env:
   DISABLE_SEND_WINDOW: "1"
   DISABLE_CONTRACTOR_EMAILS: "1"
   DISABLE_GOOGLE_DRIVE: "1"
-  MFG_EMAIL_ATTACHMENT_PATH: ${{ github.workspace }}/assets/campaign/MFG_Referenzliste_Einzelhandel.pptx
+  FAS_EMAIL_ATTACHMENT_PATH: ${{ github.workspace }}/assets/campaign/FAS_zalacznik_kampania.pptx
+  MFG_EMAIL_ATTACHMENT_PATH: ${{ github.workspace }}/assets/campaign/FAS_zalacznik_kampania.pptx
+
   KANBUD_PROJECT_ROOT: ${{ github.workspace }}/libs
   SMTP_HOST: ragakomputer.home.pl
   SMTP_PORT: "465"
@@ -78,29 +80,29 @@ jobs:
           PRIOR="${{ github.event.inputs.prior_send_run_id }}"
           if [ -z "$PRIOR" ]; then
             PRIOR=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-              --jq '[.artifacts[] | select(.name=="de-gu-wyniki-tue" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+              --jq '[.artifacts[] | select(.name=="pl-spedycja-wyniki-tue" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
           fi
           if [ -z "$PRIOR" ] || [ "$PRIOR" = "null" ]; then
             echo "Brak artefaktu tue — pomijam merge sent"
             exit 0
           fi
           mkdir -p /tmp/prior-send
-          gh run download "$PRIOR" -R "${{ github.repository }}" -n de-gu-wyniki-tue -D /tmp/prior-send
+          gh run download "$PRIOR" -R "${{ github.repository }}" -n pl-spedycja-wyniki-tue -D /tmp/prior-send
           python scripts/apply_prior_send_state.py \
-            --prior-cache /tmp/prior-send/Wyniki/de_gu_bauunternehmen_cache.json
+            --prior-cache /tmp/prior-send/Wyniki/pl_spedycja_cache.json
 
       - name: Verify + backfill e-maili + rebuild Excel
         if: ${{ github.event.inputs.skip_verify != 'true' }}
         run: |
-          CFG="--run-config run_config/mfg_gu_de.json"
-          python de_gu_bauunternehmen_scraper.py $CFG --verify-pending-contacts --reverify-all-contacts
-          python de_gu_bauunternehmen_scraper.py $CFG --backfill-emails-from-cache
-          python de_gu_bauunternehmen_scraper.py $CFG --rebuild-from-cache
+          CFG="--run-config run_config/pl_fas_spedycja.json"
+          python pl_fas_spedycja_scraper.py $CFG --verify-pending-contacts --reverify-all-contacts
+          python pl_fas_spedycja_scraper.py $CFG --backfill-emails-from-cache
+          python pl_fas_spedycja_scraper.py $CFG --rebuild-from-cache
 
       - name: Rebuild Excel (bez verify)
         if: ${{ github.event.inputs.skip_verify == 'true' }}
         run: |
-          python de_gu_bauunternehmen_scraper.py --run-config run_config/mfg_gu_de.json --rebuild-from-cache
+          python pl_fas_spedycja_scraper.py --run-config run_config/pl_fas_spedycja.json --rebuild-from-cache
 
       - name: Podglad kolejki mailowej
         run: python scripts/analyze_mail_jobs.py
@@ -127,7 +129,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: de-gu-wyniki-week-send
+          name: pl-spedycja-wyniki-week-send
           path: |
             Wyniki/
             wyslane/

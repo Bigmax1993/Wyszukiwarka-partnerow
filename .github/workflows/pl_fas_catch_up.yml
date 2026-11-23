@@ -32,5 +32,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run de_gu_pi.yml -R "$GITHUB_REPOSITORY" -f discovery_phase=tue
-          echo "Uruchomiono GU discovery (faza tue)"
+          gh workflow run pl_fas_pi.yml -R "$GITHUB_REPOSITORY" -f discovery_phase=tue
+          echo "Uruchomiono PL spedycja discovery (faza tue)"

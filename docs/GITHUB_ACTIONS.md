@@ -1,26 +1,30 @@
-# GitHub Actions — kampania GU (MFG / Filialbau)
+# GitHub Actions — kampania PL spedycja (Forwarding Assistant)
 
 Repozytorium: [Wyszukiwarka-partnerow](https://github.com/Bigmax1993/Wyszukiwarka-partnerow)
 
 Crony używają `timezone: Europe/Warsaw` — godziny w YAML to **czas polski**.  
 Gałąź CI: **`master`** (`tests.yml`, `ci-deploy.yml`).
 
-## Tryb discovery-only (aktualny)
+## Tryb aktualny (discovery + B2B według harmonogramu)
 
 Pipeline na GHA zbiera firmy (Serper + Claude), buduje Excel w artefaktach i w niedzielę cyklu:
 1. wysyła **raport Excel** na `svinchak1993@gmail.com`
 2. uploaduje **tylko końcowy `.xlsx`** na Google Drive (`secrets.GDRIVE_FOLDER_ID`)
+3. w **następnym** pon/wt 09:00 wysyła maile B2B (partia 1 / 2) — guard `FAS_GUARD_MODE=send_followup`
 
-**Nie wysyła maili B2B** do kontrahentów (brak chain do send po discovery; workflowy send wyłączone). **Pełny sync** `Wyniki/` (cache/logi/`wyslane`) jest **DISABLED**.
+Maile B2B: **ON** (nd Excel → pon 09:00 → wt 09:00). **Pełny sync** `Wyniki/` nadal **DISABLED**.
 
-Discovery używa `run_config/mfg_gu_de.json` (**16 Bundesländer**, bundesweit) — **bez** `--rotate-bundesland`. Artefakt discovery zawsze: `de-gu-wyniki-pi`.
+Discovery używa `run_config/pl_fas_spedycja.json` (**16 województw**, cała Polska; **1. = Dolnoslaskie**) — **bez** `--rotate-bundesland`. Artefakt discovery zawsze: `pl-spedycja-wyniki-pi`.  
+Filtr ICP (Serper / www): [`FILTER_ICP.md`](FILTER_ICP.md).  
+Prompty Claude (PL FAS): [`CLAUDE_PROMPTS.md`](CLAUDE_PROMPTS.md).  
+Cookie baner (Playwright pl-PL): [`COOKIE_CONSENT.md`](COOKIE_CONSENT.md).
 
 | Flaga / mechanizm | Domyślnie | Efekt |
 |-------------------|-----------|--------|
-| `DISABLE_CONTRACTOR_EMAILS` | `1` | `--send-emails-only` = NO-OP |
+| `DISABLE_CONTRACTOR_EMAILS` | `0` w workflowach send | B2B ON (cron pon/wt 09:00); lokalnie domyślnie nadal `1` |
 | `DISABLE_GOOGLE_DRIVE` | `1` (workflow-level) | pełny sync OFF; krok Excel→Drive ustawia lokalnie `0` |
 | `DISABLE_EXCEL_REPORT_EMAIL` | `0` | raport Excel na Gmail **WŁĄCZONY** |
-| workflow `if: false` | send B2B + pełny Drive sync | te joby nie startują |
+| workflow `if: false` | pełny Drive sync | sync `Wyniki/` OFF; send B2B **ON** (cron) |
 
 Rollback B2B: [`ROLLBACK_B2B.md`](ROLLBACK_B2B.md).  
 PC vs GHA: [`LOCAL_VS_GHA.md`](LOCAL_VS_GHA.md).  
@@ -32,12 +36,12 @@ Drive: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md). Plan: [`../schedule/PLAN_5_DNI.md`]
 |----------|------|---------|--------|---------|
 | **Tests** | `tests.yml` | push/PR → `master` | **aktywny** | pytest unit + integracja + regresja + API live |
 | **CI Deploy** | `ci-deploy.yml` | push → `master` | **aktywny** | smoke + walidacja secretów |
-| **GU discovery** | `de_gu_pi.yml` | cron pon–pt 18:00 + guard co 55 dni, ręcznie | **aktywny** | Discovery bundesweit → `de-gu-wyniki-pi`; pt → chain backfill; **bez** chain send B2B |
-| **GU niedziela backfill** | `de_gu_thu.yml` | cron nd 06:00 + guard, chain z pt, ręcznie | **aktywny** | Backfill + Excel → `de-gu-wyniki-thu` |
-| **GU poniedzialek prep** | `de_gu_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
-| **GU poniedzialek excel email** | `de_gu_mon_excel_email.yml` | cron nd 09:00 + guard, ręcznie | **aktywny** | Excel → Gmail **+ Drive (tylko `.xlsx`)** |
-| **GU poniedzialek send** | `de_gu_tue.yml` | tylko `workflow_dispatch` | **DISABLED** (`if: false`) | Wysyłka B2B partia 1 |
-| **GU wtorek send** | `de_gu_fri.yml` | tylko `workflow_dispatch` | **DISABLED** (`if: false`) | Wysyłka B2B partia 2 |
+| **PL spedycja discovery** | `pl_fas_pi.yml` | cron pon–pt 18:00 + guard co 55 dni, ręcznie | **aktywny** | Discovery PL (16 woj.) → `pl-spedycja-wyniki-pi`; pt → chain backfill; **bez** chain send B2B |
+| **PL spedycja niedziela backfill** | `pl_fas_thu.yml` | cron nd 06:00 + guard, chain z pt, ręcznie | **aktywny** | Backfill + Excel → `pl-spedycja-wyniki-thu` |
+| **PL spedycja poniedzialek prep** | `pl_fas_mon.yml` | tylko ręcznie | **cron OFF** | Awaryjny rebuild Excel |
+| **PL spedycja poniedzialek excel email** | `pl_fas_mon_excel_email.yml` | cron nd 09:00 + guard, ręcznie | **aktywny** | Excel → Gmail **+ Drive (tylko `.xlsx`)** |
+| **PL spedycja poniedzialek send** | `pl_fas_tue.yml` | cron **pon 09:00** + `send_followup`, ręcznie | **aktywny** | B2B partia 1 (tydzień *po* Excelu; 2× PPTX) |
+| **PL spedycja wtorek send** | `pl_fas_fri.yml` | cron **wt 09:00** + `send_followup`, ręcznie | **aktywny** | B2B partia 2 (po partii 1; 2× PPTX) |
 | **Sync wyniki Google Drive** | `sync-google-drive.yml` | tylko `workflow_dispatch` | **DISABLED** | Pełny upload `Wyniki/` |
 | **Sync tygodnia discovery na Drive** | `sync-week-discovery-drive.yml` | tylko `workflow_dispatch` | **DISABLED** | Jeden Excel tygodnia na Drive |
 | **GU tydzien backfill i wysylka** | `week-backfill-and-send.yml` | ręcznie | **częściowo** | Backfill/Excel OK; kroki send = `if: false` (ops / historyczny) |
@@ -48,15 +52,15 @@ Nazwy plików YAML (`*_tue`, `*_fri`, `*_thu`) są legacy — liczy się **displ
 
 | Workflow | Plik | Trigger | Uwagi |
 |----------|------|---------|--------|
-| GU catch-up | `gu-catch-up.yml` | ręcznie | Wąski scope (`discovery-tue`); pełny catch-up: `gh workflow run "GU discovery" -f discovery_phase=…` |
+| PL FAS catch-up | `pl_fas_catch_up.yml` | ręcznie | Wąski scope (`discovery-tue`); pełny catch-up: `gh workflow run "PL spedycja discovery" -f discovery_phase=…` |
 | Excel 7 firm z pi | `excel-seven-from-pi.yml` | ręcznie | Ops |
-| GU reset pipeline cache | `de_gu_reset_cache.yml` | ręcznie | Ops |
-| GU reprocess cache bez Serper | `de_gu_reprocess_no_serper.yml` | ręcznie | Upload Drive → folder GU `1tP8oUi…` (nie `GDRIVE_FOLDER_ID`); wymaga `DISABLE_GOOGLE_DRIVE=0` w kroku, inaczej NO-OP |
-| GU discovery wtorek (jednorazowo 2026-07-01) | `gu-discovery-tue-once-2026-07-01.yml` | jednorazowy cron | Po dacie = skip; można zarchiwizować |
+| PL spedycja reset pipeline cache | `pl_fas_reset_cache.yml` | ręcznie | Ops |
+| PL spedycja reprocess cache bez Serper | `pl_fas_reprocess_no_serper.yml` | ręcznie | Upload Drive → folder Excela `1bRCAq…`; wymaga `DISABLE_GOOGLE_DRIVE=0` w kroku, inaczej NO-OP |
+| PL spedycja discovery wtorek (jednorazowo 2026-07-01) | `pl_fas_discovery_tue_once_2026-07-01.yml` | jednorazowy cron | Po dacie = skip; można zarchiwizować |
 
 ## Harmonogram cron (Europe/Warsaw) — aktywne
 
-Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/gu-gha-window-guard`) odpala joby **co 55 dni**:
+Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/pl_fas_gha_window_guard`) odpala joby **co 55 dni**:
 
 | Parametr | Wartość |
 |----------|---------|
@@ -65,7 +69,8 @@ Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/gu-gha-window-guard
 | Start tygodnia pipeline | poniedziałek **w dniu** markera `anchor + n·55` albo **kolejny** poniedziałek (55 ∤ 7) |
 | Kolejne poniedziałki | `2026-11-02`, `2026-12-28`, `2027-02-22`, `2027-04-19`, … |
 | Historyczny (stary 42d) | `2026-09-21`–`2026-09-27` (już po) |
-| Aktywne dni cyklu | pon–pt (discovery) + **niedziela** (backfill + excel) |
+| Aktywne dni cyklu (pipeline) | pon–pt (discovery) + **niedziela** (backfill + excel) |
+| Follow-up B2B | **pon/wt** tygodnia *po* niedzieli Excel (`FAS_GUARD_MODE=send_followup`) |
 | Sobota | nieaktywna |
 | `workflow_dispatch` | zawsze `active=true` (omija guard dnia tygodnia) |
 
@@ -78,6 +83,8 @@ Cron w YAML jest tygodniowy, ale **guard** (`.github/actions/gu-gha-window-guard
 | **Piątek** | discovery | `0 18 * * 5` | **18:00** |
 | **Niedziela** | backfill | `0 6 * * 0` | **06:00** |
 | **Niedziela** | excel email + Drive xlsx | `0 9 * * 0` | **09:00** |
+| **Poniedziałek** (po Excelu) | B2B partia 1 | `0 9 * * 1` | **09:00** |
+| **Wtorek** (po partii 1) | B2B partia 2 | `0 9 * * 2` | **09:00** |
 
 ### Kalendarz uruchomień GHA (Europe/Warsaw)
 
@@ -98,7 +105,7 @@ Konkretne daty tygodni cyklu (guard = active). Poza tymi tygodniami cron jest **
 | 9 | 2028-01-16 | **2028-01-17** | 2028-01-18 | 2028-01-19 | 2028-01-20 | 2028-01-21 | 2028-01-23 | 2028-01-23 |
 | 10 | 2028-03-11 | **2028-03-13** | 2028-03-14 | 2028-03-15 | 2028-03-16 | 2028-03-17 | 2028-03-19 | 2028-03-19 |
 
-Wyłączone z crona: prep, pełny sync Drive, send B2B (tylko `workflow_dispatch` + `if: false` na jobach send).
+Wyłączone z crona: prep, pełny sync Drive. Send B2B: **ON** (pon/wt 09:00 + guard).
 
 Limit Serper w GHA: `SERPER_DAILY_LIMIT=1000` (domyślnie w kodzie też 1000).
 
@@ -106,20 +113,21 @@ Limit Serper w GHA: `SERPER_DAILY_LIMIT=1000` (domyślnie w kodzie też 1000).
 
 | Po sukcesie | Uruchamia | Efekt dziś |
 |-------------|-----------|------------|
-| Discovery **piątek** | `GU niedziela backfill` (`artifact_run_id` = bieżący run) | **działa od razu** (dispatch omija guard dnia; w tygodniu poza cyklem cron nd i tak jest skip) |
-| Discovery **pon–czw** | — | **brak chain** (maile B2B OFF; krok send usunięty z `de_gu_pi.yml` 2026-11-02) |
+| Discovery **piątek** | `PL spedycja niedziela backfill` (`artifact_run_id` = bieżący run) | **działa od razu** (dispatch omija guard dnia; w tygodniu poza cyklem cron nd i tak jest skip) |
+| Discovery **pon–czw** | — | **brak chain** (send = osobne crony `send_followup`) |
 | Backfill (cron nd 06:00) | — | zapasowy / restart, jeśli chain z pt nie wystarczy |
 | Backfill → Sync Drive | Sync Drive | step wyłączony |
-| Prep → send | send | step wyłączony |
+| Prep → send | send | prep OFF; send = cron follow-up |
 
-Send B2B (`GU wtorek send` / `GU poniedzialek send`) jest **DISABLED** (`disabled_manually` + `if: false`). Discovery **nie** odpala tych workflowów — wcześniejszy chain po pon–czw padał (`could not find any workflows named GU wtorek send`).
+Send B2B według harmonogramu: **nd Excel → pon 09:00 partia 1 → wt 09:00 partia 2** (tydzień *po* discovery; `FAS_GUARD_MODE=send_followup`). Nie w poniedziałek rano tego samego dnia co discovery 18:00.
 
-Typowy przebieg w tygodniu cyklu:
+Typowy przebieg:
 
 ```
-pon–czw discovery → stop (artefakt de-gu-wyniki-pi)
+pon–czw discovery → stop (artefakt pl-spedycja-wyniki-pi)
 pt discovery → (chain) backfill → nd 09:00 Excel+Drive
 (+ opcjonalnie nd 06:00 cron jako fallback backfill)
+→ (następny) pon 09:00 B2B partia 1 → wt 09:00 B2B partia 2
 ```
 
 ## Sekrety
@@ -128,15 +136,15 @@ pt discovery → (chain) backfill → nd 09:00 Excel+Drive
 |--------|----------------|------|
 | `SERPER_API_KEY` | tak (discovery) | API Serper |
 | `ANTHROPIC_API_KEY` | tak (discovery + backfill) | Claude API |
-| `MAIL_USER`, `MAIL_PASSWORD` | tak (raport Excel) | SMTP — końcowy `.xlsx` na `EXCEL_REPORT_TO` |
+| `MAIL_USER`, `MAIL_PASSWORD` | tak (Excel + B2B) | SMTP — raport `.xlsx` i maile kontrahentów |
 | `GMAIL_USER` / `GMAIL_APP_PASSWORD` | opcjonalnie | alternatywa SMTP dla raportu Excel |
-| `GDRIVE_FOLDER_ID` | tak (nd 09:00 Drive) | folder docelowy końcowego Excela (komentarz YAML: `1JMPyphoNX_oS_EjW7LEhf103lvvtsMUL`) |
-| `GDRIVE_OAUTH_CLIENT_ID` / `_SECRET` / `_REFRESH_TOKEN` | tak (nd 09:00 Drive) | OAuth upload końcowego `.xlsx` |
+| `GDRIVE_FOLDER_ID` | tak (nd 09:00) | **ustaw** `1bRCAqle6BS46YEw0fScq4P095LsJUSgL` (folder Excela kontaktów) |
+| `GDRIVE_OAUTH_CLIENT_ID` / `_SECRET` / `_REFRESH_TOKEN` | tak (Excel + załączniki B2B) | OAuth upload `.xlsx` / pobranie oferty+prezentacji |
 | `GDRIVE_SERVICE_ACCOUNT_JSON` | nie | Shared Drive — pełny sync (obecnie DISABLED) |
 
-Folder GU Bauunternehmen (pełny sync / lokalnie / reprocess): `1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf` — **osobny** od folderu raportu Excel z secretu.
+Folder końcowego Excela kontaktów: [`1bRCAqle6BS46YEw0fScq4P095LsJUSgL`](https://drive.google.com/drive/folders/1bRCAqle6BS46YEw0fScq4P095LsJUSgL?usp=drive_link) — ustaw też jako secret `GDRIVE_FOLDER_ID`.
 
-Modele Claude:
+Modele Claude (treść promptów PL FAS: [`CLAUDE_PROMPTS.md`](CLAUDE_PROMPTS.md)):
 
 | Zadanie | Tier | Domyślny model | Env |
 |---------|------|----------------|-----|
@@ -149,22 +157,31 @@ Modele Claude:
 pon→pi | wt→pi | sro→pi | czw→pi | pt→pi
   → (chain lub nd 06:00) thu
   → nd 09:00 excel email + Drive xlsx
-(prep / pełny sync Drive / send B2B: OFF)
+  → (następny) pon send → pl-spedycja-wyniki-tue
+  → wt send → pl-spedycja-wyniki-fri
+(prep / pełny sync Drive: OFF)
 ```
 
-- **Pon–pt:** upload zawsze jako `de-gu-wyniki-pi` (nie mon/tue/wed).
-- **Poniedziałek:** seed z `de-gu-wyniki-thu` (po backfillu) albo fallback `de-gu-wyniki-pi`, z `--respect-cache` (kumulacja); brak artefaktu = świeży start.
-- **Wt–pt:** kontynuacja z ostatniego `de-gu-wyniki-pi` + `--respect-cache` (harmonogram cron; np. po discovery 2026-11-02 run z artefaktem pi).
-- **Backfill:** `de-gu-wyniki-thu` (`--verify-pending-contacts --reverify-all-contacts` + `mfg_gu_de.json`).
-- **Nd 09:00:** artefakt `thu` (fallback `mon`) → Gmail + Drive (tylko `de_gu_bauunternehmen_kontakte.xlsx`).
+- **Pon–pt:** upload zawsze jako `pl-spedycja-wyniki-pi` (nie mon/tue/wed).
+- **Poniedziałek discovery:** seed z `pl-spedycja-wyniki-thu` (po backfillu) albo fallback `pl-spedycja-wyniki-pi`, z `--respect-cache` (kumulacja); brak artefaktu = świeży start.
+- **Wt–pt:** kontynuacja z ostatniego `pl-spedycja-wyniki-pi` + `--respect-cache`.
+- **Backfill:** `pl-spedycja-wyniki-thu` (`--verify-pending-contacts --reverify-all-contacts` + `pl_fas_spedycja.json`).
+- **Nd 09:00:** artefakt `thu` (fallback `mon`) → Gmail + Drive (tylko `pl_spedycja_kontakte.xlsx`).
+- **B2B pon:** preferuj `thu` → artefakt `pl-spedycja-wyniki-tue`.
+- **B2B wt:** preferuj `tue` → artefakt `pl-spedycja-wyniki-fri`.
 - Ręczne wznawianie: input `resume_artifact_run_id`.
 
-## Załącznik PPTX (tylko gdy maile B2B włączone)
+## Załączniki maila B2B (GHA send ON)
 
-`assets/campaign/MFG_Referenzliste_Einzelhandel.pptx`
+| Plik | Drive | Lokalnie |
+|------|-------|----------|
+| Oferta | [`1t6m-M49…`](https://drive.google.com/file/d/1t6m-M49t4w0RuLzc8rWebwjldLUMMRW3/view?usp=drive_link) | `FAS_zalacznik_kampania.pptx` |
+| Prezentacja | [`164qbEQO…`](https://drive.google.com/file/d/164qbEQOTyO8VTgfZr2wtIVTY-zttk6u7/view?usp=drive_link) | `FAS_prezentacja.pptx` |
 
-Przy `DISABLE_CONTRACTOR_EMAILS=1` send workflowy nie startują (job `if: false`).  
-Źródło (rollback): [Google Slides MFG](https://docs.google.com/presentation/d/1kBnp5x0pdgXZSPzVte9e92IUgn2A5gSe/edit).
+Moduł: `pl_fas_email_attachment.py` (`ensure_fas_email_attachments`).  
+Eksport: `python scripts/export_fas_email_attachment.py` (oba pliki; `--primary-only` = tylko oferta).  
+Env GHA: `FAS_EMAIL_ATTACHMENT_PATH` + `FAS_EMAIL_ATTACHMENT_EXTRA_PATH`.  
+Lokalnie: `DISABLE_CONTRACTOR_EMAILS=1` → send = NO-OP (workflowy GHA mają `0`).
 
 ## Ręczne uruchomienie
 
@@ -174,14 +191,16 @@ powershell -ExecutionPolicy Bypass -File scripts\run_full_pipeline_gha.ps1 -Skip
 ```
 
 ```powershell
-gh workflow run "GU discovery" -R Bigmax1993/Wyszukiwarka-partnerow
-gh workflow run "GU discovery" -R Bigmax1993/Wyszukiwarka-partnerow -f discovery_phase=mon
-gh workflow run "GU niedziela backfill" -R Bigmax1993/Wyszukiwarka-partnerow
-gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow
-gh workflow run "GU poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow -f dry_run=true
+gh workflow run "PL spedycja discovery" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "PL spedycja discovery" -R Bigmax1993/Wyszukiwarka-partnerow -f discovery_phase=mon
+gh workflow run "PL spedycja niedziela backfill" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "PL spedycja poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "PL spedycja poniedzialek excel email" -R Bigmax1993/Wyszukiwarka-partnerow -f dry_run=true
+gh workflow run "PL spedycja poniedzialek send" -R Bigmax1993/Wyszukiwarka-partnerow
+gh workflow run "PL spedycja wtorek send" -R Bigmax1993/Wyszukiwarka-partnerow
 ```
 
-Kolejność w tygodniu cyklu: discovery (pon–pt 18:00) → backfill (chain po pt **lub** nd 06:00) → excel email + Drive (nd 09:00).
+Kolejność: discovery (pon–pt 18:00) → backfill → excel+Drive (nd 09:00) → B2B pon/wt 09:00 (`send_followup`).
 
 Po piątkowym discovery:
 

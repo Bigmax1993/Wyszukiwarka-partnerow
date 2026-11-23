@@ -72,20 +72,20 @@ Test-Step "regresja Excel append + Gmail (unittest)" {
 }
 
 Test-Step "smoke scraper (--test)" {
-    python de_gu_bauunternehmen_scraper.py --test
+    python pl_fas_spedycja_scraper.py --test
 }
 
 Test-Step "send_excel_gmail --dry-run (jesli jest Excel)" {
-    if (Test-Path "Wyniki\de_gu_bauunternehmen_kontakte.xlsx") {
+    if (Test-Path "Wyniki\pl_spedycja_kontakte.xlsx") {
         python scripts/send_excel_gmail.py --dry-run
     } else {
-        Write-Host "(pominieto - brak Wyniki\de_gu_bauunternehmen_kontakte.xlsx)" -ForegroundColor Yellow
+        Write-Host "(pominieto - brak Wyniki\pl_spedycja_kontakte.xlsx)" -ForegroundColor Yellow
     }
 }
 
 if (-not $SkipApiLive) {
-    Test-Step "pytest: API live (Serper + Anthropic)" {
-        python -m pytest tests/integration/test_api_keys.py -m api_live -v --tb=short
+    Test-Step "pytest: API live (Serper + Anthropic + Gmail + Drive)" {
+        python -m pytest tests/integration/test_api_keys.py tests/integration/test_gmail_gdrive_api.py -m api_live -v --tb=short
     }
 } else {
     Write-Host "`n>> API live - pominieto (-SkipApiLive)" -ForegroundColor Yellow

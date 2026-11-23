@@ -1,6 +1,6 @@
-# Wyczyść cały de_gu_bauunternehmen_cache.json (lokalnie).
+# Wyczyść cały pl_spedycja_cache.json (lokalnie).
 param(
-    [string]$CachePath = "Wyniki\de_gu_bauunternehmen_cache.json"
+    [string]$CachePath = "Wyniki\pl_spedycja_cache.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,7 +10,7 @@ Set-Location $root
 python -c @"
 import json
 from pathlib import Path
-from de_gu_bauunternehmen_scraper import reset_pipeline_cache
+from pl_fas_spedycja_scraper import reset_pipeline_cache
 
 p = Path(r'$CachePath')
 before = {}

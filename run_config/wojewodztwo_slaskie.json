@@ -1,0 +1,8 @@
+{
+  "config_type": "pl_spedycja",
+  "campaign_id": "pl_fas_spedycja",
+  "lang": "pl",
+  "active_bundeslaender": ["Slaskie"],
+  "min_contacts_target": 80,
+  "enable_auto_email": false
+}

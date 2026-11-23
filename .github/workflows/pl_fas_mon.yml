@@ -1,4 +1,4 @@
-name: GU poniedzialek prep
+name: PL spedycja poniedzialek prep
 
 # Discovery-only: prep zbędny (Excel robi niedzielny backfill). Cron WYŁĄCZONY.
 # Zostaje tylko ręczne workflow_dispatch (rollback / awaryjny rebuild).
@@ -27,7 +27,7 @@ jobs:
       active: ${{ steps.window.outputs.active }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/gu-gha-window-guard
+      - uses: ./.github/actions/pl_fas_gha_window_guard
         id: window
 
   prep:
@@ -48,31 +48,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-            --jq '[.artifacts[] | select(.name=="de-gu-wyniki-thu" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+            --jq '[.artifacts[] | select(.name=="pl-spedycja-wyniki-thu" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
           if [ -z "$RUN_ID" ]; then
-            echo "::error::Brak artefaktu de-gu-wyniki-thu (uruchom najpierw GU niedziela backfill)"
+            echo "::error::Brak artefaktu pl-spedycja-wyniki-thu (uruchom najpierw PL spedycja niedziela backfill)"
             exit 1
           fi
           echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "Pobieram de-gu-wyniki-thu z run $RUN_ID"
+          echo "Pobieram pl-spedycja-wyniki-thu z run $RUN_ID"
 
       - name: Download cache from niedziela
         uses: actions/download-artifact@v4
         with:
-          name: de-gu-wyniki-thu
+          name: pl-spedycja-wyniki-thu
           github-token: ${{ github.token }}
           run-id: ${{ steps.artifact_run.outputs.run-id }}
           path: .
 
       - name: Prep (rebuild Excel, bez wysylki)
         run: |
-          python de_gu_bauunternehmen_scraper.py --run-config run_config/mfg_gu_de.json --rebuild-from-cache
+          python pl_fas_spedycja_scraper.py --run-config run_config/pl_fas_spedycja.json --rebuild-from-cache
 
       - name: Upload Wyniki artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: de-gu-wyniki-mon
+          name: pl-spedycja-wyniki-mon
           path: |
             Wyniki/
             wyslane/

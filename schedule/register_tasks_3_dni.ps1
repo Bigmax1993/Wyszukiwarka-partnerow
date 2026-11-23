@@ -1,4 +1,7 @@
-# [Legacy] Plan 3 dni — przekierowanie na register_tasks_5_dni.ps1
+# =============================================================================
+# PO CO: [Legacy] plan 3 dni — przekierowanie na register_tasks_5_dni.ps1.
+# Plan kanoniczny: schedule/PLAN_5_DNI.md (taski Spedycja_FAS_*).
+# =============================================================================
 
 param(
     [switch]$Unregister

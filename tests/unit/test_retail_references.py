@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Testy jednostkowe: referencje market├│w na stronie www."""
+"""Testy jednostkowe: referencje / oferta spedycji na stronie www."""
 from __future__ import annotations
 
 import pytest
 
-from retail_store_builder_filter import (
-    RETAIL_CHAIN_IN_PORTFOLIO_MARKERS,
+from pl_spedycja_filter import (
+    TRANSPORT_SEGMENT_MARKERS,
     has_market_project_evidence_on_website,
     has_retail_references_or_portfolio,
     portfolio_negates_market_projects,
@@ -17,33 +17,32 @@ pytestmark = pytest.mark.unit
 class TestRetailReferenceEvidence:
     def test_classic_referenzen_tab(self):
         text = (
-            "Generalunternehmer f├╝r Filialbau. Referenzen: Neubau Rewe "
-            "Supermarkt in Hannover."
+            "Firma spedycyjna. Referencje: transport FTL "
+            "Polska Niemcy, trasy Europa."
         )
         assert has_retail_references_or_portfolio(text)
 
-    def test_store_photos_without_referenzen_tab(self):
+    def test_offer_section_with_role_and_segment(self):
         text = (
-            "Generalunternehmer Filialbau. Fotogalerie. "
-            "img alt='Rewe Filiale Neubau' src='/uploads/rewe-filiale-neubau.jpg' "
-            "Supermarkt Umbau realisiert."
+            "Firma spedycyjna. Flota i trasy. "
+            "Transport drogowy FTL międzynarodowy."
         )
         assert has_market_project_evidence_on_website(text)
 
     def test_gu_without_reference_rejected(self):
         text = (
-            "Generalunternehmer f├╝r Gewerbebau und Hallenbau. "
-            "Wir bauen B├╝rogeb├Ąude und Logistikhallen."
+            "Firma budowlana. Budujemy biurowce i hale. "
+            "Bez transportu i bez spedycji."
         )
         assert not has_market_project_evidence_on_website(text)
 
     def test_chain_markers_detected_in_text(self):
-        text = "Neubau Aldi S├╝d Filiale und Penny Markt."
+        text = "Oferta: FTL, LTL i fracht Europa."
         low = text.lower()
-        found = [m for m in RETAIL_CHAIN_IN_PORTFOLIO_MARKERS if m in low and len(m) >= 4]
-        assert any("aldi" in m for m in found)
-        assert any("penny" in m for m in found)
+        found = [m for m in TRANSPORT_SEGMENT_MARKERS if m in low and len(m) >= 3]
+        assert any("ftl" in m for m in found)
+        assert any("ltl" in m for m in found)
 
     def test_portfolio_negates_non_retail(self):
-        text = "Portfolio: Wohnungsbau, B├╝rogeb├Ąude, Hallenbau ÔÇö keine Einzelhandelsprojekte."
+        text = "O nas: wyłącznie usługi magazynowe. Nie prowadzimy spedycji."
         assert portfolio_negates_market_projects(text)

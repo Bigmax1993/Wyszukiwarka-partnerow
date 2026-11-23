@@ -1,5 +1,8 @@
-# [Legacy] Jednorazowy discovery — preferuj plan 5 dni (schedule/PLAN_5_DNI.md) lub --rotate-bundesland.
-# Uruchomienie kampanii GU o dowolnej godzinie (DISABLE_SEND_WINDOW=1).
+# =============================================================================
+# PO CO: [Legacy] jednorazowy discovery — preferuj plan 5 dni (PLAN_5_DNI.md)
+# albo ręcznie: python pl_fas_spedycja_scraper.py --rotate-bundesland.
+# Hardcoded ścieżki pod stare środowisko PC; nie używaj w GHA.
+# =============================================================================
 
 $ErrorActionPreference = "Stop"
 $Automatyczna = "C:\Users\kanbu\Documents\Automatyczna wyszukiwarka piasku i wysylka zapytania"
@@ -20,4 +23,4 @@ if (Test-Path $dotenv) {
 }
 
 Set-Location $Campaign
-python de_gu_bauunternehmen_scraper.py --rotate-bundesland @args
+python pl_fas_spedycja_scraper.py --rotate-bundesland @args

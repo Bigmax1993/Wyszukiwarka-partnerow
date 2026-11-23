@@ -1,4 +1,4 @@
-name: GU discovery wtorek (jednorazowo 2026-07-01)
+name: PL spedycja discovery wtorek (jednorazowo 2026-07-01)
 
 # Odtworzenie pominiętego discovery (faza wtorek) po resecie minut GHA.
 # Schedule: 1 lipca 2026, 05:00 Europe/Warsaw — wykonuje się tylko raz (guard na rok).
@@ -40,5 +40,5 @@ jobs:
             echo "Ręczne uruchomienie discovery wtorek (workflow_dispatch)"
           fi
 
-          gh workflow run de_gu_pi.yml -R "$GITHUB_REPOSITORY" -f discovery_phase=tue
-          echo "Zlecono GU discovery z fazą tue"
+          gh workflow run pl_fas_pi.yml -R "$GITHUB_REPOSITORY" -f discovery_phase=tue
+          echo "Zlecono PL spedycja discovery z fazą tue"

@@ -1,4 +1,4 @@
-name: GU discovery
+name: PL spedycja discovery
 
 # Discovery-only: cron pon-pt 18:00 Europe/Warsaw.
 # Guard: co 55 dni od 2026-11-02 (pierwszy tydzień jak wcześniej; potem +55d).
@@ -29,7 +29,7 @@ on:
           - fri
         default: auto
       resume_artifact_run_id:
-        description: "Wznow z konkretnego run ID (de-gu-wyniki-pi). Puste = wg fazy."
+        description: "Wznow z konkretnego run ID (pl-spedycja-wyniki-pi). Puste = wg fazy."
         required: false
         type: string
 
@@ -57,7 +57,7 @@ jobs:
       active: ${{ steps.window.outputs.active }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/gu-gha-window-guard
+      - uses: ./.github/actions/pl_fas_gha_window_guard
         id: window
 
   discover:
@@ -83,10 +83,10 @@ jobs:
           RESUME_INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.resume_artifact_run_id || '' }}"
           if [ -n "$RESUME_INPUT" ]; then
             echo "run-id=$RESUME_INPUT" >> "$GITHUB_OUTPUT"
-            echo "artifact-name=de-gu-wyniki-pi" >> "$GITHUB_OUTPUT"
+            echo "artifact-name=pl-spedycja-wyniki-pi" >> "$GITHUB_OUTPUT"
             echo "resume=1" >> "$GITHUB_OUTPUT"
             echo "phase=manual" >> "$GITHUB_OUTPUT"
-            echo "Wznowienie discovery z de-gu-wyniki-pi (run $RESUME_INPUT)"
+            echo "Wznowienie discovery z pl-spedycja-wyniki-pi (run $RESUME_INPUT)"
             exit 0
           fi
 
@@ -110,15 +110,15 @@ jobs:
 
           if [ "$PHASE" = "mon" ]; then
             # Seed nowego tygodnia z końca poprzedniego cyklu.
-            # Discovery zawsze uploaduje de-gu-wyniki-pi; backfill → de-gu-wyniki-thu.
-            # Legacy de-gu-wyniki-fri już nie powstaje.
+            # Discovery zawsze uploaduje pl-spedycja-wyniki-pi; backfill → pl-spedycja-wyniki-thu.
+            # Legacy pl-spedycja-wyniki-fri już nie powstaje.
             RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-              --jq '[.artifacts[] | select(.name=="de-gu-wyniki-thu" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
-            ARTIFACT_NAME="de-gu-wyniki-thu"
+              --jq '[.artifacts[] | select(.name=="pl-spedycja-wyniki-thu" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+            ARTIFACT_NAME="pl-spedycja-wyniki-thu"
             if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
               RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-                --jq '[.artifacts[] | select(.name=="de-gu-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
-              ARTIFACT_NAME="de-gu-wyniki-pi"
+                --jq '[.artifacts[] | select(.name=="pl-spedycja-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+              ARTIFACT_NAME="pl-spedycja-wyniki-pi"
             fi
             if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
               echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
@@ -131,42 +131,42 @@ jobs:
             fi
           else
             RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
-              --jq '[.artifacts[] | select(.name=="de-gu-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
+              --jq '[.artifacts[] | select(.name=="pl-spedycja-wyniki-pi" and .expired==false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')
             if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-              echo "::error::Brak de-gu-wyniki-pi — uruchom najpierw poniedzialek discovery (faza mon)"
+              echo "::error::Brak pl-spedycja-wyniki-pi — uruchom najpierw poniedzialek discovery (faza mon)"
               exit 1
             fi
             echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
-            echo "artifact-name=de-gu-wyniki-pi" >> "$GITHUB_OUTPUT"
+            echo "artifact-name=pl-spedycja-wyniki-pi" >> "$GITHUB_OUTPUT"
             echo "resume=1" >> "$GITHUB_OUTPUT"
-            echo "Kontynuacja ($PHASE) z de-gu-wyniki-pi (run $RUN_ID)"
+            echo "Kontynuacja ($PHASE) z pl-spedycja-wyniki-pi (run $RUN_ID)"
           fi
 
       - name: Download previous Wyniki (kumulacja cache + Excel)
         if: steps.prev_run.outputs.run-id != ''
         uses: actions/download-artifact@v4
         with:
-          name: ${{ steps.prev_run.outputs.artifact-name || 'de-gu-wyniki-pi' }}
+          name: ${{ steps.prev_run.outputs.artifact-name || 'pl-spedycja-wyniki-pi' }}
           github-token: ${{ github.token }}
           run-id: ${{ steps.prev_run.outputs.run-id }}
           path: .
 
       - name: Discovery (serper-only, pon-pt)
         run: |
-          ARGS="--run-config run_config/mfg_gu_de.json --serper-only-discovery --no-auto-email"
+          ARGS="--run-config run_config/pl_fas_spedycja.json --serper-only-discovery --no-auto-email"
           if [ "${{ steps.prev_run.outputs.resume }}" = "1" ]; then
             ARGS="$ARGS --respect-cache"
             echo "Kontynuacja: --respect-cache"
           else
             echo "Nowy etap tygodnia (poniedzialek lub pierwszy cykl)"
           fi
-          python de_gu_bauunternehmen_scraper.py $ARGS
+          python pl_fas_spedycja_scraper.py $ARGS
 
       - name: Upload Wyniki artifact (discovery)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: de-gu-wyniki-pi
+          name: pl-spedycja-wyniki-pi
           path: |
             Wyniki/
             wyslane/
@@ -176,10 +176,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          bash scripts/gha_chain_workflow.sh "GU niedziela backfill" \
+          bash scripts/gha_chain_workflow.sh "PL spedycja niedziela backfill" \
             "artifact_run_id=${{ github.run_id }}"
 
-      # DISABLED: contractor emails — nie chainuj GU wtorek/poniedzialek send
+      # DISABLED: contractor emails — nie chainuj PL spedycja wtorek/poniedzialek send
       # (workflowy disabled_manually; maile B2B nie maja byc wysylane).
 
       - name: Wznow po timeout (artefakt z tego runu)
@@ -189,6 +189,6 @@ jobs:
         run: |
           PHASE="${{ steps.prev_run.outputs.phase }}"
           echo "::warning::Discovery przerwane (timeout) — wznawiam fazę $PHASE z run ${{ github.run_id }}"
-          gh workflow run de_gu_pi.yml -R "$GITHUB_REPOSITORY" \
+          gh workflow run pl_fas_pi.yml -R "$GITHUB_REPOSITORY" \
             -f discovery_phase="$PHASE" \
             -f resume_artifact_run_id="${{ github.run_id }}"

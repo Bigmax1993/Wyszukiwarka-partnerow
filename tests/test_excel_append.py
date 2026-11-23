@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import de_gu_bauunternehmen_scraper as scraper
+import pl_fas_spedycja_scraper as scraper
 
 
 class ExcelAppendMergeTest(unittest.TestCase):

@@ -1,4 +1,4 @@
-name: GU reprocess cache bez Serper
+name: PL spedycja reprocess cache bez Serper
 
 # Kroki 0–6 bez Serper API: pobierz wybrany artefakt pi → verify www → backfill → rebuild → Drive.
 # Nie uruchamiaj discovery z Serper (wymaga API i resetuje cache).
@@ -7,14 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: "Run ID GU discovery z danymi (np. 27439840768)"
+        description: "Run ID PL spedycja discovery z danymi (np. 27439840768)"
         required: false
         default: "27439840768"
         type: string
       artifact_name:
         description: "Nazwa artefaktu źródłowego"
         required: false
-        default: "de-gu-wyniki-pi"
+        default: "pl-spedycja-wyniki-pi"
         type: string
       sync_drive:
         description: "Upload Excel na Google Drive po zakończeniu"
@@ -87,9 +87,9 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          p = Path("Wyniki/de_gu_bauunternehmen_cache.json")
+          p = Path("Wyniki/pl_spedycja_cache.json")
           if not p.exists():
-              raise SystemExit("Brak Wyniki/de_gu_bauunternehmen_cache.json w artefakcie")
+              raise SystemExit("Brak Wyniki/pl_spedycja_cache.json w artefakcie")
           c = json.loads(p.read_text(encoding="utf-8"))
           contacts = c.get("contacts") or {}
           sd = c.get("serper_discovery") or {}
@@ -104,20 +104,20 @@ jobs:
 
       - name: Verify www + backfill + rebuild (krok 3–5)
         run: |
-          python de_gu_bauunternehmen_scraper.py --run-config run_config/mfg_gu_de.json --verify-pending-contacts --reverify-all-contacts
-          python de_gu_bauunternehmen_scraper.py --run-config run_config/mfg_gu_de.json --backfill-emails-from-cache
-          python de_gu_bauunternehmen_scraper.py --run-config run_config/mfg_gu_de.json --rebuild-from-cache
+          python pl_fas_spedycja_scraper.py --run-config run_config/pl_fas_spedycja.json --verify-pending-contacts --reverify-all-contacts
+          python pl_fas_spedycja_scraper.py --run-config run_config/pl_fas_spedycja.json --backfill-emails-from-cache
+          python pl_fas_spedycja_scraper.py --run-config run_config/pl_fas_spedycja.json --rebuild-from-cache
 
       - name: Cache stats po reprocess (krok 6)
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          c = json.loads(Path("Wyniki/de_gu_bauunternehmen_cache.json").read_text(encoding="utf-8"))
+          c = json.loads(Path("Wyniki/pl_spedycja_cache.json").read_text(encoding="utf-8"))
           contacts = c.get("contacts") or {}
           verified = sum(1 for i in contacts.values() if isinstance(i, dict) and i.get("retail_verified"))
           emails = sum(1 for i in contacts.values() if isinstance(i, dict) and (i.get("email_target") or "").strip())
-          xlsx = Path("Wyniki/de_gu_bauunternehmen_kontakte.xlsx").exists()
+          xlsx = Path("Wyniki/pl_spedycja_kontakte.xlsx").exists()
           print(f"PO: contacts={len(contacts)}, verified={verified}, z_mailem={emails}, excel={xlsx}")
           PY
 
@@ -125,7 +125,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: de-gu-wyniki-thu
+          name: pl-spedycja-wyniki-thu
           path: |
             Wyniki/
             wyslane/
@@ -159,7 +159,7 @@ jobs:
       - name: Upload Wyniki to Google Drive
         if: inputs.sync_drive
         env:
-          GDRIVE_FOLDER_ID: "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
+          GDRIVE_FOLDER_ID: "1bRCAqle6BS46YEw0fScq4P095LsJUSgL"
           GDRIVE_VERSION_XLSX: "1"
           GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
           GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}

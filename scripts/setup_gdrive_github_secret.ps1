@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Konfiguracja GDRIVE_SERVICE_ACCOUNT_JSON (GitHub secret + test upload).
@@ -17,7 +17,7 @@ param(
     [int]$WaitSeconds = 0,
     [switch]$OpenBrowser,
     [string]$Repo = "Bigmax1993/Wyszukiwarka-partnerow",
-    [string]$DriveFolderId = "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf",
+    [string]$DriveFolderId = "1bRCAqle6BS46YEw0fScq4P095LsJUSgL",
     [string]$SlidesId = "1kBnp5x0pdgXZSPzVte9e92IUgn2A5gSe"
 )
 

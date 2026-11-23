@@ -1,50 +1,46 @@
-# Rollback — włączenie maili B2B (MFG)
+# B2B maile — stan i wyłączenie (PL FAS)
 
-Aktualnie SMTP do kontrahentów jest **OFF**. Ten checklist przywraca wysyłkę bez zakładania, że „wystarczy przywrócić schedule” — workflowy send są `disabled_manually`, mają tylko `workflow_dispatch`, joby z `if: false`, a discovery **nie** chainuje send.
+## Stan aktualny (GHA)
 
-## 1. Flagi środowiska
+Wysyłka B2B jest **włączona na GitHub Actions** według kolejności tygodnia cyklu (guard 55 dni):
 
-- Lokalnie / secrets GHA: `DISABLE_CONTRACTOR_EMAILS=0`
-- Upewnij się, że masz SMTP: `MAIL_USER`, `MAIL_PASSWORD` (oraz opcjonalnie `MAIL_CC`, `MAIL_SENDER_NAME`)
-- Okno wysyłki: na GHA zwykle `DISABLE_SEND_WINDOW=1`
+| Krok | Kiedy (Europe/Warsaw) | Workflow |
+|------|----------------------|----------|
+| Discovery | pon–pt 18:00 | `pl_fas_pi.yml` |
+| Backfill | pt chain / nd 06:00 | `pl_fas_thu.yml` |
+| Excel + Drive xlsx | nd 09:00 | `pl_fas_mon_excel_email.yml` |
+| **Send partia 1** | **pon 09:00** (rano, tydzień po Excelu) | `pl_fas_tue.yml` + `FAS_GUARD_MODE=send_followup` |
+| **Send partia 2** | **wt 09:00** | `pl_fas_fri.yml` + `FAS_GUARD_MODE=send_followup` |
 
-## 2. Workflowy send
+Lokalnie / PC: domyślnie nadal OFF (`DISABLE_CONTRACTOR_EMAILS=1` w `.env`).
 
-Pliki:
+## Wyłączenie B2B (rollback OFF)
 
-- `.github/workflows/de_gu_tue.yml` — **GU poniedzialek send** (partia 1)
-- `.github/workflows/de_gu_fri.yml` — **GU wtorek send** (partia 2)
+1. W `pl_fas_tue.yml` i `pl_fas_fri.yml`: ustaw `DISABLE_CONTRACTOR_EMAILS: "1"` **oraz** `if: false` na jobach `guard`/`send` (albo usuń `schedule:`).
+2. W UI Actions ewentualnie Disable workflow.
+3. Lokalnie: zostaw `DISABLE_CONTRACTOR_EMAILS=1`.
 
-Kroki:
+## Wymagane sekrety (send ON)
 
-1. Włącz workflowy w UI GitHub (Actions → … → Enable workflow) — obecnie `disabled_manually`.
-2. Usuń `if: false` z jobów send.
-3. Przywróć chain w `.github/workflows/de_gu_pi.yml` po discovery pon–czw (krok usunięty 2026-11-02), np. `gha_chain_workflow.sh "GU wtorek send"` + `artifact_run_id` / `artifact_name=de-gu-wyniki-pi` — albo odpalać `gh workflow run` ręcznie. Opcjonalnie dodaj `schedule:`.
-4. Ustaw `DISABLE_CONTRACTOR_EMAILS=0` (patrz §1).
-5. Sprawdź sekrety SMTP/IMAP wymagane przez YAML (często `MAIL_*`; nie mylić z samym raportem Excel).
+- `MAIL_USER`, `MAIL_PASSWORD` (SMTP)
+- `GDRIVE_OAUTH_*` (pobranie **obu** PPTX) albo pliki w `assets/campaign/`
+- Enable workflowów send w UI, jeśli były `disabled_manually`
 
-## 3. Treść i załącznik
+## Treść i załączniki
 
-- Treść DE: `mfg_gu_inquiry_email_de.py`
-- PPTX lokalny: `assets/campaign/MFG_Referenzliste_Einzelhandel.pptx`
-- Źródło Slides: [MFG Referenzliste](https://docs.google.com/presentation/d/1kBnp5x0pdgXZSPzVte9e92IUgn2A5gSe/edit)
-- Cc: **tylko** z `MAIL_CC` — bez automatycznego `office@mfg-fliesen.de`
+- Treść: `fas_spedycja_inquiry_email_pl.py`
+- Załączniki (oba w każdym mailu B2B):
+  - oferta [`1t6m-M49…`](https://drive.google.com/file/d/1t6m-M49t4w0RuLzc8rWebwjldLUMMRW3/view?usp=drive_link) → `FAS_zalacznik_kampania.pptx`
+  - prezentacja [`164qbEQO…`](https://drive.google.com/file/d/164qbEQOTyO8VTgfZr2wtIVTY-zttk6u7/view?usp=drive_link) → `FAS_prezentacja.pptx`
+- Moduł: `pl_fas_email_attachment.ensure_fas_email_attachments`
+- Eksport: `python scripts/export_fas_email_attachment.py`
+- Cc: `svinchak1993@gmail.com` (`FAS_OFFICE_CC_EMAIL`) + opcjonalne `MAIL_CC`
 
-## 4. Test przed produkcją
+## Test ręczny
 
 ```powershell
-$env:KANBUD_PROJECT_ROOT = "$PWD\libs"
 $env:DISABLE_CONTRACTOR_EMAILS = "0"
-
-python de_gu_bauunternehmen_scraper.py --dry-run-email --send-emails-only
+python pl_fas_spedycja_scraper.py --dry-run-email --send-emails-only
 ```
 
-Potem mała partia ręcznie (`workflow_dispatch` lub lokalnie `--send-emails-only`) zanim włączysz cron/chain.
-
-## 5. Pełny Drive (osobna decyzja)
-
-Maile B2B ≠ pełny sync Drive. Sync `Wyniki/`:
-
-- `DISABLE_GOOGLE_DRIVE=0`
-- usuń `if: false` w `sync-google-drive.yml` / `sync-week-discovery-drive.yml`
-- szczegóły: [`GOOGLE_DRIVE.md`](GOOGLE_DRIVE.md)
+Albo Actions → **PL spedycja poniedzialek send** → `workflow_dispatch`.

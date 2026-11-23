@@ -1,125 +1,45 @@
 # -*- coding: utf-8 -*-
 """
-Ścieżki wyników kampanii: cache JSON, Excel, log, wyslane/ (.eml).
+Shim legacy: ``campaign_data_paths`` → ``pl_spedycja_data_paths``.
 
-Domyślny cel chmury (Google Drive):
-  https://drive.google.com/drive/folders/1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf
+=============================================================================
+PO CO TEN PLIK
+=============================================================================
+Nie zawiera własnej logiki ścieżek. Re-exportuje publiczne API z
+``pl_spedycja_data_paths``, żeby stare importy nadal działały::
 
-Ustaw lokalnie zsynchronizowany folder:
-  KANBUD_GOOGLE_DRIVE_GU_PATH=C:\\ścieżka\\do\\folderu\\w\\My Drive
-  lub KANBUD_DATA_DIR=ta_sama_ścieżka
+  from campaign_data_paths import campaign_output_paths
+  from campaign_data_paths import GOOGLE_DRIVE_GU_FOLDER_ID  # alias legacy
+
+Nowy kod powinien importować bezpośrednio::
+
+  from pl_spedycja_data_paths import campaign_output_paths
+  from pl_spedycja_data_paths import GOOGLE_DRIVE_FAS_FOLDER_ID
+
+CLI (debug ścieżek Wyniki/) — ten sam ``_cli_debug`` co kanoniczny moduł::
+
+  python campaign_data_paths.py .
+  # równoważne:
+  python pl_spedycja_data_paths.py .
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-GOOGLE_DRIVE_GU_FOLDER_ID = "1tP8oUi72t4EHDbE9GnHFdvfNtNsJe4xf"
-GOOGLE_DRIVE_GU_FOLDER_URL = (
-    f"https://drive.google.com/drive/folders/{GOOGLE_DRIVE_GU_FOLDER_ID}?usp=drive_link"
+from pl_spedycja_data_paths import *  # noqa: F403
+from pl_spedycja_data_paths import (  # noqa: F401
+    GOOGLE_DRIVE_FAS_FOLDER_ID,
+    GOOGLE_DRIVE_FAS_FOLDER_URL,
+    GOOGLE_DRIVE_GU_FOLDER_ID,
+    GOOGLE_DRIVE_GU_FOLDER_URL,
+    _cli_debug,
+    apply_data_root_to_env,
+    campaign_output_paths,
+    debug_data_paths,
+    ensure_data_dirs,
+    resolve_data_root,
+    wyniki_dir,
+    wyslane_dir,
 )
 
-# Nazwy podfolderów szukane pod „Google Drive” / „Dyski współdzielone”
-_DRIVE_FOLDER_NAMES = (
-    "GU Bauunternehmen Wyniki",
-    "Kanbud GU Wyniki",
-    "de_gu_wyniki",
-)
-
-
-def _google_drive_bases() -> list[Path]:
-    home = Path.home()
-    bases: list[Path] = []
-    for p in (
-        os.environ.get("GDRIVE_MIRROR_PATH", "").strip(),
-        os.environ.get("KANBUD_GOOGLE_DRIVE_GU_PATH", "").strip(),
-        r"G:\My Drive",
-        r"G:\Dyski współdzielone",
-        r"H:\My Drive",
-        str(home / "Google Drive" / "My Drive"),
-        str(home / "Google Drive"),
-        str(home / "Dyski współdzielone"),
-    ):
-        if p:
-            bases.append(Path(p))
-    return bases
-
-
-def _google_drive_integration_disabled() -> bool:
-    try:
-        from scraper_env import is_google_drive_disabled
-
-        return is_google_drive_disabled()
-    except Exception:
-        raw = (os.environ.get("DISABLE_GOOGLE_DRIVE") or "1").strip().lower()
-        return raw not in ("0", "false", "no", "off")
-
-
-def resolve_data_root(campaign_dir: Path) -> Path:
-    """
-    Katalog danych kampanii: Wyniki/, wyslane/.
-    Priorytet: KANBUD_DATA_DIR → (opcjonalnie Drive) → folder kampanii.
-    Przy DISABLE_GOOGLE_DRIVE=1 ignoruje KANBUD_GOOGLE_DRIVE_* i auto-wykrywanie Drive.
-    """
-    drive_off = _google_drive_integration_disabled()
-
-    raw_data = (os.environ.get("KANBUD_DATA_DIR") or "").strip()
-    if raw_data:
-        p = Path(raw_data).expanduser().resolve()
-        if p.is_dir():
-            return p
-
-    if not drive_off:
-        for key in ("KANBUD_GOOGLE_DRIVE_GU_PATH", "KANBUD_GOOGLE_DRIVE_PATH"):
-            raw = (os.environ.get(key) or "").strip()
-            if raw:
-                p = Path(raw).expanduser().resolve()
-                if p.is_dir():
-                    return p
-
-        for base in _google_drive_bases():
-            if not base.is_dir():
-                continue
-            for name in _DRIVE_FOLDER_NAMES:
-                candidate = (base / name).resolve()
-                if candidate.is_dir():
-                    return candidate
-
-    return Path(campaign_dir).resolve()
-
-
-def wyniki_dir(data_root: Path) -> Path:
-    return data_root / "Wyniki"
-
-
-def wyslane_dir(data_root: Path) -> Path:
-    return data_root / "wyslane"
-
-
-def ensure_data_dirs(data_root: Path) -> None:
-    wyniki_dir(data_root).mkdir(parents=True, exist_ok=True)
-    wyslane_dir(data_root).mkdir(parents=True, exist_ok=True)
-
-
-def apply_data_root_to_env(data_root: Path) -> Path:
-    """Ustawia KANBUD_DATA_DIR (mail_transport.get_wyslane_dir) i tworzy podfoldery."""
-    root = data_root.resolve()
-    os.environ["KANBUD_DATA_DIR"] = str(root)
-    ensure_data_dirs(root)
-    return root
-
-
-def campaign_output_paths(campaign_dir: Path, basename: str) -> dict[str, Path]:
-    """
-    basename np. de_gu_bauunternehmen → pliki w Wyniki/.
-    """
-    root = apply_data_root_to_env(resolve_data_root(campaign_dir))
-    out = wyniki_dir(root)
-    return {
-        "data_root": root,
-        "output_dir": out,
-        "output_file": out / f"{basename}_kontakte.xlsx",
-        "cache_file": out / f"{basename}_cache.json",
-        "log_file": out / f"{basename}_scraper.log",
-        "wyslane_dir": wyslane_dir(root),
-    }
+if __name__ == "__main__":
+    # Pełna delegacja do debug CLI w pl_spedycja_data_paths (JSON na stdout).
+    raise SystemExit(_cli_debug())

@@ -1,9 +1,10 @@
-# WTOREK — wysylka partia 2 (reszta backlogu, limit 300/dzien).
-# Task Scheduler: wtorek 09:00
-# DISABLED by default: DISABLE_CONTRACTOR_EMAILS=1 → NO-OP (exit 0).
+# =============================================================================
+# PO CO: wtorek — wysyłka B2B partia 2 (okno 8–18 Europe/Warsaw).
+# Plan: schedule/PLAN_5_DNI.md — NIE rejestrowane (DISABLE_CONTRACTOR_EMAILS=1 → NO-OP).
+# =============================================================================
 
 . "$PSScriptRoot\_common.ps1"
-Enter-GuCampaign
+Enter-FasCampaign
 
 $flag = if ($null -ne $env:DISABLE_CONTRACTOR_EMAILS -and $env:DISABLE_CONTRACTOR_EMAILS -ne "") {
     $env:DISABLE_CONTRACTOR_EMAILS
@@ -13,10 +14,10 @@ if ($flag -notin @("0", "false", "False", "no", "off", "OFF")) {
     exit 0
 }
 
-$env:SCRAPER_TIMEZONE = "Europe/Berlin"
+$env:SCRAPER_TIMEZONE = "Europe/Warsaw"
 Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
 Remove-Item Env:SEND_WINDOW_START_HOUR -ErrorAction SilentlyContinue
 Remove-Item Env:SEND_WINDOW_END_HOUR -ErrorAction SilentlyContinue
 
-Write-Host "[WTOREK] Wysylka maili partia 2 (--send-emails-only, okno 8-18 Berlin)..."
-python de_gu_bauunternehmen_scraper.py --send-emails-only @args
+Write-Host "[WTOREK] Wysylka maili partia 2 (--send-emails-only, okno 8-18 Warsaw)..."
+python pl_fas_spedycja_scraper.py --send-emails-only @args
