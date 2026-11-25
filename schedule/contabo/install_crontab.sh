@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Instaluje blok cron PL FAS na Contabo (Europe/Berlin ≈ Warsaw CET/CEST).
-# Plan jak register_tasks_5_dni.ps1: pon–pt 07:00 discovery | nd 06:00 backfill
-# | pon/wt 09:00 send | nd 09:00 Excel (jak GHA) + watchdog co 15 min.
+# Plan: codziennie 04:00 cache verify | pon–pt 07:00 discovery (--respect-cache)
+# | 20:00 gap-fill | nd 06:00 backfill | pon 07:30 Excel | pon/wt 09:00 send
+# + watchdog co 15 min.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -12,20 +13,24 @@ chmod +x "$ROOT"/schedule/contabo/*.sh
 
 BLOCK=$(cat <<EOF
 $MARKER_BEGIN
-# PL FAS Contabo — discovery 07:00 | backfill nd 06:00 | send pon/wt 09:00 | Excel nd 09:00
+# PL FAS Contabo — cache verify 04:00 | discovery 07:00 (--respect-cache)
+# | Excel pon 07:30 | backfill nd 06:00 | send pon/wt 09:00
 # Watchdog: co 15 min — ALERT gdy job running > limit
 # Strefa serwera: Europe/Berlin (CET/CEST = Warsaw)
+# Weryfikacja cache codziennie 04:00 (stempel + health JSON przed discovery)
+0 4 * * * cd $ROOT && ./schedule/contabo/run_cache_verify.sh
 0 7 * * 1 cd $ROOT && ./schedule/contabo/run_discovery.sh poniedzialek
 0 7 * * 2 cd $ROOT && ./schedule/contabo/run_discovery.sh wtorek
 0 7 * * 3 cd $ROOT && ./schedule/contabo/run_discovery.sh sroda
 0 7 * * 4 cd $ROOT && ./schedule/contabo/run_discovery.sh czwartek
 0 7 * * 5 cd $ROOT && ./schedule/contabo/run_discovery.sh piatek
+# Końcowy Excel → svinchak1993@gmail.com (poniedziałek 07:30)
+30 7 * * 1 cd $ROOT && ./schedule/contabo/run_excel_report.sh
 # Faza B — Serper gap-fill wieczorem (po Maps discovery; osobny budżet/czas)
 0 20 * * 1-5 cd $ROOT && ./schedule/contabo/run_gap_fill.sh
 0 6 * * 0 cd $ROOT && ./schedule/contabo/run_backfill.sh
 0 9 * * 1 cd $ROOT && ./schedule/contabo/run_send.sh poniedzialek
 0 9 * * 2 cd $ROOT && ./schedule/contabo/run_send.sh wtorek
-0 9 * * 0 cd $ROOT && ./schedule/contabo/run_excel_report.sh
 */15 * * * * cd $ROOT && .venv/bin/python scripts/pipeline_watchdog.py >> $ROOT/logs/watchdog.log 2>&1
 $MARKER_END
 EOF

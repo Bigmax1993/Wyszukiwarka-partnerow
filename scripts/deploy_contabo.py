@@ -85,10 +85,10 @@ def build_dotenv() -> str:
 
     lines = [
         "# Wygenerowane przez scripts/deploy_contabo.py — nie commitować",
-        # B2B + Excel OFF na Contabo, dopóki GHA robi produkcję (unikamy dubli).
+        # B2B OFF na Contabo (unikamy dubli z GHA). Excel ON — pon 07:30 Contabo.
         "DISABLE_CONTRACTOR_EMAILS=1",
         "DISABLE_GOOGLE_DRIVE=1",
-        "DISABLE_EXCEL_REPORT_EMAIL=1",
+        "DISABLE_EXCEL_REPORT_EMAIL=0",
         "DISABLE_PIPELINE_NOTIFY=0",
         f"EXCEL_REPORT_TO={excel_to}",
         f"PIPELINE_NOTIFY_TO={excel_to}",

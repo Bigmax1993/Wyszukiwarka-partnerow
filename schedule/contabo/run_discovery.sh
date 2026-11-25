@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Discovery Serper+www (pon–pt). Arg1 opcjonalny: etykieta dnia (log).
+# Discovery Maps/Serper+www (pon–pt 07:00). Zawsze --respect-cache
+# (stempel z run_cache_verify.sh ~04:00; pomija znane URL, zachowuje serper_discovery).
 set -euo pipefail
 # shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -10,14 +11,30 @@ LOG="$ROOT/logs/${DAY_LABEL}_discovery.log"
 export SCRAPER_MAX_RUNTIME_SECONDS="${SCRAPER_MAX_RUNTIME_SECONDS:-21600}"
 unset DISABLE_SEND_WINDOW SCRAPER_IGNORE_SEND_WINDOW || true
 
-pipeline_notify start "$JOB" --log "$LOG"
-echo "[$(date '+%F %T')] START discovery ($DAY_LABEL)" >>"$LOG"
+STAMP="$ROOT/Wyniki/.cache_verified_for_discovery.json"
+DETAIL="Discovery z --respect-cache (kontynuacja contacts JSON)."
+if [[ -f "$STAMP" ]]; then
+  DETAIL="${DETAIL} Stempel: $(head -c 400 "$STAMP" | tr '\n' ' ')"
+else
+  DETAIL="${DETAIL} Brak stempla 04:00 — i tak respektujemy cache."
+fi
+
+pipeline_notify start "$JOB" --log "$LOG" --detail "$DETAIL"
+{
+  echo "[$(date '+%F %T')] START discovery ($DAY_LABEL) --respect-cache"
+  if [[ -f "$STAMP" ]]; then
+    echo "[$(date '+%F %T')] cache stamp present: $STAMP"
+  else
+    echo "[$(date '+%F %T')] WARN: brak $STAMP (verify 04:00 nie zapisał stempla)"
+  fi
+} >>"$LOG"
 
 set +e
 "$PY" pl_fas_spedycja_scraper.py \
   --run-config run_config/pl_fas_spedycja.json \
   --serper-only-discovery \
-  --no-auto-email >>"$LOG" 2>&1
+  --no-auto-email \
+  --respect-cache >>"$LOG" 2>&1
 EC=$?
 set -e
 

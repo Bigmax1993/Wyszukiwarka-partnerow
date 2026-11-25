@@ -1,12 +1,12 @@
 name: PL spedycja poniedzialek excel email
 
-# Raport wewnętrzny: końcowy Excel → svinchak1993@gmail.com + Google Drive.
+# Raport wewnętrzny: Drive upload (mail Excel leci z Contabo pon 07:30).
 # Drive: https://drive.google.com/drive/folders/1bRCAqle6BS46YEw0fScq4P095LsJUSgL
-# Cron: niedziela 09:00 (po backfillu 06:00). NIE jest to wysyłka B2B.
-# Guard: niedziela tygodnia cyklu (co tydzień od 2026-11-02).
+# Cron: poniedziałek 07:35 Europe/Warsaw (po Contabo Excel 07:30 — tu głównie Drive).
+# NIE jest to wysyłka B2B. Mail z GHA OFF (DISABLE_EXCEL_REPORT_EMAIL=1), żeby nie dublować Contabo.
 on:
   schedule:
-    - cron: "0 9 * * 0"
+    - cron: "35 7 * * 1"
       timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
@@ -22,7 +22,7 @@ permissions:
 env:
   SCRAPER_TIMEZONE: Europe/Warsaw
   EXCEL_REPORT_TO: svinchak1993@gmail.com
-  DISABLE_EXCEL_REPORT_EMAIL: "0"
+  DISABLE_EXCEL_REPORT_EMAIL: "1"
   DISABLE_CONTRACTOR_EMAILS: "1"
   # Workflow-level OFF; upload step poniżej włącza Drive tylko dla końcowego Excela
   DISABLE_GOOGLE_DRIVE: "1"

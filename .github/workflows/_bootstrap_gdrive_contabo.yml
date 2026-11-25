@@ -1,0 +1,47 @@
+name: Bootstrap GDrive env pack (one-shot)
+
+# Jednorazowo: pakuje sekrety GDrive do zaszyfrowanego artefaktu (do Contabo).
+# Nie commituj hasła. Po użyciu usuń workflow / wyłącz.
+on:
+  workflow_dispatch:
+    inputs:
+      pack_pass:
+        description: Hasło AES do odszyfrowania artefaktu lokalnie
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pack GDrive secrets
+        env:
+          PACK_PASS: ${{ inputs.pack_pass }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+          GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+          GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            echo "GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}"
+            echo "GDRIVE_OAUTH_CLIENT_ID=${GDRIVE_OAUTH_CLIENT_ID}"
+            echo "GDRIVE_OAUTH_CLIENT_SECRET=${GDRIVE_OAUTH_CLIENT_SECRET}"
+            echo "GDRIVE_OAUTH_REFRESH_TOKEN=${GDRIVE_OAUTH_REFRESH_TOKEN}"
+            echo "GDRIVE_VERSION_XLSX=0"
+          } > /tmp/gdrive.env
+          openssl enc -aes-256-cbc -pbkdf2 -salt \
+            -in /tmp/gdrive.env -out /tmp/gdrive.env.enc \
+            -pass env:PACK_PASS
+          rm -f /tmp/gdrive.env
+          ls -la /tmp/gdrive.env.enc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gdrive-env-enc
+          path: /tmp/gdrive.env.enc
+          retention-days: 1
