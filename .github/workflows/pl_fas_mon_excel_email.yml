@@ -1,13 +1,9 @@
 name: PL spedycja poniedzialek excel email
 
-# Raport wewnętrzny: Drive upload (mail Excel leci z Contabo pon 07:30).
-# Drive: https://drive.google.com/drive/folders/1bRCAqle6BS46YEw0fScq4P095LsJUSgL
-# Cron: poniedziałek 07:35 Europe/Warsaw (po Contabo Excel 07:30 — tu głównie Drive).
-# NIE jest to wysyłka B2B. Mail z GHA OFF (DISABLE_EXCEL_REPORT_EMAIL=1), żeby nie dublować Contabo.
+# Backup / ręczny: Excel+Drive. Produkcja Contabo: pon 06:30 mail, 06:45 Drive.
+# Schedule GHA wyłączony — żeby nie dublować Contabo (stale artefakty).
+# NIE jest to wysyłka B2B. Mail z GHA OFF (DISABLE_EXCEL_REPORT_EMAIL=1).
 on:
-  schedule:
-    - cron: "35 7 * * 1"
-      timezone: Europe/Warsaw
   workflow_dispatch:
     inputs:
       dry_run:

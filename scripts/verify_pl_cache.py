@@ -18,9 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pl_spedycja_data_paths import campaign_output_paths  # noqa: E402
-
-
 STAMP_NAME = ".cache_verified_for_discovery.json"
 BASENAME = "pl_spedycja"
 
@@ -159,9 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    paths = campaign_output_paths(args.campaign_dir.resolve(), BASENAME)
-    cache_path = Path(paths["cache_file"])
-    stamp_path = args.stamp or (Path(paths["output_dir"]) / STAMP_NAME)
+    # Jawny --campaign-dir (nie KANBUD_DATA_DIR) — izolacja testów i Contabo cron.
+    camp = args.campaign_dir.resolve()
+    output_dir = camp / "Wyniki"
+    cache_path = output_dir / f"{BASENAME}_cache.json"
+    stamp_path = args.stamp or (output_dir / STAMP_NAME)
 
     result = verify_cache(cache_path)
     now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
