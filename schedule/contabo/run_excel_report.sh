@@ -35,18 +35,23 @@ if [[ -f "$XLSX" ]]; then
   TMP_DRIVE="$(mktemp -d /tmp/excel-drive-XXXXXX)"
   mkdir -p "$TMP_DRIVE/Wyniki"
   cp "$XLSX" "$TMP_DRIVE/Wyniki/pl_spedycja_kontakte.xlsx"
-  echo "[$(date '+%F %T')] START Google Drive upload" >>"$LOG"
-  set +e
-  DISABLE_GOOGLE_DRIVE=0 \
-  GDRIVE_VERSION_XLSX="${GDRIVE_VERSION_XLSX:-0}" \
-  GDRIVE_FOLDER_ID="${GDRIVE_FOLDER_ID:-1bRCAqle6BS46YEw0fScq4P095LsJUSgL}" \
-    "$PY" scripts/gdrive_upload_wyniki.py \
-      --campaign-dir "$TMP_DRIVE" \
-      --folder-id "${GDRIVE_FOLDER_ID:-1bRCAqle6BS46YEw0fScq4P095LsJUSgL}" >>"$LOG" 2>&1
-  EC_DRIVE=$?
-  set -e
-  rm -rf "$TMP_DRIVE"
-  echo "[$(date '+%F %T')] END Google Drive upload exit=$EC_DRIVE" >>"$LOG"
+  if [[ -z "${GDRIVE_FOLDER_ID:-}" ]]; then
+    echo "[$(date '+%F %T')] ERROR: brak GDRIVE_FOLDER_ID w .env — pomijam Drive" >>"$LOG"
+    EC_DRIVE=1
+    rm -rf "$TMP_DRIVE"
+  else
+    echo "[$(date '+%F %T')] START Google Drive upload → folder ${GDRIVE_FOLDER_ID}" >>"$LOG"
+    set +e
+    DISABLE_GOOGLE_DRIVE=0 \
+    GDRIVE_VERSION_XLSX="${GDRIVE_VERSION_XLSX:-0}" \
+      "$PY" scripts/gdrive_upload_wyniki.py \
+        --campaign-dir "$TMP_DRIVE" \
+        --folder-id "$GDRIVE_FOLDER_ID" >>"$LOG" 2>&1
+    EC_DRIVE=$?
+    set -e
+    rm -rf "$TMP_DRIVE"
+    echo "[$(date '+%F %T')] END Google Drive upload exit=$EC_DRIVE" >>"$LOG"
+  fi
 else
   echo "[$(date '+%F %T')] WARN: brak $XLSX — pomijam Drive" >>"$LOG"
   EC_DRIVE=1
