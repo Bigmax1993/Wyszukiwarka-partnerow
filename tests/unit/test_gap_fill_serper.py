@@ -42,8 +42,19 @@ def test_contact_has_gap_maps_only_www():
     )
 
 
-def test_contact_no_gap_when_email_and_www():
+def test_contact_no_gap_when_email_phone_and_www():
     assert not contact_has_gap(
+        {
+            "company_name": "Relon",
+            "official_website": "https://relon.pl/",
+            "email_target": "a@relon.pl",
+            "telefon": "+48 76 862 70 70",
+        }
+    )
+
+
+def test_contact_has_gap_when_email_but_no_phone():
+    assert contact_has_gap(
         {
             "company_name": "Relon",
             "official_website": "https://relon.pl/",
@@ -105,7 +116,7 @@ def test_merge_sets_enriched_when_email_found():
     enriched = {
         "email_target": "kontakt@relon.pl",
         "official_website": "https://relon.pl/",
-        "phones_found": "123",
+        "phones_found": "+48 76 862 70 70",
         "retail_verified": True,
     }
     out = merge_enrichment_into_contact(

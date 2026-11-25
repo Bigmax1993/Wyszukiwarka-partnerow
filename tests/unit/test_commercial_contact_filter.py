@@ -17,6 +17,7 @@ from commercial_contact_filter import (
     is_non_commercial_contact,
     is_non_commercial_email,
     is_non_commercial_name,
+    is_non_commercial_website,
     is_valid_commercial_company_contact,
 )
 
@@ -187,3 +188,15 @@ class TestFilterCommercialEmails:
         ]
         out = filter_commercial_emails(raw)
         assert out == ["info@firma.de", "kontakt@bau-gmbh.de"]
+
+
+class TestDomainMarkerBoundaries:
+    def test_antrans_not_confused_with_trans_eu(self):
+        assert is_non_commercial_website("https://www.trans.eu") is True
+        assert is_non_commercial_website("https://antrans.eu") is False
+        assert is_non_commercial_email("antrans@antrans.eu") is False
+        assert is_valid_commercial_company_contact(
+            email="antrans@antrans.eu",
+            url="https://antrans.eu",
+            name="Antrans Sp. z o.o.",
+        )

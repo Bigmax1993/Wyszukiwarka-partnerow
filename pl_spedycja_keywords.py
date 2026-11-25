@@ -760,16 +760,27 @@ def build_landkreis_discovery_terms(active: list[str] | None = None) -> list[str
     return terms
 
 
+# Znane firmy ICP, które Local Pack często pomija przy ogólnych frazach.
+# Traﬁają na początek kolejki Maps jako „{nazwa} {miasto}”.
+KNOWN_MAPS_SEED_QUERIES: tuple[str, ...] = (
+    "Antrans Głogów",
+    "Arra Group Głogów",
+)
+
+
 def build_maps_discovery_terms(active: list[str] | None = None) -> list[str]:
     """
     Frazy pod Google Maps (Faza A) — bez FTL/LTL/ADR/{chain}.
 
     Local Pack lubi krótkie zapytania jak „firma spedycyjna Głogów”.
     Segmenty FTL/LTL w query Maps pogarszają wyniki (puste / śmieci).
+    Na start: KNOWN_MAPS_SEED_QUERIES (Antrans / Arra Group itd.).
     """
     lands = resolve_active_bundeslaender(active)
     seen: set[str] = set()
     terms: list[str] = []
+    for q in KNOWN_MAPS_SEED_QUERIES:
+        _append_unique_term(terms, seen, q, max_terms=10_000)
     for land in lands:
         for city in BUNDESLAND_CONFIG[land]["cities"]:
             for tmpl in (

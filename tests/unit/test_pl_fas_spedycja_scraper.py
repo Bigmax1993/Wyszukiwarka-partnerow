@@ -223,6 +223,7 @@ class TestIcpFlagsAndLegalForms:
                     "url": "https://trans-spedycja.pl",
                     "www": "https://trans-spedycja.pl",
                     "email_target": "biuro@trans-spedycja.pl",
+                    "telefon": "+48 71 123 45 67",
                     "retail_verified": True,
                     "is_gu": True,
                     "is_small_firm": True,
@@ -238,6 +239,7 @@ class TestIcpFlagsAndLegalForms:
         assert "Województwo" in row
         assert "Segmenty" in row or "Spedycja" in row
         assert row.get("E-mail") == "biuro@trans-spedycja.pl"
+        assert scraper._excel_phone_ok(row.get("Telefon"))
 
 
 # >>> OPIS FUNKCJI: klasa TestApplyGuExtrasIcpFromJson

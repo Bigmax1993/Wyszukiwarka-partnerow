@@ -338,8 +338,10 @@ DE_DE_BBOX_LON_MAX = PL_BBOX_LON_MAX
 AUTO_ENRICH_CONTACTS = True
 # True: Serper/www nie pomijają URL-i już w contacts JSON — zawsze ponowne wzbogacanie
 DISCOVERY_IGNORE_CONTACT_CACHE = True
-# True: do Excela także firmy bez e-mail (po www-verify ICP)
-EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL = True
+# False: arkusz Kontakte tylko z adresem e-mail (JSON może mieć needs_enrich bez maila)
+EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL = False
+# False: arkusz Kontakte tylko z telefonem (obok e-maila)
+EXPORT_PIPELINE_ROWS_WITHOUT_PHONE = False
 STEP_LOG_WITH_TIMESTAMP = True
 
 SERPER_API_URL = "https://google.serper.dev/search"
@@ -1232,6 +1234,49 @@ def _excel_yes_no(flag: bool) -> str:
     return "tak" if flag else "nie"
 
 
+def _excel_email_ok(raw) -> bool:
+    """True, gdy komórka wygląda na e-mail (zawiera ``@``)."""
+    return "@" in _excel_cell_str(raw)
+
+
+def _excel_phone_ok(raw) -> bool:
+    """True, gdy telefon PL-ready (≥9 cyfr) i nie wygląda na śmieć."""
+    first = _excel_cell_str(raw).split(",", 1)[0].strip()
+    norm = normalize_phone_contact(first)
+    if not norm:
+        return False
+    digits = re.sub(r"\D", "", norm)
+    # PL: 9 cyfr krajowo, lub 11 z prefiksem 48
+    if digits.startswith("48") and len(digits) >= 11:
+        national = digits[2:]
+    elif digits.startswith("0048") and len(digits) >= 13:
+        national = digits[4:]
+    else:
+        national = digits.lstrip("0")
+    if len(national) < 9 or len(digits) > 15:
+        return False
+    if digits.startswith("0123456789") or digits.startswith("1234567890"):
+        return False
+    if len(set(digits)) <= 2:
+        return False
+    if digits.startswith("0000"):
+        return False
+    return True
+
+
+def _kontakte_row_has_required_contacts(row: dict) -> bool:
+    """Bramka Kontakte: e-mail i/lub telefon wg flag EXPORT_PIPELINE_ROWS_WITHOUT_*."""
+    if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL and not _excel_email_ok(
+        row.get("E-mail") or row.get("email_target")
+    ):
+        return False
+    if not EXPORT_PIPELINE_ROWS_WITHOUT_PHONE and not _excel_phone_ok(
+        row.get("Telefon") or row.get("telefon") or row.get("phones_found")
+    ):
+        return False
+    return True
+
+
 # >>> OPIS FUNKCJI: funkcja _excel_flag_truthy
 # Cel: odczytać flagę tak/nie z komórki Excela (także legacy ja/nein). Parametry: raw — wartość komórki.
 # Zwraca: bool|None — True dla tak/ja/yes/true/1, False dla nie/nein/no/false/0, None dla pustej lub nierozpoznanej. Efekty uboczne/błędy: brak.
@@ -1546,6 +1591,17 @@ def build_excel_info_sheet_rows() -> list[dict]:
             ),
         },
         {
+            "Temat": "Kontakt w Kontakte",
+            "Wartość": (
+                "Każdy wiersz Kontakte MUSI mieć E-mail ORAZ Telefon (≥9 cyfr PL). "
+                "Pipeline najpierw uzupełnia luki (Maps → Serper → crawl → Claude). "
+                "Tylko w skrajnej ostateczności — gdy po gap-fill nadal brak maila "
+                "lub telefonu — rekord ZOSTAJE w JSON (needs_enrich/still_gap) "
+                "i NIE trafia do Excela. Przy zapisie wiersze bez pełnego kontaktu "
+                "są usuwane z Kontakte."
+            ),
+        },
+        {
             "Temat": "Cache JSON",
             "Wartość": (
                 "Osobny plik pl_spedycja_cache.json — kumulacja tygodniowa; "
@@ -1596,11 +1652,53 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
             export_rows,
             logger=logger,
         )
+        if (
+            not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL
+            or not EXPORT_PIPELINE_ROWS_WITHOUT_PHONE
+        ):
+            before = len(export_rows)
+            export_rows = [
+                r for r in export_rows if _kontakte_row_has_required_contacts(r)
+            ]
+            dropped = before - len(export_rows)
+            if dropped and logger is not None:
+                logger.info(
+                    "Excel Kontakte: usunięto %s wierszy bez pełnego kontaktu "
+                    "(e-mail/telefon; zostało %s)",
+                    dropped,
+                    len(export_rows),
+                )
         state_rows, _, _ = merge_bundesland_rows_append(
             existing_sheets.get("Wojewodztwa", []),
             state_rows,
             logger=logger,
         )
+        if (
+            not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL
+            or not EXPORT_PIPELINE_ROWS_WITHOUT_PHONE
+        ):
+            keep_urls = {
+                _excel_cell_str(r.get("URL") or "").lower()
+                for r in export_rows
+                if _excel_cell_str(r.get("URL") or "").strip()
+            }
+            keep_names = {
+                _excel_cell_str(r.get("Nazwa firmy") or "").lower()
+                for r in export_rows
+                if _excel_cell_str(r.get("Nazwa firmy") or "").strip()
+            }
+            if keep_urls or keep_names:
+                filtered_state = []
+                for r in state_rows:
+                    url = _excel_cell_str(r.get("URL") or "").lower()
+                    name = _excel_cell_str(r.get("Nazwa firmy") or "").lower()
+                    if url and url in keep_urls:
+                        filtered_state.append(r)
+                    elif not url and name and name in keep_names:
+                        filtered_state.append(r)
+                state_rows = filtered_state
+            else:
+                state_rows = []
         if cache is None:
             cache = {}
         cfg = ReplySyncConfig(
@@ -2479,7 +2577,8 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
         return False
     if is_retail_store_operator_contact(url=url, email=email, text=text):
         return False
-    # Faza A Maps: wystarczy nazwa + (www|maps_url), bez crawla/email.
+    # Faza A Maps: wystarczy nazwa + (www|maps_url), bez crawla/email → JSON.
+    # Do Excela i tak wymaga maila ``build_export_rows`` (gdy flaga OFF).
     if (row.get("discovery_source") or "").strip() == "google_maps" and (
         row.get("gap_status") or ""
     ).strip() == GAP_STATUS_NEEDS_ENRICH:
@@ -2491,10 +2590,13 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
         return is_serper_only_pending_candidate(
             email=email, url=url, name=name, text=text
         )
-    if row.get("retail_verified"):
-        return _row_passes_strict_retail_filters(row)
-    if email:
+    # Z e-mailem: po filtrach non-commercial wyżej — kwalifikuje się do Kontakte.
+    if email and "@" in email:
         return not is_blocked_non_commercial_row(row)
+    if row.get("retail_verified"):
+        if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL:
+            return False
+        return _row_passes_strict_retail_filters(row)
     if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL:
         return False
     if not is_valid_retail_store_builder_contact(
@@ -2524,27 +2626,55 @@ def build_export_rows(rows, logger=None, cache=None):
             continue
         email = (row.get("email_target") or "").strip()
         if not email:
-            found_list = [
-                x.strip()
-                for x in (row.get("emails_found") or "").split(",")
-                if x.strip() and "@" in x
-            ]
+            found_raw = row.get("emails_found") or ""
+            if isinstance(found_raw, (list, tuple, set)):
+                found_list = [
+                    str(x).strip()
+                    for x in found_raw
+                    if str(x).strip() and "@" in str(x)
+                ]
+            else:
+                found_list = [
+                    x.strip()
+                    for x in str(found_raw).split(",")
+                    if x.strip() and "@" in x
+                ]
             if found_list:
                 email, _ = pick_best_email_for_inquiry(
                     found_list,
                     row.get("official_website") or row.get("www") or "",
                 )
+        if not email or "@" not in email:
+            if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL:
+                continue
+            email = ""
+        phone_raw = (
+            row.get("telefon") or row.get("phones_found") or ""
+        )
+        if isinstance(phone_raw, (list, tuple, set)):
+            phone_raw = next(
+                (str(x).strip() for x in phone_raw if str(x).strip()),
+                "",
+            )
+        else:
+            phone_raw = str(phone_raw).split(",", 1)[0].strip()
         if not is_row_llm_cleanup_enabled():
             row["adres"] = sanitize_special_text(
                 row.get("full_address") or row.get("adres") or ""
             )
             row["telefon"] = sanitize_special_text(
-                row.get("phones_found") or row.get("telefon") or ""
+                phone_raw or row.get("phones_found") or row.get("telefon") or ""
             )
             row["bundesland"] = extract_bundesland(row)
             table_cols = row_to_excel_kontakte_columns(row, email)
         else:
+            if phone_raw and not (row.get("telefon") or "").strip():
+                row["telefon"] = sanitize_special_text(phone_raw)
             table_cols = row_to_excel_kontakte_columns(row, email)
+        if not EXPORT_PIPELINE_ROWS_WITHOUT_PHONE and not _excel_phone_ok(
+            table_cols.get("Telefon") or phone_raw
+        ):
+            continue
         base = {
             **table_cols,
             "WWW sprawdzone": _excel_yes_no(bool(row.get("retail_verified"))),
@@ -2557,12 +2687,13 @@ def build_export_rows(rows, logger=None, cache=None):
             base = merge_export_row(base, cache, email, lang="pl")
         export_rows.append(base)
     if logger is not None:
-        with_mail = sum(1 for r in export_rows if (r.get("E-mail") or "").strip())
+        with_mail = sum(1 for r in export_rows if _excel_email_ok(r.get("E-mail")))
+        with_phone = sum(1 for r in export_rows if _excel_phone_ok(r.get("Telefon")))
         logger.info(
-            "Excel Kontakte: %s wierszy (%s z e-mailem, %s bez) z %s w pipeline",
+            "Excel Kontakte: %s wierszy (%s z e-mailem, %s z telefonem) z %s w pipeline",
             len(export_rows),
             with_mail,
-            len(export_rows) - with_mail,
+            with_phone,
             len(rows),
         )
     return export_rows
@@ -2895,7 +3026,34 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
         or info.get("company_name_raw")
         or ""
     ).strip()
-    email = (info.get("email_target") or "").strip()
+    email = (
+        info.get("email_target") or info.get("email") or ""
+    ).strip()
+    emails_found_raw = info.get("emails_found") or ""
+    if isinstance(emails_found_raw, (list, tuple, set)):
+        found_list = [
+            str(x).strip()
+            for x in emails_found_raw
+            if str(x).strip() and "@" in str(x)
+        ]
+        emails_found = ", ".join(found_list)
+    else:
+        emails_found = str(emails_found_raw).strip()
+        found_list = [
+            x.strip()
+            for x in emails_found.split(",")
+            if x.strip() and "@" in x
+        ]
+    if (not email or "@" not in email) and found_list:
+        website = (info.get("official_website") or place_url or "").strip()
+        email, _ = pick_best_email_for_inquiry(found_list, website)
+    elif email and "," in email:
+        parts = [x.strip() for x in email.split(",") if x.strip() and "@" in x]
+        if parts:
+            website = (info.get("official_website") or place_url or "").strip()
+            email, _ = pick_best_email_for_inquiry(parts, website)
+            if not emails_found:
+                emails_found = ", ".join(parts)
     row_probe = {
         "url": place_url,
         "www": info.get("official_website") or place_url,
@@ -2903,13 +3061,17 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
         "nazwa": name,
         "company_name_clean": name,
         "email_target": email,
-        "emails_found": info.get("emails_found") or "",
+        "emails_found": emails_found,
         "retail_verified": info.get("retail_verified", False),
         "verification_reason": info.get("verification_reason") or "",
         "page_snippet": info.get("page_snippet") or "",
         "retail_chains_found": info.get("retail_chains_found") or "",
         "is_gu": info.get("is_gu", False),
         "gu_marker": info.get("gu_marker") or "",
+        "discovery_source": info.get("discovery_source") or "",
+        "gap_status": info.get("gap_status") or "",
+        "maps_url": info.get("maps_url") or "",
+        "is_small_firm": info.get("is_small_firm", True),
     }
     pending_www = (
         (info.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON
@@ -7714,33 +7876,23 @@ def enrich_row_with_contacts(
         row["is_gu"] = verification.get("is_gu", False)
         row["gu_marker"] = verification.get("gu_marker", "")
         if not verification.get("verified"):
+            # Nie przerywamy — Maps/gap-fill i tak potrzebują maila+telefonu do Excela.
             console_step(
-                f"Odrzucono (brak ICP spedycji FTL/LTL): "
+                f"ICP nie OK (zbieram kontakty mimo to): "
                 f"{company_for_email} — {row['verification_reason']}"
             )
-            skip = {
-                "emails": [],
-                "phones": [],
-                "website": website,
-                "source_urls": verification.get("pages_checked") or [],
-                "page_snippet": verification.get("page_snippet") or "",
-            }
-            row = reconcile_contact_sources(row, skip)
-            extra = {
-                "company_name": company_for_email,
-                "official_website": website,
-                "retail_verified": False,
-                "verification_reason": row["verification_reason"],
-                "retail_chains_found": row.get("retail_chains_found", ""),
-                "is_small_firm": row.get("is_small_firm", False),
-                "email_target": "",
-                "email_status": "skipped_no_retail_proof",
-            }
-            row.update(extra)
-            contacts_cache[place_url] = {k: row.get(k) for k in extra if k in row}
-            return normalize_row_company_name(row)
     elif website:
         row["retail_verified"] = True
+        verification = {
+            "verified": True,
+            "verification_reason": "ok",
+            "retail_chains": [],
+            "is_small_firm": True,
+            "is_gu": False,
+            "gu_marker": "",
+            "pages_checked": [],
+            "page_snippet": "",
+        }
     else:
         row["retail_verified"] = False
         row["verification_reason"] = "keine_website"
@@ -7781,6 +7933,7 @@ def enrich_row_with_contacts(
         )
         if x
     ).strip()
+    maps_lead = (row.get("discovery_source") or "").strip() == "google_maps"
     target_email, email_score, email_pick_method = resolve_inquiry_email_target(
         collected,
         website or "",
@@ -7788,7 +7941,8 @@ def enrich_row_with_contacts(
         logger,
         cache,
         cache_key=place_url,
-        retail_verified=bool(row.get("retail_verified")),
+        # Maps Faza A już wybrała firmę — nie blokuj maila samym ICP verify.
+        retail_verified=bool(row.get("retail_verified")) or maps_lead,
         verification_text=verify_context,
     )
     if (
@@ -7828,7 +7982,7 @@ def enrich_row_with_contacts(
                         logger,
                         cache,
                         cache_key=place_url,
-                        retail_verified=bool(row.get("retail_verified")),
+                        retail_verified=bool(row.get("retail_verified")) or maps_lead,
                         verification_text=verify_context,
                     )
                 )
@@ -7858,7 +8012,10 @@ def enrich_row_with_contacts(
         "serper_source_score": serper_source_score,
         "emails_found": ", ".join(collected["emails"]),
         "impressum_emails_found": ", ".join(collected.get("impressum_emails") or []),
-        "phones_found": ", ".join(collected["phones"]),
+        "phones_found": (
+            ", ".join(collected["phones"])
+            or (row.get("phones_found") or row.get("telefon") or "")
+        ),
         "contact_sources": ", ".join(collected["source_urls"]),
         "contact_source": row.get("contact_source", "serper"),
         "maps_contact_rejected": row.get("maps_contact_rejected", "no"),
@@ -8940,7 +9097,8 @@ def _run_smoke_tests() -> None:
     )
     assert "https://a.pl" in seen_ignore and "https://b.pl" not in seen_ignore
     assert DISCOVERY_IGNORE_CONTACT_CACHE is True
-    assert EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL is True
+    assert EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL is False
+    assert EXPORT_PIPELINE_ROWS_WITHOUT_PHONE is False
     assert is_row_eligible_for_excel_export(
         {
             "nazwa": "Trans Spedycja Sp. z o.o.",
@@ -8971,7 +9129,8 @@ def _run_smoke_tests() -> None:
                 "company_name_clean": "Trans Spedycja Sp. z o.o.",
                 "url": "https://trans-spedycja.pl",
                 "www": "https://trans-spedycja.pl",
-                "email_target": "",
+                "email_target": "biuro@trans-spedycja.pl",
+                "telefon": "",
                 "retail_verified": True,
                 "is_gu": True,
                 "is_small_firm": True,
@@ -8980,11 +9139,28 @@ def _run_smoke_tests() -> None:
                 "verification_reason": "claude_pl_spedycja",
                 "page_snippet": "Firma spedycyjna FTL LTL Europa realizacje",
                 "retail_chains_found": "ftl, ltl",
-            }
+            },
+            {
+                "nazwa": "Trans Spedycja Sp. z o.o.",
+                "company_name_clean": "Trans Spedycja Sp. z o.o.",
+                "url": "https://trans-spedycja.pl",
+                "www": "https://trans-spedycja.pl",
+                "email_target": "biuro@trans-spedycja.pl",
+                "telefon": "+48 71 123 45 67",
+                "retail_verified": True,
+                "is_gu": True,
+                "is_small_firm": True,
+                "gu_marker": "spedycja",
+                "bundesland": "Dolnoslaskie",
+                "verification_reason": "claude_pl_spedycja",
+                "page_snippet": "Firma spedycyjna FTL LTL Europa realizacje",
+                "retail_chains_found": "ftl, ltl",
+            },
         ]
     )
     assert len(rows_export) == 1
-    assert rows_export[0].get("E-mail") == ""
+    assert rows_export[0].get("E-mail") == "biuro@trans-spedycja.pl"
+    assert _excel_phone_ok(rows_export[0].get("Telefon"))
     assert rows_export[0].get("Województwo") == "Dolnoslaskie" or "Dolno" in str(
         rows_export[0].get("Województwo") or ""
     )

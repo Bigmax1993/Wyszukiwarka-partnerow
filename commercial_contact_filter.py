@@ -576,6 +576,24 @@ def _normalize_host(url_or_email: str) -> str:
     return text.split("/", 1)[0].strip()
 
 
+def _host_matches_blocked_marker(host: str, marker: str) -> bool:
+    """
+    Dopasowanie markera do hosta.
+
+    Markery z kropką (np. ``trans.eu``) = dokładna domena / subdomena
+    (``antrans.eu`` NIE pasuje do ``trans.eu``).
+    Markery bez kropki = substring jak dotychczas (``timocom``, ``bip.``).
+    """
+    h = (host or "").strip().lower()
+    m = (marker or "").strip().lower()
+    if not h or not m:
+        return False
+    if "." in m.strip("."):
+        m = m.strip(".")
+        return h == m or h.endswith("." + m)
+    return m in h
+
+
 def is_non_commercial_email(email: str) -> bool:
     """
     True = e-mail urzędu / portalu / katalogu — nie zbierać, nie wysyłać.
@@ -593,7 +611,10 @@ def is_non_commercial_email(email: str) -> bool:
         return True
     if domain in NON_COMMERCIAL_EMAIL_DOMAINS_EXACT:
         return True
-    if any(marker in domain for marker in NON_COMMERCIAL_DOMAIN_MARKERS):
+    if any(
+        _host_matches_blocked_marker(domain, marker)
+        for marker in NON_COMMERCIAL_DOMAIN_MARKERS
+    ):
         return True
     # Podstawowe domeny rządowe / edukacyjne (PL + DE + EDU)
     if domain.endswith((".gov.pl", ".gov.de", ".bund.de", ".edu", ".ac.uk")):
@@ -618,7 +639,10 @@ def is_non_commercial_website(url: str) -> bool:
         return False
     if host in NON_COMMERCIAL_EMAIL_DOMAINS_EXACT:
         return True
-    if any(marker in host for marker in NON_COMMERCIAL_DOMAIN_MARKERS):
+    if any(
+        _host_matches_blocked_marker(host, marker)
+        for marker in NON_COMMERCIAL_DOMAIN_MARKERS
+    ):
         return True
     if host.endswith((".gov.pl", ".gov.de", ".bund.de")):
         return True

@@ -4,7 +4,11 @@ Faza B — Gap-fill kontaktów z Maps (Faza A) przez Serper /search.
 
 Skanuje cache["contacts"] pod kątem luk (brak email / sensownej WWW / telefonu),
 buduje zapytania "{nazwa} {miasto} spedycja", woła Serper, potem istniejący
-lej enrich (filtr ICP → crawl → extract) i merge z powrotem w ten sam rekord.
+lej enrich (crawl → extract; ICP nie kasuje kontaktów) i merge w ten sam rekord.
+
+Polityka Excela: pełny kontakt (e-mail + telefon) → Kontakte.
+Skrajna ostateczność: po wyczerpaniu gap-fill rekord zostaje w JSON
+(``still_gap`` / ``needs_enrich``) i nie trafia do Excela.
 """
 from __future__ import annotations
 
@@ -67,25 +71,43 @@ def has_sensible_website(info: dict) -> bool:
 
 
 def has_email(info: dict) -> bool:
-    return bool((info.get("email_target") or "").strip())
+    target = (info.get("email_target") or info.get("email") or "").strip()
+    if target and "@" in target:
+        return True
+    found = info.get("emails_found") or ""
+    if isinstance(found, (list, tuple, set)):
+        return any("@" in str(x) for x in found)
+    return "@" in str(found)
 
 
 def has_phone(info: dict) -> bool:
-    phone = (info.get("telefon") or info.get("phones_found") or "").strip()
-    return bool(phone)
+    phone = (info.get("telefon") or info.get("phones_found") or info.get("phone") or "")
+    if isinstance(phone, (list, tuple, set)):
+        phone = next((str(x).strip() for x in phone if str(x).strip()), "")
+    else:
+        phone = str(phone).split(",", 1)[0].strip()
+    if not phone:
+        return False
+    try:
+        import pl_fas_spedycja_scraper as s
+
+        return bool(s._excel_phone_ok(phone))
+    except Exception:
+        digits = re.sub(r"\D", "", phone)
+        return len(digits) >= 9
 
 
 def contact_has_gap(info: dict) -> bool:
-    """Luka: brak email LUB brak sensownej WWW LUB (brak telefonu i brak email)."""
+    """Luka: brak e-maila LUB brak telefonu LUB brak sensownej WWW."""
     if not isinstance(info, dict):
         return False
-    if has_email(info) and has_sensible_website(info):
+    if has_email(info) and has_phone(info) and has_sensible_website(info):
         return False
     if not has_email(info):
         return True
-    if not has_sensible_website(info):
+    if not has_phone(info):
         return True
-    if not has_phone(info) and not has_email(info):
+    if not has_sensible_website(info):
         return True
     return False
 
