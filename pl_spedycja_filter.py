@@ -1,4 +1,29 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: pl_spedycja_filter — reguły tekstowe ICP kampanii PL spedycja drogowa (FTL / LTL / międzynarodowa / ADR).
+#
+# CO ROBI
+#   Zawiera whitelisty (ROLA spedytora, SEGMENT transportu, USŁUGA) oraz listy odrzuceń (kurierzy, giełdy
+#   frachtowe, duzi gracze 3PL, media, role nieistotne) i na ich podstawie odpowiada na pytania:
+#   „czy tekst opisuje biuro spedycyjne”, „czy ma sygnał oferty / segmentu”, „dlaczego odrzucić”
+#   (reject_reason), „czy kandydat z samego Serpera jest wart crawla”, „czy wpis w cache to nie-lead”.
+#
+# ROLA W PIPELINE
+#   Szkielet logiki ICP używany na kilku etapach: filtr wyników Serper (discovery), twarde NO-GO i korekta
+#   werdyktu Claude (page_verify), walidacja kontaktu przed zapisem do Excela oraz czyszczenie cache.
+#   Wiele funkcji to cienkie ALIASY legacy (nazwy z kampanii GU/Filialbau: is_gu_*, *_retail_*), pozostawione,
+#   aby scraper i testy nie wymagały zmiany importów — semantycznie dotyczą teraz spedycji.
+#
+# ZALEŻNOŚCI
+#   commercial_contact_filter (odrzucanie instytucji/portali) oraz stdlib; moduł pl_spedycja_keywords nie
+#   jest wymagany przez filtr (listy markerów są zdefiniowane lokalnie). Importowany przez: page_verify,
+#   claude_discovery_terms, campaign_keyword_profile, claude_prompts i scraper.
+#
+# WEJŚCIE / WYJŚCIE
+#   Wejście: teksty (str) — nazwy, tytuły, snippety Serper, tekst strony; czasem dict wpisu cache.
+#   Wyjście: bool, krotki (bool, powód) lub listy wykrytych segmentów/markerów. Brak I/O, brak stanu poza
+#   wartością „bieżącego województwa discovery” ustawianą przez set_discovery_wojewodztwo.
+# ============================================================
 """
 Kampania PL: firmy spedycyjne drogowe (FTL / LTL / międzynarodowy).
 
@@ -386,6 +411,35 @@ def _has_any(low: str, markers: tuple[str, ...]) -> bool:
     return any(m in low for m in markers)
 
 
+def _has_transport_company_signal(low: str) -> bool:
+    """
+    Warstwa 1: czy blob wygląda na firmę transportową/spedycyjną (nie na śmieć).
+
+    Po co: sekcja „oferty pracy” na stronie HIT/spedycji nie może zabijać leada.
+    True przy ROLE spedycji/transportu ALBO SERVICE ALBO SEGMENT (FTL/LTL/…).
+    Nie ocenia jakości ICP — to robi Claude (warstwa 2).
+    """
+    return (
+        _has_any(low, FORWARDER_ROLE_MARKERS)
+        or _has_any(low, TRANSPORT_SERVICE_MARKERS)
+        or _has_any(low, TRANSPORT_SEGMENT_MARKERS)
+    )
+
+
+def _is_irrelevant_role_junk(low: str) -> bool:
+    """
+    Warstwa 1: True tylko gdy IRRELEVANT_ROLE i BRAK sygnału firmy transportowej.
+
+    Czysta agencja pracy / urząd / OSK → True (odrzuć).
+    Firma spedycyjna/transportowa + „oferty pracy” → False (puść do Claude).
+    """
+    if not _has_any(low, IRRELEVANT_ROLE_MARKERS):
+        return False
+    if _has_transport_company_signal(low):
+        return False
+    return True
+
+
 def _is_courier_reject(low: str) -> bool:
     """
     Odróżnia kuriera / paczkę od biura spedycji FTL.
@@ -502,10 +556,11 @@ def reject_reason(
         return "exchange_or_big3pl"
     if _is_courier_reject(low):
         return "courier"
-    if _has_any(low, IRRELEVANT_ROLE_MARKERS):
+    # Warstwa 1: tylko śmieci. Kariera na stronie firmy transportowej ≠ reject.
+    if _is_irrelevant_role_junk(low):
         return "irrelevant_role"
-    if _has_any(low, IRRELEVANT_SERVICE_MARKERS) and not _has_any(
-        low, FORWARDER_ROLE_MARKERS
+    if _has_any(low, IRRELEVANT_SERVICE_MARKERS) and not _has_transport_company_signal(
+        low
     ):
         return "irrelevant_service"
     return None
@@ -641,6 +696,9 @@ def qualifies_as_gu_for_campaign(text: str) -> tuple[bool, str]:
     return is_forwarder_role(text)
 
 
+# >>> OPIS FUNKCJI: funkcja is_gu_or_retail_build_specialist
+# Cel: alias legacy „czy to specjalista branżowy” → sama ROLA spedycji. Parametry: text (str).
+# Zwraca: bool — pierwszy element krotki z is_forwarder_role(text). Efekty uboczne/błędy: brak.
 def is_gu_or_retail_build_specialist(text: str) -> bool:
     """
     Alias legacy: „czy to specjalista branżowy”.
@@ -693,6 +751,9 @@ def mentions_retail_store_build_activity_serper_discovery(text: str) -> bool:
     return has_serper_trade_signal((text or "").lower())
 
 
+# >>> OPIS FUNKCJI: funkcja portfolio_negates_market_projects
+# Cel: alias legacy → portfolio_negates (dawniej „brak projektów marketów”, teraz „brak spedycji”).
+# Parametry: text (str). Zwraca: bool (wynik portfolio_negates). Efekty uboczne/błędy: brak.
 def portfolio_negates_market_projects(text: str) -> bool:
     """
     Alias legacy → `portfolio_negates`.
@@ -702,6 +763,9 @@ def portfolio_negates_market_projects(text: str) -> bool:
     return portfolio_negates(text)
 
 
+# >>> OPIS FUNKCJI: funkcja has_retail_references_or_portfolio
+# Cel: alias → has_offer_evidence (sekcja oferty/referencji/floty powiązana z rolą lub segmentem FTL/LTL).
+# Parametry: text (str). Zwraca: bool. Efekty uboczne/błędy: brak.
 def has_retail_references_or_portfolio(text: str) -> bool:
     """
     Alias → `has_offer_evidence`.
@@ -726,6 +790,9 @@ def has_market_project_evidence_on_website(text: str) -> bool:
 has_market_store_projects_portfolio = has_offer_evidence
 
 
+# >>> OPIS FUNKCJI: funkcja detect_required_retail_chains
+# Cel: alias → detect_transport_segments (dawniej nazwy sieci handlowych, teraz segmenty FTL/LTL/fracht).
+# Parametry: text (str). Zwraca: list[str] wykrytych segmentów. Efekty uboczne/błędy: brak.
 def detect_required_retail_chains(text: str) -> list[str]:
     """
     Alias → `detect_transport_segments`.
@@ -735,6 +802,9 @@ def detect_required_retail_chains(text: str) -> list[str]:
     return detect_transport_segments(text)
 
 
+# >>> OPIS FUNKCJI: funkcja has_required_retail_chain_mention
+# Cel: szybki wrapper — czy w tekście jest przynajmniej jeden marker SEGMENT (np. FTL). Parametry: text (str).
+# Zwraca: bool = bool(detect_transport_segments(text)). Efekty uboczne/błędy: brak.
 def has_required_retail_chain_mention(text: str) -> bool:
     """
     True, gdy w tekście jest co najmniej jeden marker SEGMENT.
@@ -762,29 +832,24 @@ def has_retail_context_without_named_chain(text: str) -> bool:
     """
     Kontekst branżowy bez wymogu konkretnego segmentu FTL/LTL.
 
-    True przy ROLE albo SERVICE albo SEGMENT. False przy rolach nie-ICP
-    (praca, urząd, przeprowadzki — `IRRELEVANT_ROLE_MARKERS`).
-    Przydatne, gdy lead ma „firma spedycyjna + organizacja przewozu”
-    bez słowa „FTL” w snippecie.
+    True przy ROLE albo SERVICE albo SEGMENT.
+    False tylko przy czystym śmieciu warstwy 1 (np. sama agencja pracy) —
+    nie przy firmie transportowej z zakładką „praca”.
     """
     low = (text or "").lower()
-    if _has_any(low, IRRELEVANT_ROLE_MARKERS):
+    if _is_irrelevant_role_junk(low):
         return False
-    return (
-        _has_any(low, FORWARDER_ROLE_MARKERS)
-        or _has_any(low, TRANSPORT_SERVICE_MARKERS)
-        or _has_any(low, TRANSPORT_SEGMENT_MARKERS)
-    )
+    return _has_transport_company_signal(low)
 
 
 def is_excluded_non_gu_role(text: str) -> bool:
     """
-    True, gdy tekst opisuje rolę poza ICP kampanii.
+    Warstwa 1 (hard_reject): True = czysty śmieć roli, nie ocena ICP.
 
-    Przykłady: oferty pracy kierowcy, urząd, przeprowadzki, autokary, OSK.
-    Używane jako szybki pre-check; pełna oś reject i tak idzie przez `reject_reason`.
+    Przykłady odrzuceń: sama agencja pracy, urząd, OSK bez sygnału transportu.
+    Firma spedycyjna/transportowa + „oferty pracy” → False (puść do Claude).
     """
-    return _has_any((text or "").lower(), IRRELEVANT_ROLE_MARKERS)
+    return _is_irrelevant_role_junk((text or "").lower())
 
 
 def is_interior_fitout_specialist(text: str) -> tuple[bool, str]:

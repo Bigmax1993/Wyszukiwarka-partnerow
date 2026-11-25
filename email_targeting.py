@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu email_targeting (komentarz; docstring poniżej opisuje scoring i progi).
+#   Rola w pipeline: etap „kontakt → wybór adresu”: z kandydatów (regex, Claude, cache) wybiera adres do
+#   zapytania B2B lub do zapisu w Excelu, preferując zgodność domeny z www firmy i ICP-owy local-part.
+#   Zależności: stdlib (re, urllib.parse); opcjonalnie biblioteka idna (punycode) — brak → fallback.
+#   Używany też przez website_full_crawl (get_registrable_domain).
+#   Wejście: lista adresów e-mail, URL strony firmy. Wyjście: score (int), posortowane listy, wybrany
+#   adres (str) lub bool (czy wymagana arbitraż LLM / czy wybór jest poprawny).
+# ============================================================
 """
 Ranking adresów e-mail pod zapytania ofertowe PL FAS / spedycja drogowa.
 
@@ -123,6 +132,10 @@ _UNSUITABLE_LOCAL_MARKERS = (
 )
 
 
+# >>> OPIS FUNKCJI: funkcja _normalize_website
+# Cel: dopiąć schemat "https://" do URL-a bez schematu. Parametry: url (str).
+# Zwraca: str — pusty dla pustego wejścia; w przeciwnym razie URL po strip z http(s)://.
+# Efekty uboczne/błędy: brak. Używane przed urlparse w get_registrable_domain.
 def _normalize_website(url: str) -> str:
     """
     Dopina schemat ``https://``, jeśli URL go nie ma.

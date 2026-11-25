@@ -1,5 +1,7 @@
 name: Tests
 
+# Unit / integration / regression / smoke / API live (Serper + Anthropic).
+# Trigger: push/PR na master oraz ręczne workflow_dispatch.
 on:
   push:
     branches: [master]

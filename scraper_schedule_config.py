@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu scraper_schedule_config (komentarz; docstring poniżej jest pełny).
+#   Zależności: stdlib os, dataclasses, datetime; opcjonalnie zoneinfo (brak → fallback na lokalny zegar OS).
+#   Wejście: zmienne środowiskowe DISABLE_SEND_WINDOW, SCRAPER_IGNORE_SEND_WINDOW, SEND_WINDOW_START_HOUR,
+#   SEND_WINDOW_END_HOUR, SCRAPER_TIMEZONE. Wyjście: SendWindowConfig (frozen dataclass), godzina (int), bool.
+#   Rola w pipeline: bramka czasowa przed etapem wysyłki maili B2B (_process_email_jobs w scraperze).
+# ============================================================
 """
 Okno wysyłki e-mail i strefa czasu — konfiguracja przez zmienne środowiskowe.
 
@@ -43,6 +50,10 @@ except ImportError:  # pragma: no cover
     ZoneInfo = None  # type: ignore
 
 
+# >>> OPIS FUNKCJI: funkcja _truthy
+# Cel: zinterpretować wartość zmiennej środowiskowej jako flagę. Parametry: val (str|None).
+# Zwraca: bool — True dla "1", "true", "yes", "on" (bez rozróżniania wielkości liter, po strip).
+# Efekty uboczne/błędy: brak (None → False).
 def _truthy(val: str | None) -> bool:
     """Czy wartość env jest „włączona” (``1`` / ``true`` / ``yes`` / ``on``)."""
     return (val or "").strip().lower() in ("1", "true", "yes", "on")

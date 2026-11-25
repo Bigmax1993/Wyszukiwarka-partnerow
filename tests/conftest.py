@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/conftest.py
+# CO ROBI: wspólna konfiguracja pytest: dodaje libs/ i katalog główny repo na początek sys.path oraz ustawia domyślne zmienne środowiskowe (KANBUD_PROJECT_ROOT, PYTHONUTF8, USE_GEMINI_REPLY_INTELLIGENCE=0).
+# ROLA W PIPELINE: pozwala testom importować moduły kampanii (pl_fas_spedycja_scraper, libs.*) bez instalacji pakietu i wyłącza inteligencję odpowiedzi opartą o Gemini w testach.
+# ZALEŻNOŚCI: pytest (automatycznie ładuje conftest), sys, pathlib, os.
+# WEJŚCIE/WYJŚCIE: Brak funkcji i fixtur — działanie następuje przy imporcie (efekt uboczny: modyfikacja sys.path i os.environ).
+# ============================================================
 """Wsp├│lna konfiguracja pytest."""
 from __future__ import annotations
 

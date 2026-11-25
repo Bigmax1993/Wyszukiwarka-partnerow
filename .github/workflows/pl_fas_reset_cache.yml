@@ -1,5 +1,6 @@
 name: PL spedycja reset pipeline cache
 
+# Ops: ręczne czyszczenie cache/artefaktów pipeline (workflow_dispatch only).
 on:
   workflow_dispatch:
 

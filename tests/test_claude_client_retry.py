@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/test_claude_client_retry.py
+# CO ROBI: testy ponawiania wywołań API Claude (HTTP 503) w claude_client.claude_generate_text.
+# ROLA W PIPELINE: chroni mechanizm retry/backoff używany przez wszystkie kroki Claude w pipeline.
+# ZALEŻNOŚCI: unittest, unittest.mock, requests, claude_client (claude_generate_text, CLAUDE_API_RETRY_ATTEMPTS, CLAUDE_API_RETRY_WAIT_SECONDS).
+# WEJŚCIE/WYJŚCIE: Moduł nie przyjmuje argumentów CLI; pytest/unittest odkrywa i uruchamia testy; nic nie zwraca (wynik = zielone/czerwone testy).
+# ============================================================
 from __future__ import annotations
 
 import sys
@@ -21,7 +28,12 @@ from claude_client import (
 )
 
 
+# >>> OPIS FUNKCJI: klasa ClaudeApiRetryTest
+# Grupa testów: retry klienta Claude przy błędach serwera.
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class ClaudeApiRetryTest(unittest.TestCase):
+    # >>> OPIS FUNKCJI: funkcja ClaudeApiRetryTest._ok_response
+    # Pomocnik testowy: buduje atrapę udanej odpowiedzi HTTP 200 (MagicMock) z treścią {"ok": true}. Parametry: self. Zwraca: MagicMock. Efekty uboczne/błędy: brak.
     def _ok_response(self) -> MagicMock:
         resp = MagicMock()
         resp.status_code = 200
@@ -31,6 +43,10 @@ class ClaudeApiRetryTest(unittest.TestCase):
         resp.raise_for_status.return_value = None
         return resp
 
+    # >>> OPIS FUNKCJI: funkcja ClaudeApiRetryTest.test_retries_on_api_error_then_succeeds
+    # Test: dwa błędy 503, potem sukces: 3 wywołania POST, 2 pauzy o CLAUDE_API_RETRY_WAIT_SECONDS i poprawny wynik.
+    # Parametry: self, _key, mock_post, mock_sleep (mocki z dekoratorów patch). Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche na time.sleep, requests.post i klucz API (brak sieci i realnych pauz). Błędy: AssertionError przy niespełnionej asercji.
     @patch("claude_client.time.sleep")
     @patch("claude_client.requests.post")
     @patch("claude_client.get_anthropic_api_key", return_value="test-key")
@@ -50,6 +66,10 @@ class ClaudeApiRetryTest(unittest.TestCase):
         self.assertIn("ok", text)
         self.assertTrue(model)
 
+    # >>> OPIS FUNKCJI: funkcja ClaudeApiRetryTest.test_raises_after_three_failed_attempts
+    # Test: po CLAUDE_API_RETRY_ATTEMPTS nieudanych próbach rzucany jest requests.HTTPError, a pauz jest o jedną mniej niż prób.
+    # Parametry: self, _key, mock_post, mock_sleep. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche na time.sleep, requests.post i klucz API. Błędy: AssertionError; HTTPError oczekiwany w assertRaises.
     @patch("claude_client.time.sleep")
     @patch("claude_client.requests.post")
     @patch("claude_client.get_anthropic_api_key", return_value="test-key")

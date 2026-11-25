@@ -1,10 +1,10 @@
 # =============================================================================
-# PO CO: rejestracja zadań Harmonogramu Windows — discovery-only PL FAS.
-# Plan: schedule/PLAN_5_DNI.md (pon–pt 18:00 discovery | nd 06:00 backfill).
+# PO CO: rejestracja zadań Harmonogramu Windows — PL FAS lokalnie.
+# Plan: pon–pt 07:00 discovery | nd 06:00 backfill | pon/wt 09:00 B2B send.
 # Nazwy tasków: Spedycja_FAS_* (kanoniczne). Przy rejestracji / -Unregister
-# usuwane są też stare Kanbud_GU_* (oraz wyłączone prep/send).
+# usuwane są też stare Kanbud_GU_* (oraz wyłączone prep/legacy send).
 # Uruchom PowerShell jako administrator.
-# Nie zmienia godzin ani run_config\pl_fas_spedycja.json.
+# Nie zmienia run_config\pl_fas_spedycja.json.
 # =============================================================================
 
 param(
@@ -28,14 +28,16 @@ function Register-WeekdayTask {
     Write-Host "OK: $Name -> $Weekday $Time"
 }
 
-# pon–pt 18:00 discovery + nd 06:00 backfill. Prep/send NIE rejestrowane.
+# Discovery lokalnie 07:00 (okno 7–13 via SCRAPER_MAX_RUNTIME) + reszta jak GHA.
 $tasks = @(
-    @{ Name = "Spedycja_FAS_Poniedzialek_Discovery"; Script = Join-Path $ScheduleDir "run_poniedzialek_discovery.ps1"; Day = "Monday"; Time = "18:00" }
-    @{ Name = "Spedycja_FAS_Wtorek_Discovery"; Script = Join-Path $ScheduleDir "run_wtorek_discovery.ps1"; Day = "Tuesday"; Time = "18:00" }
-    @{ Name = "Spedycja_FAS_Sroda_Discovery"; Script = Join-Path $ScheduleDir "run_sroda_discovery.ps1"; Day = "Wednesday"; Time = "18:00" }
-    @{ Name = "Spedycja_FAS_Czwartek_Discovery"; Script = Join-Path $ScheduleDir "run_czwartek_discovery.ps1"; Day = "Thursday"; Time = "18:00" }
-    @{ Name = "Spedycja_FAS_Piatek_Discovery"; Script = Join-Path $ScheduleDir "run_piatek_discovery.ps1"; Day = "Friday"; Time = "18:00" }
+    @{ Name = "Spedycja_FAS_Poniedzialek_Discovery"; Script = Join-Path $ScheduleDir "run_poniedzialek_discovery.ps1"; Day = "Monday"; Time = "07:00" }
+    @{ Name = "Spedycja_FAS_Wtorek_Discovery"; Script = Join-Path $ScheduleDir "run_wtorek_discovery.ps1"; Day = "Tuesday"; Time = "07:00" }
+    @{ Name = "Spedycja_FAS_Sroda_Discovery"; Script = Join-Path $ScheduleDir "run_sroda_discovery.ps1"; Day = "Wednesday"; Time = "07:00" }
+    @{ Name = "Spedycja_FAS_Czwartek_Discovery"; Script = Join-Path $ScheduleDir "run_czwartek_discovery.ps1"; Day = "Thursday"; Time = "07:00" }
+    @{ Name = "Spedycja_FAS_Piatek_Discovery"; Script = Join-Path $ScheduleDir "run_piatek_discovery.ps1"; Day = "Friday"; Time = "07:00" }
     @{ Name = "Spedycja_FAS_Niedziela_Backfill"; Script = Join-Path $ScheduleDir "run_czwartek.ps1"; Day = "Sunday"; Time = "06:00" }
+    @{ Name = "Spedycja_FAS_Poniedzialek_Send"; Script = Join-Path $ScheduleDir "run_poniedzialek_send.ps1"; Day = "Monday"; Time = "09:00" }
+    @{ Name = "Spedycja_FAS_Wtorek_Send"; Script = Join-Path $ScheduleDir "run_wtorek.ps1"; Day = "Tuesday"; Time = "09:00" }
 )
 
 # Stare nazwy Kanbud_GU_* (aktywne + wyłączone prep/send) — zawsze sprzątane.
@@ -65,10 +67,9 @@ $legacySpedycjaPlTasks = @(
     "Spedycja_PL_Niedziela_Backfill"
 )
 
+# NIE dodawaj tu Poniedzialek_Send / Wtorek_Send — są w $tasks.
 $disabledTasks = @(
     "Spedycja_FAS_Poniedzialek_Prep",
-    "Spedycja_FAS_Poniedzialek_Send",
-    "Spedycja_FAS_Wtorek_Send",
     "Spedycja_FAS_Piatek_Send",
     "Spedycja_FAS_Sroda_Send",
     "Spedycja_FAS_Sobota_Discovery",
@@ -105,5 +106,5 @@ Unregister-TaskNames -Names $legacySpedycjaPlTasks -Label "legacy Spedycja_PL"
 Unregister-TaskNames -Names $disabledTasks -Label "disabled"
 
 Write-Host "Gotowe. Sprawdz taskschd.msc (Spedycja_FAS_*)"
-Write-Host "Plan: pon-pt 18:00 discovery | nd 06:00 backfill | nd 09:00 Excel na Gmail (tylko GHA)"
-Write-Host "Prep/send/Drive NIE rejestrowane. Stare Kanbud_GU_* usuniete."
+Write-Host "Plan: pon-pt 07:00 discovery | nd 06:00 backfill | pon/wt 09:00 B2B send"
+Write-Host "Excel nd 09:00 nadal tylko GHA. Stare Kanbud_GU_* usuniete."

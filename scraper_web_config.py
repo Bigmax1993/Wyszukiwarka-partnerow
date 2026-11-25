@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: scraper_web_config — wspólne flagi ON/OFF (wyłącznie stałe bool, bez funkcji).
+#
+# CO ROBI: definiuje wartości domyślne przełączników: ENABLE_CLAUDE_PAGE_VERIFY,
+#   ENABLE_CLAUDE_CONTACT_EXTRACT, CLAUDE_UNLIMITED, ENABLE_CLAUDE_ROW_CLEANUP,
+#   ENABLE_CLAUDE_DISCOVERY_TERMS (domyślnie False) i ENABLE_PLAYWRIGHT_COOKIE_CONSENT.
+# ROLA W PIPELINE: konfiguracja etapów LLM (weryfikacja strony, ekstrakcja kontaktów, sprzątanie
+#   wierszy, terminy discovery) i obsługi banera cookie w Playwright.
+# ZALEŻNOŚCI: brak importów runtime (tylko __future__). Importowany przez pl_fas_spedycja_scraper
+#   (from scraper_web_config import ...) oraz playwright_cookie_consent (flaga cookie consent).
+#   Nic nie przyjmuje i nic nie zwraca — odczyt przez import stałych.
+# ============================================================
 """
 Wspólne flagi www / Claude / Playwright — kampania PL FAS / spedycja.
 

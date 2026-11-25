@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/integration/test_excel_pipeline.py
+# CO ROBI: testy integracyjne zapisu Excela w trybie append oraz wysyłki raportu (send_excel_gmail) w trybie dry-run, na plikach tymczasowych.
+# ROLA W PIPELINE: sprawdza spójność save_excel → plik XLSX → raport mailowy.
+# ZALEŻNOŚCI: pytest (znacznik integration), tempfile, unittest.mock, pandas/openpyxl (przez scraper), pl_fas_spedycja_scraper, scripts.send_excel_gmail.
+# WEJŚCIE/WYJŚCIE: Moduł nie przyjmuje argumentów CLI; pytest/unittest odkrywa i uruchamia testy; nic nie zwraca (wynik = zielone/czerwone testy).
+# ============================================================
 """Testy integracyjne: Excel append + send_excel_gmail dry-run."""
 from __future__ import annotations
 
@@ -17,6 +24,8 @@ _FAS_SNIPPET = (
 )
 
 
+# >>> OPIS FUNKCJI: funkcja _pipeline_row
+# Pomocnik testowy: buduje przykładowy wiersz pipeline zweryfikowanej firmy spedycyjnej. Parametry: url, name, email, chain (str — segmenty). Zwraca: dict (url, nazwa, email_target, retail_verified=True, is_gu=True, is_small_firm=True, retail_chains_found, page_snippet, bundesland). Efekty uboczne/błędy: brak.
 def _pipeline_row(url: str, name: str, email: str, chain: str) -> dict:
     return {
         "url": url,
@@ -33,7 +42,14 @@ def _pipeline_row(url: str, name: str, email: str, chain: str) -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: klasa TestExcelPipelineIntegration
+# Grupa testów: integracja zapisu Excela i raportu.
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class TestExcelPipelineIntegration:
+    # >>> OPIS FUNKCJI: funkcja TestExcelPipelineIntegration.test_save_excel_appends_to_existing_file
+    # Test: save_excel dopisuje nowe firmy do istniejącego pliku i zachowuje stare; arkusz ma kolumny Województwo i Segmenty/Spedycja.
+    # Parametry: self (+ fixtury pytest wskazane w nawiasie). Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: tworzy i usuwa tymczasowy plik XLSX. Błędy: AssertionError przy niespełnionej asercji.
     def test_save_excel_appends_to_existing_file(self):
         import pl_fas_spedycja_scraper as scraper
 
@@ -76,6 +92,10 @@ class TestExcelPipelineIntegration:
             del df
             gc.collect()
 
+    # >>> OPIS FUNKCJI: funkcja TestExcelPipelineIntegration.test_send_excel_gmail_dry_run
+    # Test: send_excel_report w trybie dry-run zwraca (True, 'dry_run') bez wysyłania maila.
+    # Parametry: self (+ fixtury pytest wskazane w nawiasie). Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patch resolve_excel_path; tymczasowy plik XLSX; brak SMTP. Błędy: AssertionError przy niespełnionej asercji.
     def test_send_excel_gmail_dry_run(self):
         from scripts import send_excel_gmail as mailer
 

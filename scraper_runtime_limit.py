@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu scraper_runtime_limit (komentarz — docstring poniżej jest pełny).
+#   Zależności: tylko stdlib (os, time, typing). Stan globalny: _SCRAPER_RUN_STARTED_AT (monotonic).
+#   Wejście: zmienna środowiskowa SCRAPER_MAX_RUNTIME_SECONDS (odczytywana RAZ przy imporcie).
+#   Wyjście: funkcje zwracają bool/float|None; request_stop_on_runtime_limit sygnalizuje stop pętlom
+#   scrapera bez rzucania wyjątku (cache i wiersze zostają zapisane w normalnym toku zamknięcia).
+#   Rola: zabezpieczenie wall-clock w discovery (Serper/Claude) w CI i na Raspberry Pi.
+# ============================================================
 """
 Twardy limit czasu działania scrapera (``SCRAPER_MAX_RUNTIME_SECONDS``).
 
@@ -53,6 +61,10 @@ def start_scraper_runtime_clock() -> None:
     _SCRAPER_RUN_STARTED_AT = time.monotonic()
 
 
+# >>> OPIS FUNKCJI: funkcja scraper_runtime_elapsed_seconds
+# Cel: podać czas, który upłynął od startu zegara scrapera.
+# Parametry: brak. Zwraca: float (sekundy, time.monotonic) lub None gdy zegar nie wystartował /
+#   limit wyłączony. Efekty uboczne: brak (odczyt zegara). Błędy: brak.
 def scraper_runtime_elapsed_seconds() -> float | None:
     """
     Sekundy od ``start_scraper_runtime_clock`` (monotonic).
@@ -64,6 +76,10 @@ def scraper_runtime_elapsed_seconds() -> float | None:
     return time.monotonic() - _SCRAPER_RUN_STARTED_AT
 
 
+# >>> OPIS FUNKCJI: funkcja is_scraper_runtime_limit_reached
+# Cel: sprawdzić, czy przekroczono limit SCRAPER_MAX_RUNTIME_SECONDS.
+# Parametry: brak. Zwraca: bool — False gdy limit <= 0, zegar nieaktywny lub elapsed < limit;
+#   True gdy elapsed >= limit. Efekty uboczne: brak. Błędy: brak.
 def is_scraper_runtime_limit_reached() -> bool:
     """
     Czy upłynął limit ``SCRAPER_MAX_RUNTIME_SECONDS`` od startu zegara.
@@ -101,6 +117,11 @@ def request_stop_on_runtime_limit(
     return True
 
 
+# >>> OPIS FUNKCJI: funkcja reset_scraper_runtime_clock_for_tests
+# Cel: wyzerować globalny znacznik startu zegara (używane w testach jednostkowych).
+# Parametry: brak. Zwraca: None.
+# Efekty uboczne: ustawia globalne _SCRAPER_RUN_STARTED_AT = None (nie zmienia limitu ze snapshotu env).
+# Błędy: brak.
 def reset_scraper_runtime_clock_for_tests() -> None:
     """
     Czyści globalny start zegara — tylko pod testy jednostkowe.

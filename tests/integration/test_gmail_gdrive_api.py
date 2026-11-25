@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/integration/test_gmail_gdrive_api.py
+# CO ROBI: uzupełnienie opisu: testy 'live' logowania do SMTP/IMAP oraz odczytu metadanych folderu Excela i pliku załącznika na Google Drive (bez wysyłania maili i bez zapisu na Drive). Szczegóły w docstringu modułu i funkcji.
+# ROLA W PIPELINE: weryfikuje poprawność sekretów Gmail/Drive w środowisku CI przed uruchomieniem workflow.
+# ZALEŻNOŚCI: pytest (znacznik api_live), smtplib, imaplib, ssl, google-api-python-client (leniwie), zmienne środowiskowe.
+# WEJŚCIE/WYJŚCIE: Testy pomijane, gdy brak sekretów; nie zwracają wartości.
+# ============================================================
 """
 Testy API live: Gmail (SMTP/IMAP) oraz Google Drive (folder Excela + załącznik).
 

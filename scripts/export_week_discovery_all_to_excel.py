@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł (skrypt CLI): scripts/export_week_discovery_all_to_excel — scalenie artefaktów discovery z kilku dni do jednego Excela.
+#
+# CO ROBI
+#   Pobiera (gh run download) artefakty "pl-spedycja-wyniki-pi" dla podanych run ID, scala wpisy contacts z cache JSON (z próbą odzysku przy uszkodzonym JSON),
+#   mapuje je na wiersze pipeline, a następnie zapisuje WSZYSTKIE firmy do Excela (arkusze Info, Kontakte, Wojewodztwa) bez ostrych filtrów eksportu
+#   (wpisy bez e-maila lub pominięte też trafiają do arkusza).
+# ROLA W PIPELINE: raport tygodniowy po cyklu discovery (etap „cache/Excel”). Uruchamiany ręcznie lub w CI.
+# ZALEŻNOŚCI: pl_fas_spedycja_scraper (jako scraper — normalizacja wierszy, kolumny Excela, cache), pl_spedycja_filter.get_discovery_wojewodztwo,
+#   libs.scraper_email_replies (ReplySyncConfig, write_excel_with_reply_styles), recover_pi_cache_contacts, GitHub CLI (gh), stdlib.
+# WEJŚCIE: --run-ids (wymagane), --repo, --label, --output. WYJŚCIE: plik Excel, zaktualizowany lokalny cache, kod wyjścia i podsumowanie na stdout.
+# ============================================================
 """
 Scal artefakty pl-spedycja-wyniki-pi z kilku dni discovery i zapisz WSZYSTKIE firmy z cache do Excela.
 
@@ -29,7 +41,13 @@ from pl_spedycja_filter import get_discovery_wojewodztwo  # noqa: E402
 import pl_fas_spedycja_scraper as scraper  # noqa: E402
 
 
+# >>> OPIS FUNKCJI: funkcja _contact_to_pipeline_row
+# Cel: zmapować wpis cache contacts na wiersz pipeline scrapera. Parametry: place_url (str); info (dict) — dane kontaktu z cache.
+# Zwraca: dict wiersza (po scraper.normalize_row_company_name) — nazwa, www, e-mail (email_target lub pierwszy z emails_found), pierwszy telefon, adres,
+# województwo (bundesland / get_discovery_wojewodztwo), flagi weryfikacji (retail_verified, is_gu, is_small_firm domyślnie True), powód weryfikacji, status e-maila.
+# Efekty uboczne/błędy: brak własnych (czysta transformacja).
 def _contact_to_pipeline_row(place_url: str, info: dict) -> dict:
+    """Zmapuj wpis cache contacts → wiersz pipeline scrapera."""
     name = (
         info.get("company_name_clean")
         or info.get("company_name")
@@ -79,7 +97,12 @@ def _contact_to_pipeline_row(place_url: str, info: dict) -> dict:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _pipeline_row_to_export
+# Cel: zamienić wiersz pipeline na wiersz arkusza Kontakte. Parametry: row (dict).
+# Zwraca: dict — kolumny z scraper.row_to_excel_kontakte_columns plus „WWW sprawdzone”, „Spedycja”, „Status” i „Weryfikacja” (powód do 200 znaków); e-mail wybrany przez
+# scraper.pick_best_email_for_inquiry, gdy brak email_target. Efekty uboczne/błędy: brak własnych.
 def _pipeline_row_to_export(row: dict) -> dict:
+    """Wiersz pipeline → kolumny arkusza Kontakte (eksport tygodnia)."""
     email = (row.get("email_target") or "").strip()
     if not email:
         found = [
@@ -104,12 +127,20 @@ def _pipeline_row_to_export(row: dict) -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja _load_cache_file
+# Cel: wczytać plik cache JSON. Parametry: path (Path). Zwraca: dict. Efekty uboczne: odczyt UTF-8. Błędy: JSONDecodeError/OSError propagują się.
 def _load_cache_file(path: Path) -> dict:
+    """Wczytaj plik cache JSON (utf-8)."""
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
+# >>> OPIS FUNKCJI: funkcja _download_pi_artifact
+# Cel: pobrać artefakt "pl-spedycja-wyniki-pi" z GitHub Actions. Parametry: run_id (str); dest (Path) — katalog docelowy; repo (keyword-only, str).
+# Zwraca: Path do Wyniki/pl_spedycja_cache.json albo None, gdy pobranie zawiodło lub brak pliku. Efekty uboczne: tworzy katalog, uruchamia "gh run download", log warning.
+# Błędy: kod wyjścia gh != 0 → warning i None.
 def _download_pi_artifact(run_id: str, dest: Path, *, repo: str) -> Path | None:
+    """Pobierz artefakt pl-spedycja-wyniki-pi; zwróć ścieżkę cache lub None."""
     dest.mkdir(parents=True, exist_ok=True)
     cmd = [
         "gh",
@@ -131,12 +162,17 @@ def _download_pi_artifact(run_id: str, dest: Path, *, repo: str) -> Path | None:
     return cache_path if cache_path.is_file() else None
 
 
+# >>> OPIS FUNKCJI: funkcja merge_contacts_from_run_ids
+# Cel: scalić contacts z wielu runów discovery. Parametry: run_ids (list[str]); repo (keyword-only, str); skip_corrupt (keyword-only, bool, True).
+# Zwraca: (merged: dict[url → info], loaded: list[run_id]) — późniejszy run nadpisuje wpis tego samego URL. Efekty uboczne: pobiera artefakty do katalogów tymczasowych, logi.
+# Błędy: uszkodzony JSON → próba odzysku (recover_contacts_from_cache_file) przy skip_corrupt=True, inaczej wyjątek; runy bez artefaktu pomijane.
 def merge_contacts_from_run_ids(
     run_ids: list[str],
     *,
     repo: str,
     skip_corrupt: bool = True,
 ) -> tuple[dict, list[str]]:
+    """Scal contacts z wielu runów pi; zwraca (merged, lista załadowanych run_id)."""
     merged: dict[str, dict] = {}
     loaded: list[str] = []
     for run_id in run_ids:
@@ -172,11 +208,16 @@ def merge_contacts_from_run_ids(
     return merged, loaded
 
 
+# >>> OPIS FUNKCJI: funkcja export_merged_contacts
+# Cel: zbudować wiersze pipeline i cache z scalonych kontaktów (bez ostrych filtrów). Parametry: contacts (dict); label (keyword-only, str) — etykieta tygodnia.
+# Zwraca: (rows: list[dict], cache: dict) — wiersze posortowane po nazwie i URL (pomijane bez nazwy i URL); cache z contacts i week_export_meta.
+# Efekty uboczne: scraper.sync_pipeline_rows_to_contacts_cache, log. Błędy: SystemExit("Brak firm do eksportu po scaleniu cache.") gdy nic do eksportu.
 def export_merged_contacts(
     contacts: dict[str, dict],
     *,
     label: str = "",
 ) -> tuple[list[dict], dict]:
+    """Zbuduj wiersze pipeline + cache z scalonych kontaktów (bez ostrych filtrów)."""
     logger = logging.getLogger("week_export")
     cache = scraper._empty_cache()
     cache["contacts"] = dict(contacts)
@@ -201,7 +242,12 @@ def export_merged_contacts(
     return rows, cache
 
 
+# >>> OPIS FUNKCJI: funkcja write_excel
+# Cel: zapisać Excel (Info, Kontakte, Wojewodztwa) i zaktualizować lokalny cache. Parametry: rows (list[dict]); cache (dict); logger; output (Path|None — domyślnie scraper.OUTPUT_FILE).
+# Zwraca: Path zapisanego pliku. Efekty uboczne: tworzy katalog, zapis xlsx (write_excel_with_reply_styles, lang="pl", campaign_id="pl_spedycja"), scraper.save_cache.
+# Błędy: propagowane.
 def write_excel(rows: list[dict], cache: dict, logger: logging.Logger, output: Path | None = None) -> Path:
+    """Zapisz Excel Kontakte/Wojewodztwa i zaktualizuj cache lokalny."""
     export_rows = [_pipeline_row_to_export(r) for r in rows]
     state_rows = scraper.build_bundesland_rows(rows)
     out = output or scraper.OUTPUT_FILE
@@ -227,7 +273,11 @@ def write_excel(rows: list[dict], cache: dict, logger: logging.Logger, output: P
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: CLI scalające artefakty i zapisujące Excel. Parametry: brak (argparse: --run-ids, --repo, --label, --output). Zwraca: int 0 po sukcesie.
+# Efekty uboczne: pobieranie artefaktów, zapis Excela i cache, wydruk podsumowania. Błędy: SystemExit, gdy nie udało się pobrać żadnego artefaktu lub brak firm.
 def main() -> int:
+    """CLI: scal artefakty pi z tygodnia i wyeksportuj wszystkie firmy do Excela."""
     parser = argparse.ArgumentParser(
         description="Scal pi z tygodnia discovery i zapisz wszystkie firmy do Excela"
     )

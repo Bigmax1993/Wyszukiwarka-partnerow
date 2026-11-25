@@ -8,6 +8,9 @@
 Enter-FasCampaign
 
 $env:SCRAPER_TIMEZONE = "Europe/Warsaw"
+$env:SCRAPER_MAX_RUNTIME_SECONDS = "21600"   # 6h: start 07:00 → stop ~13:00
+Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
+Remove-Item Env:SCRAPER_IGNORE_SEND_WINDOW -ErrorAction SilentlyContinue
 Remove-Item Env:DISABLE_SEND_WINDOW -ErrorAction SilentlyContinue
 Remove-Item Env:SCRAPER_IGNORE_SEND_WINDOW -ErrorAction SilentlyContinue
 

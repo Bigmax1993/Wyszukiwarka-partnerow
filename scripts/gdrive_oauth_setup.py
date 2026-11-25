@@ -1,4 +1,15 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł (skrypt CLI): scripts/gdrive_oauth_setup — jednorazowa konfiguracja OAuth dla uploadu na Google Drive z CI.
+#
+# CO ROBI: wczytuje plik klienta OAuth (secrets/gdrive-oauth-client.json), uruchamia przepływ logowania w przeglądarce
+#   (InstalledAppFlow), pobiera refresh token i — o ile nie podano --no-github — zapisuje trzy sekrety w GitHub
+#   (GDRIVE_OAUTH_CLIENT_ID, GDRIVE_OAUTH_CLIENT_SECRET, GDRIVE_OAUTH_REFRESH_TOKEN) poleceniem "gh secret set", a następnie uruchamia
+#   workflow "Sync wyniki Google Drive".
+# ROLA W PIPELINE: konfiguracja jednorazowa przed użyciem gdrive_upload_wyniki.py w GitHub Actions.
+# ZALEŻNOŚCI: google-auth-oauthlib (import leniwy), GitHub CLI (gh) w PATH, stdlib argparse, json, os, subprocess, sys, pathlib.
+# WEJŚCIE: --client-json, --repo (lub env GITHUB_REPO), --no-github. WYJŚCIE: kod wyjścia 0/1 i wydruk (sekret klienta maskowany, refresh token skrócony).
+# ============================================================
 """
 Jednorazowa konfiguracja OAuth do uploadu na folder „Mój dysk” (GitHub Actions).
 
@@ -22,6 +33,9 @@ DEFAULT_CLIENT = ROOT / "secrets" / "gdrive-oauth-client.json"
 DEFAULT_REPO = "Bigmax1993/Wyszukiwarka-partnerow"
 
 
+# >>> OPIS FUNKCJI: funkcja _load_client_config
+# Cel: wczytać konfigurację klienta OAuth z JSON pobranego z Google Cloud. Parametry: path (Path).
+# Zwraca: dict — sekcja "installed" lub "web". Efekty uboczne: odczyt pliku UTF-8. Błędy: SystemExit, gdy brak obu sekcji; JSONDecodeError/OSError propagują się.
 def _load_client_config(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     if "installed" in data:
@@ -31,6 +45,12 @@ def _load_client_config(path: Path) -> dict:
     raise SystemExit("JSON musi zawierac sekcje installed lub web (OAuth client).")
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: przeprowadzić konfigurację OAuth i (opcjonalnie) zapisać sekrety w GitHub. Parametry: brak (argparse: --client-json, --repo, --no-github).
+# Zwraca: int — 0 po sukcesie, 1 gdy brak pliku klienta, biblioteki google-auth-oauthlib lub refresh tokenu.
+# Efekty uboczne: otwiera przeglądarkę, uruchamia lokalny serwer OAuth, wywołuje "gh secret set" (3 razy) oraz "gh workflow run" (bez sprawdzania wyniku),
+# drukuje wartości (sekret maskowany).
+# Błędy: subprocess.run(check=True) przy "gh secret set" rzuca CalledProcessError, jeśli gh zawiedzie; brak pliku/biblioteki obsłużony komunikatem i kodem 1.
 def main() -> int:
     parser = argparse.ArgumentParser(description="OAuth setup dla uploadu Google Drive z CI")
     parser.add_argument("--client-json", type=Path, default=DEFAULT_CLIENT)

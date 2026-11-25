@@ -1,4 +1,15 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu commercial_contact_filter (komentarz; docstring poniżej szczegółowo opisuje reguły).
+#   Rola w pipeline: filtr higieniczny po stronie kontaktów — odcina urzędy, portale, katalogi, izby i
+#   fałszywe adresy z regexu (cookies, JS, SVG) zarówno przy zbieraniu (po Claude contact extract i regexie),
+#   jak i przy czyszczeniu cache Serper/contacts.
+#   Zależności: stdlib (re, urllib.parse); listy markerów są zdefiniowane w module. Jedyny import
+#   projektowy to pl_spedycja_keywords.BUNDESLAND_CONFIG, wykonywany leniwie wewnątrz
+#   _build_short_name_geo_markers (markery geo: miasta i województwa).
+#   Wejście: adres e-mail, URL, nazwa firmy lub wpis cache (dict). Wyjście: bool (czy odrzucić / czy firma
+#   jest komercyjna) albo przefiltrowana lista e-maili.
+# ============================================================
 """
 Filtr kontaktów komercyjnych — kampania PL FAS / spedycja.
 
@@ -542,6 +553,10 @@ def _build_short_name_geo_markers() -> tuple[str, ...]:
 _SHORT_NAME_GEO_MARKERS = _build_short_name_geo_markers()
 
 
+# >>> OPIS FUNKCJI: funkcja _normalize_host
+# Cel: wyłuskać sam host z URL-a albo z domeny adresu e-mail. Parametry: url_or_email (str|None).
+# Zwraca: str — lowercase, bez "www.", bez ścieżki; "" dla pustego/niepoprawnego wejścia.
+# Efekty uboczne: brak. Błędy: wyjątek urlparse jest łapany → "".
 def _normalize_host(url_or_email: str) -> str:
     """
     Wyciąga host z URL albo z domeny e-mail (po ``@``).
@@ -841,6 +856,11 @@ def is_valid_commercial_company_contact(
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja is_cache_contact_institution
+# Cel: zdecydować, czy wpis contacts w cache JSON jest instytucją (do usunięcia z cache).
+# Parametry: place_url (str) — klucz wpisu (URL miejsca); info (dict|None) — dane kontaktu.
+# Zwraca: bool — True, gdy info nie jest dict albo wpis NIE spełnia is_valid_commercial_company_contact
+# (odwrotność). Efekty uboczne: brak. Błędy: brak własnej obsługi.
 def is_cache_contact_institution(place_url: str, info: dict | None) -> bool:
     """
     True = wpis contacts w JSON cache należy usunąć (nie prywatna firma).
@@ -853,6 +873,11 @@ def is_cache_contact_institution(place_url: str, info: dict | None) -> bool:
     return not is_valid_commercial_company_contact(email=email, url=url, name=name)
 
 
+# >>> OPIS FUNKCJI: funkcja is_cache_serper_entry_institution
+# Cel: sprawdzić, czy wynik Serper zapisany w cache wygląda na urząd/portal (czyszczenie cache discovery).
+# Parametry: entry — dict z url/link i title albo sam URL (str).
+# Zwraca: bool — dla dict: is_non_commercial_contact(url, name=title); dla str: is_non_commercial_website;
+# inne typy → False. Efekty uboczne/błędy: brak.
 def is_cache_serper_entry_institution(entry) -> bool:
     """
     True = wynik Serper (dict url/title albo sam URL) wygląda na instytucję.

@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/test_claude_campaign.py
+# CO ROBI: testy warstwy Claude bez live API: parsowanie odpowiedzi cleanupu wiersza, weryfikacja strony (page verify), limity dzienne Claude, regex e-maili (do 50 znaków części lokalnej) oraz cleanup wiersza z fallbackiem regex.
+# ROLA W PIPELINE: zabezpieczenie regresji kroków 'Claude verify' i 'row cleanup' pipeline PL FAS (claude_page_verify, claude_client, claude_row_cleanup, pl_fas_spedycja_scraper).
+# ZALEŻNOŚCI: unittest, unittest.mock (MagicMock, patch), claude_row_cleanup, claude_page_verify, claude_client, pl_fas_spedycja_scraper; ścieżki repo dodawane do sys.path.
+# WEJŚCIE/WYJŚCIE: Moduł nie przyjmuje argumentów CLI; pytest/unittest odkrywa i uruchamia testy; nic nie zwraca (wynik = zielone/czerwone testy).
+# ============================================================
 """Testy warstwy Claude (bez live API) — PL FAS."""
 from __future__ import annotations
 
@@ -16,7 +23,14 @@ for p in (str(ROOT), str(LIBS)):
 from claude_row_cleanup import parse_claude_row_cleanup_response
 
 
+# >>> OPIS FUNKCJI: klasa ClaudeRowCleanupTest
+# Grupa testów: parser odpowiedzi JSON cleanupu wiersza (claude_row_cleanup).
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class ClaudeRowCleanupTest(unittest.TestCase):
+    # >>> OPIS FUNKCJI: funkcja ClaudeRowCleanupTest.test_parse_cleanup_json
+    # Test: parse_claude_row_cleanup_response czyta klucze company_name_clean, bundesland, handelsketten z poprawnego JSON-a.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_parse_cleanup_json(self):
         raw = (
             '{"company_name_clean":"Trans Spedycja Sp. z o.o.",'
@@ -29,6 +43,10 @@ class ClaudeRowCleanupTest(unittest.TestCase):
         self.assertEqual(parsed["bundesland"], "Mazowieckie")
         self.assertEqual(parsed["handelsketten"], "ftl, ltl")
 
+    # >>> OPIS FUNKCJI: funkcja ClaudeRowCleanupTest.test_parse_cleanup_pl_aliases
+    # Test: parser akceptuje polskie aliasy kluczy (wojewodztwo → bundesland, segmenty → handelsketten).
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_parse_cleanup_pl_aliases(self):
         raw = (
             '{"company_name_clean":"Euro Fracht S.A.",'
@@ -40,7 +58,14 @@ class ClaudeRowCleanupTest(unittest.TestCase):
         self.assertEqual(parsed["handelsketten"], "ftl, adr")
 
 
+# >>> OPIS FUNKCJI: klasa ClaudePageVerifyIntegrationTest
+# Grupa testów: integracja weryfikacji strony przez Claude, limitów API i cleanupu wiersza (z mockami).
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class ClaudePageVerifyIntegrationTest(unittest.TestCase):
+    # >>> OPIS FUNKCJI: funkcja ClaudePageVerifyIntegrationTest.test_claude_verify_accepts_spedycja_ftl
+    # Test: claude_verify_company_page akceptuje firmę spedycyjną FTL/LTL (verified=True, is_small_firm=True).
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche unittest.mock podmieniają klienta Claude/klucz API — brak połączeń sieciowych. Błędy: AssertionError przy niespełnionej asercji.
     def test_claude_verify_accepts_spedycja_ftl(self):
         from claude_page_verify import claude_verify_company_page
 
@@ -74,6 +99,10 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
             "ftl" in result["retail_chains"] or "ltl" in result["retail_chains"]
         )
 
+    # >>> OPIS FUNKCJI: funkcja ClaudePageVerifyIntegrationTest.test_claude_verify_rejects_large_3pl_not_small
+    # Test: duży 3PL (is_small_firm=false) jest odrzucany z powodem claude_nie_mala_firma.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche unittest.mock podmieniają klienta Claude/klucz API — brak połączeń sieciowych. Błędy: AssertionError przy niespełnionej asercji.
     def test_claude_verify_rejects_large_3pl_not_small(self):
         from claude_page_verify import claude_verify_company_page
 
@@ -106,6 +135,10 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
         self.assertFalse(result["is_small_firm"])
         self.assertEqual(result["verification_reason"], "claude_nie_mala_firma")
 
+    # >>> OPIS FUNKCJI: funkcja ClaudePageVerifyIntegrationTest.test_claude_reserve_blocks_api_at_buffer_when_limited
+    # Test: w trybie limitowanym wywołanie claude_generate_text przy wyczerpanym budżecie (dzienny limit − rezerwa discovery) kończy się RuntimeError.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche unittest.mock podmieniają klienta Claude/klucz API — brak połączeń sieciowych; modyfikuje globalną konfigurację limitów claude_client (configure_claude_limits). Błędy: AssertionError; RuntimeError jest oczekiwany wewnątrz assertRaises.
     def test_claude_reserve_blocks_api_at_buffer_when_limited(self):
         import claude_client as cc
 
@@ -118,6 +151,10 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     cc.claude_generate_text("ping", MagicMock(), cache=cache)
 
+    # >>> OPIS FUNKCJI: funkcja ClaudePageVerifyIntegrationTest.test_claude_unlimited_skips_daily_cap
+    # Test: w trybie unlimited limit dzienny nie blokuje zapytań, a licznik dzienny pozostaje bez zmian.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche unittest.mock podmieniają klienta Claude/klucz API — brak połączeń sieciowych; modyfikuje globalną konfigurację limitów claude_client. Błędy: AssertionError przy niespełnionej asercji.
     def test_claude_unlimited_skips_daily_cap(self):
         import claude_client as cc
 
@@ -140,6 +177,10 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
         self.assertIn("OK Sp. z o.o.", text)
         self.assertEqual(cache["claude_daily"]["2099-01-01"], cc.CLAUDE_DAILY_LIMIT)
 
+    # >>> OPIS FUNKCJI: funkcja ClaudePageVerifyIntegrationTest.test_wide_email_regex_50_chars_local
+    # Test: regex e-maili przyjmuje część lokalną o długości 50 znaków i odrzuca 51 znaków.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_wide_email_regex_50_chars_local(self):
         import pl_fas_spedycja_scraper as scraper
 
@@ -151,6 +192,10 @@ class ClaudePageVerifyIntegrationTest(unittest.TestCase):
         found_long = scraper._find_emails_in_text_regex(f"Kontakt: {too_long}")
         self.assertNotIn(too_long.lower(), found_long)
 
+    # >>> OPIS FUNKCJI: funkcja ClaudePageVerifyIntegrationTest.test_row_cleanup_claude_then_regex
+    # Test: cleanup wiersza: wynik Claude (nazwa, adres, telefon) jest dopełniony regexem e-mail/telefon ze snippeta strony i trafia do kolumn Excela.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche unittest.mock podmieniają klienta Claude/klucz API — brak połączeń sieciowych. Błędy: AssertionError przy niespełnionej asercji.
     def test_row_cleanup_claude_then_regex(self):
         import pl_fas_spedycja_scraper as scraper
 

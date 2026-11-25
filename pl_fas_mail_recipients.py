@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu pl_fas_mail_recipients (komentarz dodatkowy do docstringa).
+#   Wejście: adres To oraz opcjonalny ciąg Cc z MAIL_CC; wyjście: list[str] adresów Cc.
+#   Zależności: mail_transport.merge_mail_cc_recipients (import leniwy wewnątrz funkcji, aby brak
+#   libs/ nie psuł importu modułu). Błędy są wyciszane (zwrot []), więc wysyłka nigdy nie pada
+#   z powodu samego scalania Cc. Alias merge_mfg_campaign_cc wskazuje na tę samą funkcję.
+# ============================================================
 """
 Cc odbiorców kampanii PL FAS / spedycja.
 

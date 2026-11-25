@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł (skrypt CLI, jednorazowy): scripts/sync_week_single_excel_gdrive — jeden plik Excela tygodnia discovery na Google Drive.
+#
+# CO ROBI: scala artefakty discovery (run ID), zapisuje lokalny Excel o nazwie <prefiks kontakte>_<etykieta tygodnia>.xlsx, a następnie (o ile Drive nie jest wyłączony i nie podano
+#   --dry-run) usuwa z folderu Drive stare pliki Excela z prefiksem kontakte i wysyła nowy plik jako jedyną kopię.
+# ROLA W PIPELINE: ręczny krok porządkujący wyniki tygodnia na Drive (po discovery).
+# ZALEŻNOŚCI: export_week_discovery_all_to_excel (scalanie i zapis), gdrive_upload_wyniki (poświadczenia, Drive API, upload), recover_pi_cache_contacts, pl_spedycja_data_paths (ID folderu), scraper_env.
+# WEJŚCIE: --run-ids, --repo, --week-label, --folder-id, --dry-run. WYJŚCIE: lokalny Excel, zmiany na Drive, kod 0 lub SystemExit przy braku artefaktów.
+# UWAGA: operacja kasująca na Drive — działa tylko przy DISABLE_GOOGLE_DRIVE=0.
+# ============================================================
 """
 Jednorazowy sync tygodnia discovery: jeden plik Excel na Google Drive, usuniecie starych kopii.
 
@@ -28,7 +38,11 @@ from recover_pi_cache_contacts import recover_contacts_from_cache_file  # noqa: 
 _KONTAKTE_PREFIX = "pl_spedycja_kontakte"
 
 
+# >>> OPIS FUNKCJI: funkcja _list_kontakte_xlsx
+# Cel: wylistować pliki xlsx z prefiksem kontakte w folderze Drive. Parametry: service; folder_id (str). Zwraca: list[dict] (id, name) z paginacją (pageSize=100).
+# Efekty uboczne: zapytania list do API. Błędy: propagowane.
 def _list_kontakte_xlsx(service, folder_id: str) -> list[dict]:
+    """Lista plików .xlsx kontakte w folderze Drive."""
     q = (
         f"'{folder_id}' in parents and trashed = false and "
         f"mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and "
@@ -56,7 +70,11 @@ def _list_kontakte_xlsx(service, folder_id: str) -> list[dict]:
     return files
 
 
+# >>> OPIS FUNKCJI: funkcja _delete_drive_files
+# Cel: usunąć wskazane pliki z Drive. Parametry: service; files (list[dict] z id/name). Zwraca: int — liczba usuniętych plików (wpisy bez id pomijane).
+# Efekty uboczne: TRWAŁE usunięcie plików przez API, wydruk nazw. Błędy: wyjątki API propagują się.
 def _delete_drive_files(service, files: list[dict]) -> int:
+    """Usuń wskazane pliki Drive; zwróć liczbę skasowanych."""
     n = 0
     for f in files:
         fid = f.get("id")
@@ -69,7 +87,12 @@ def _delete_drive_files(service, files: list[dict]) -> int:
     return n
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: CLI synchronizujące jeden Excel tygodnia. Parametry: brak (argparse: --run-ids wymagane, --repo, --week-label, --folder-id, --dry-run). Zwraca: int 0 (także w trybie dry-run lub NO-OP przy wyłączonym Drive).
+# Efekty uboczne: pobranie artefaktów, zapis Excela w Wyniki/, na Drive: usunięcie starych kopii i upload nowego pliku (bez wersjonowania datą).
+# Błędy: SystemExit, gdy nie pobrano żadnego artefaktu; błąd odczytu scraper_env łapany (fallback na env DISABLE_GOOGLE_DRIVE); błędy API propagują się.
 def main() -> int:
+    """CLI: jeden Excel tygodnia na Drive (usuwa stare kopie kontakte)."""
     parser = argparse.ArgumentParser(
         description="Jeden Excel z tygodnia discovery na Drive (usuwa stare kopie kontakte)"
     )

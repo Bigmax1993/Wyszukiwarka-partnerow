@@ -1,4 +1,26 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: libs/mail_transport — wspólna warstwa poczty SMTP/IMAP (home.pl lub Gmail) sterowana zmiennymi środowiskowymi.
+#
+# CO ROBI
+#   Wybiera hosty/porty SMTP i IMAP (domyślnie serwer.home.pl; dla adresów gmail.com — smtp/imap.gmail.com),
+#   scala listy Cc/Bcc, wysyła wiadomości przez yagmail (z załącznikami lub bez), a po udanej wysyłce
+#   archiwizuje kopię: plik .eml w folderze wyslane/ (oraz załączniki w wyslane/zalaczniki/) i dopisanie
+#   do folderu Wysłane na serwerze IMAP (m.in. wykrywanie nazw Wysłane/Sent/Gesendet, próba utworzenia).
+#
+# ROLA W PIPELINE
+#   Ostatni etap („optional B2B email”) i raport Excel: send_smtp_email / send_smtp_email_with_attachments
+#   są wywoływane przez scraper i skrypty (np. send_excel_gmail.py). Kill switch DISABLE_CONTRACTOR_EMAILS
+#   jest sprawdzany w warstwie wyżej (scraper_env.is_contractor_emails_disabled), nie w tym module.
+#
+# ZALEŻNOŚCI
+#   polish_text (sanitize_email_body, sanitize_special_text), scraper_env (ENV_*, get_env_value, dane poczty),
+#   stdlib (imaplib, mimetypes, shutil, email.*, logging, time, re, pathlib); leniwie: yagmail (zewnętrzny),
+#   email_journal.log_mail_sent oraz project_config.get_data_root.
+# WEJŚCIE: adresy, temat, treść, ścieżki załączników, logger, kontekst (mail_type, campaign).
+# WYJŚCIE: send_* zwracają (ok: bool, info: str); pozostałe funkcje — str/int/list/Path/None zgodnie z opisem.
+# BŁĘDY: wysyłka nie rzuca wyjątków do wywołującego (zwraca (False, komunikat)); archiwizacja jest „best-effort”.
+# ============================================================
 """
 Wspólna warstwa poczty: SMTP/IMAP (home.pl lub Gmail) z zmiennych środowiskowych.
 """
@@ -44,18 +66,30 @@ _DEFAULT_SMTP_PORT_STARTTLS = 587
 _DEFAULT_IMAP_PORT_SSL = 993
 
 
+# >>> OPIS FUNKCJI: funkcja _truthy
+# Cel: zinterpretować tekst jako flagę. Parametry: raw (str). Zwraca: bool — True dla 1/true/yes/tak/on
+# (po strip, bez wielkości liter). Efekty uboczne/błędy: brak.
 def _truthy(raw: str) -> bool:
     return str(raw or "").strip().lower() in ("1", "true", "yes", "tak", "on")
 
 
+# >>> OPIS FUNKCJI: funkcja _mail_address
+# Cel: znormalizowany adres skrzynki nadawczej. Parametry: brak. Zwraca: str — get_mail_user() po strip i lower(), "" gdy brak.
+# Efekty uboczne/błędy: jak get_env_value.
 def _mail_address() -> str:
     return (get_mail_user() or "").strip().lower()
 
 
+# >>> OPIS FUNKCJI: funkcja _is_gmail_address
+# Cel: rozpoznać adres Gmail. Parametry: addr (str). Zwraca: bool — True, gdy niepusty i zawiera @gmail.com lub @googlemail.com.
+# Efekty uboczne/błędy: brak.
 def _is_gmail_address(addr: str) -> bool:
     return bool(addr) and ("@gmail.com" in addr or "@googlemail.com" in addr)
 
 
+# >>> OPIS FUNKCJI: funkcja get_smtp_host
+# Cel: ustalić host SMTP. Parametry: brak. Zwraca: str — SMTP_HOST z env; gdy brak i nadawca ma adres Gmail:
+# "smtp.gmail.com"; w innym przypadku "" (wtedy yagmail użyje własnych domyślnych). Efekty uboczne/błędy: odczyt env.
 def get_smtp_host() -> str:
     host = get_env_value(ENV_SMTP_HOST).strip()
     if host:
@@ -65,6 +99,9 @@ def get_smtp_host() -> str:
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja get_imap_host
+# Cel: ustalić host IMAP. Parametry: brak. Zwraca: str — IMAP_HOST z env; dla Gmail "imap.gmail.com";
+# w pozostałych przypadkach domyślnie "serwer.home.pl". Efekty uboczne/błędy: odczyt env.
 def get_imap_host() -> str:
     host = get_env_value(ENV_IMAP_HOST).strip()
     if host:
@@ -74,6 +111,10 @@ def get_imap_host() -> str:
     return _DEFAULT_HOMEPL_IMAP
 
 
+# >>> OPIS FUNKCJI: funkcja mail_provider_label
+# Cel: czytelna etykieta dostawcy poczty do logów/GUI. Parametry: brak.
+# Zwraca: str — "home.pl", "Gmail", host SMTP, domena adresu nadawcy lub "" (kolejność jak w kodzie).
+# Efekty uboczne/błędy: odczyt env.
 def mail_provider_label() -> str:
     smtp = get_smtp_host().lower()
     addr = _mail_address()
@@ -89,6 +130,9 @@ def mail_provider_label() -> str:
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja _smtp_port
+# Cel: ustalić port SMTP. Parametry: brak. Zwraca: int — SMTP_PORT (jeśli cyfry); inaczej 465, gdy SMTP_SSL jest
+# włączone, a w pozostałych przypadkach 587 (STARTTLS). Efekty uboczne/błędy: odczyt env.
 def _smtp_port() -> int:
     raw = get_env_value(ENV_SMTP_PORT).strip()
     if raw.isdigit():
@@ -98,6 +142,8 @@ def _smtp_port() -> int:
     return _DEFAULT_SMTP_PORT_STARTTLS
 
 
+# >>> OPIS FUNKCJI: funkcja _imap_port
+# Cel: ustalić port IMAP. Parametry: brak. Zwraca: int — IMAP_PORT (jeśli cyfry) lub 993. Efekty uboczne/błędy: odczyt env.
 def _imap_port() -> int:
     raw = get_env_value(ENV_IMAP_PORT).strip()
     if raw.isdigit():
@@ -105,16 +151,26 @@ def _imap_port() -> int:
     return _DEFAULT_IMAP_PORT_SSL
 
 
+# >>> OPIS FUNKCJI: funkcja _smtp_use_ssl
+# Cel: zdecydować, czy użyć SSL (a nie STARTTLS) dla SMTP. Parametry: brak.
+# Zwraca: bool — wartość SMTP_SSL, jeśli ustawiona; inaczej True, gdy port == 465. Efekty uboczne/błędy: odczyt env.
 def _smtp_use_ssl() -> bool:
     if get_env_value(ENV_SMTP_SSL).strip():
         return _truthy(get_env_value(ENV_SMTP_SSL))
     return _smtp_port() == _DEFAULT_SMTP_PORT_SSL
 
 
+# >>> OPIS FUNKCJI: funkcja _sanitize_sender_name
+# Cel: oczyścić nazwę nadawcy z nowych linii (ochrona przed wstrzyknięciem nagłówków). Parametry: name (str).
+# Zwraca: str — pojedyncze spacje, bez \n. Efekty uboczne/błędy: brak.
 def _sanitize_sender_name(name: str) -> str:
     return " ".join((name or "").replace("\n", " ").split()).strip()
 
 
+# >>> OPIS FUNKCJI: funkcja _split_recipients
+# Cel: rozbić listę odbiorców z env (separatory "," i ";"). Parametry: raw (str).
+# Zwraca: list[str] — niepuste adresy po strip; [] dla pustego wejścia oraz dla wartości 0/off/false/no/nie.
+# Efekty uboczne/błędy: brak.
 def _split_recipients(raw: str) -> list[str]:
     if not raw:
         return []
@@ -128,6 +184,11 @@ def _split_recipients(raw: str) -> list[str]:
 EMAIL_ALWAYS_CC: tuple[str, ...] = ()
 
 
+# >>> OPIS FUNKCJI: funkcja merge_mail_cc_recipients
+# Cel: złożyć listę Cc: adresy z MAIL_CC (przekazane jako extra_env_cc) + stała EMAIL_ALWAYS_CC (domyślnie pusta).
+# Parametry: primary_to (str) — główny odbiorca (nie trafi do Cc); extra_env_cc (str) — surowy ciąg adresów.
+# Zwraca: list[str] — bez duplikatów (porównanie lower) i bez adresu głównego, w kolejności wystąpienia.
+# Efekty uboczne/błędy: brak (czysta funkcja).
 def merge_mail_cc_recipients(primary_to: str, extra_env_cc: str = "") -> list[str]:
     """MAIL_CC z .env + EMAIL_ALWAYS_CC (bez duplikatu i bez adresu głównego odbiorcy)."""
     out: list[str] = []
@@ -145,6 +206,10 @@ def merge_mail_cc_recipients(primary_to: str, extra_env_cc: str = "") -> list[st
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja get_wyslane_dir
+# Cel: lokalny folder kopii wysłanych maili (.eml). Parametry: brak.
+# Zwraca: Path — <get_data_root()>/wyslane; przy błędzie importu/odczytu project_config — <katalog libs>/wyslane.
+# Efekty uboczne: leniwy import project_config. Błędy: dowolny wyjątek łapany → ścieżka awaryjna. Nie tworzy katalogu.
 def get_wyslane_dir() -> Path:
     """Lokalny folder kopii wysłanych maili (.eml)."""
     try:
@@ -156,11 +221,21 @@ def get_wyslane_dir() -> Path:
     return root / "wyslane"
 
 
+# >>> OPIS FUNKCJI: funkcja _safe_eml_stem
+# Cel: bezpieczny fragment nazwy pliku .eml. Parametry: text (str); max_len (int, 48).
+# Zwraca: str — znaki spoza [\w.-] zamienione na "_", ucięte do max_len, obcięte "._" z brzegów; "mail" gdy pusty.
+# Efekty uboczne/błędy: brak.
 def _safe_eml_stem(text: str, max_len: int = 48) -> str:
     stem = re.sub(r"[^\w.\-]+", "_", (text or "").strip(), flags=re.UNICODE)
     return (stem[:max_len] or "mail").strip("._")
 
 
+# >>> OPIS FUNKCJI: funkcja _build_sent_email_message
+# Cel: zbudować obiekt EmailMessage odpowiadający wysłanej wiadomości (do archiwizacji .eml i IMAP).
+# Parametry: username (str) — adres nadawcy; to_email, subject, body (str); cc (keyword-only, list[str]);
+# attachment_paths (list[str]|None) — istniejące pliki dołączane z typem MIME zgadywanym przez mimetypes.
+# Zwraca: EmailMessage z nagłówkami From (z nazwą nadawcy, jeśli ustawiona), To, Cc, Subject, Date, Message-ID.
+# Efekty uboczne: odczyt plików załączników; nieistniejące pliki są pomijane. Błędy: błędy odczytu plików propagują się.
 def _build_sent_email_message(
     username: str,
     to_email: str,
@@ -202,6 +277,12 @@ def _build_sent_email_message(
     return msg
 
 
+# >>> OPIS FUNKCJI: funkcja _save_wyslane_eml
+# Cel: zapisać kopię wiadomości jako .eml oraz skopiować załączniki. Parametry: msg (EmailMessage); to_email (str);
+# subject (str); attachment_paths (list[str]|None).
+# Zwraca: Path do pliku <data>_<godzina>_<odbiorca>_<temat>.eml w folderze wyslane/.
+# Efekty uboczne: tworzy katalogi, zapisuje .eml, a załączniki kopiuje (shutil.copy2) do wyslane/zalaczniki/<stamp>_<odbiorca>/.
+# Błędy: błędy I/O propagują się (łapie je archive_sent_message).
 def _save_wyslane_eml(
     msg: EmailMessage,
     to_email: str,
@@ -225,6 +306,10 @@ def _save_wyslane_eml(
     return path
 
 
+# >>> OPIS FUNKCJI: funkcja _imap_mailbox_names
+# Cel: pobrać listę nazw folderów z serwera IMAP. Parametry: mail (imaplib.IMAP4_SSL) — zalogowane połączenie.
+# Zwraca: list[str] nazw wyciągniętych z odpowiedzi LIST; [] przy błędzie lub odpowiedzi innej niż OK.
+# Efekty uboczne: komenda LIST na serwerze. Błędy: wyjątek z mail.list() łapany → [].
 def _imap_mailbox_names(mail: imaplib.IMAP4_SSL) -> list[str]:
     try:
         typ, data = mail.list()
@@ -247,6 +332,11 @@ def _imap_mailbox_names(mail: imaplib.IMAP4_SSL) -> list[str]:
     return names
 
 
+# >>> OPIS FUNKCJI: funkcja _resolve_sent_mailbox
+# Cel: znaleźć na serwerze folder „Wysłane”. Parametry: mail (połączenie IMAP); logger (Logger|None) — do logu debug.
+# Zwraca: str — nazwa folderu (najpierw dokładne dopasowanie z listy preferowanych: Wysłane/Wyslane/Sent/
+# [Gmail]/Sent Mail/Gesendet…, potem dowolny folder zawierający "sent", "wys" lub "gesendet") albo None.
+# Efekty uboczne: LIST na serwerze, log debug. Błędy: brak własnej obsługi (opiera się na _imap_mailbox_names).
 def _resolve_sent_mailbox(
     mail: imaplib.IMAP4_SSL,
     logger: logging.Logger | None = None,
@@ -281,6 +371,10 @@ def _resolve_sent_mailbox(
     return None
 
 
+# >>> OPIS FUNKCJI: funkcja _try_create_sent_mailbox
+# Cel: spróbować utworzyć folder Wysłane, gdy go brak. Parametry: mail (połączenie IMAP).
+# Zwraca: str — nazwa pierwszego udanie utworzonego folderu (INBOX.Wyslane, Wyslane, INBOX.Sent, Sent) lub None.
+# Efekty uboczne: komendy CREATE na serwerze. Błędy: wyjątki per kandydat łapane (continue).
 def _try_create_sent_mailbox(mail: imaplib.IMAP4_SSL) -> str | None:
     for candidate in (
         "INBOX.Wyslane",
@@ -297,6 +391,13 @@ def _try_create_sent_mailbox(mail: imaplib.IMAP4_SSL) -> str | None:
     return None
 
 
+# >>> OPIS FUNKCJI: funkcja _append_to_imap_sent
+# Cel: dopisać wysłaną wiadomość do folderu Wysłane na serwerze IMAP. Parametry: username, password (str);
+# msg (EmailMessage); logger (Logger).
+# Zwraca: bool — True po sukcesie albo gdy archiwizacja IMAP jest wyłączona (MAIL_ARCHIVE_IMAP != włączone);
+# False, gdy brak IMAP_HOST, nie znaleziono folderu, APPEND nie zwrócił OK lub wystąpił błąd.
+# Efekty uboczne: połączenie IMAP SSL, login, APPEND z flagą \Seen, logout w finally; logowanie ostrzeżeń.
+# Błędy: wyjątki są łapane i logowane (warning) — zwracane False; błąd logout ignorowany.
 def _append_to_imap_sent(
     username: str,
     password: str,
@@ -358,6 +459,12 @@ def _append_to_imap_sent(
             pass
 
 
+# >>> OPIS FUNKCJI: funkcja archive_sent_message
+# Cel: po udanej wysyłce SMTP zachować kopię: .eml w wyslane/ oraz wpis w IMAP Wysłane.
+# Parametry: to_email, subject, body (str); logger; cc, bcc (keyword-only, list|None; bcc nie jest zapisywany
+# w nagłówkach); attachment_paths (keyword-only, list|None).
+# Zwraca: None. Efekty uboczne: budowa wiadomości, zapis plików, połączenie IMAP (tylko gdy jest hasło).
+# Błędy: brak loginu → ciche wyjście; błąd zapisu .eml łapany i logowany (warning); błędy IMAP obsługuje _append_to_imap_sent.
 def archive_sent_message(
     to_email: str,
     subject: str,
@@ -431,6 +538,11 @@ def archive_sent_email_message(
         )
 
 
+# >>> OPIS FUNKCJI: funkcja _yagmail_smtp
+# Cel: utworzyć klienta yagmail.SMTP z konfiguracji środowiska. Parametry: brak.
+# Zwraca: obiekt yagmail.SMTP — bez hosta: ustawienia domyślne yagmail; z hostem: host, port, SSL lub STARTTLS wg _smtp_use_ssl.
+# Efekty uboczne: leniwy import yagmail; połączenie jest tworzone przez yagmail.
+# Błędy: ImportError, gdy brak yagmail; ValueError("brak MAIL_USER / MAIL_PASSWORD (lub GMAIL_*)") bez danych logowania.
 def _yagmail_smtp() -> Any:
     import yagmail  # pyright: ignore[reportMissingImports]
 
@@ -455,6 +567,14 @@ def _yagmail_smtp() -> Any:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja send_smtp_email
+# Cel: wysłać wiadomość tekstową przez SMTP (yagmail). Parametry: to_email, subject, body (str); logger;
+# mail_type (keyword-only, str) — etykieta do logów/dziennika; campaign (keyword-only, str).
+# Zwraca: (ok: bool, info: str) — (True, "gesendet") po sukcesie; (False, komunikat) przy braku yagmail,
+# braku danych logowania lub błędzie wysyłki.
+# Efekty uboczne: wysyłka maila z Cc (merge_mail_cc_recipients) i Bcc (MAIL_BCC), sanitizacja tematu/treści,
+# archive_sent_message, log do email_journal (błąd zapisu dziennika ignorowany), logowanie.
+# Błędy: wyjątki z wysyłki są łapane — warning w logu, wpis KIND_ERROR i zwrot (False, str(e)).
 def send_smtp_email(
     to_email: str,
     subject: str,
@@ -535,6 +655,13 @@ def send_smtp_email(
         return False, str(e)
 
 
+# >>> OPIS FUNKCJI: funkcja send_smtp_email_with_attachments
+# Cel: jak send_smtp_email, ale z załącznikami. Parametry: to_email, subject, body (str); attachment_paths
+# (list[str|Path]) — wszystkie pliki muszą istnieć; logger; mail_type (keyword-only, domyślnie "załącznik"); campaign.
+# Zwraca: (ok, info) — (True, "gesendet") po sukcesie; (False, komunikat) przy braku yagmail, danych logowania,
+# nieistniejącym pliku ("brak pliku załącznika: ...") lub błędzie wysyłki.
+# Efekty uboczne: wysyłka z załącznikami, archiwizacja kopii (wraz z załącznikami), wpis w email_journal, logowanie.
+# Błędy: wyjątki z wysyłki łapane → warning + (False, str(e)).
 def send_smtp_email_with_attachments(
     to_email: str,
     subject: str,

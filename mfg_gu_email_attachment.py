@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: mfg_gu_email_attachment — SHIM legacy do pl_fas_email_attachment.
+#
+# CO ROBI: zachowuje starą nazwę modułu (kampania MFG/GU) i przekierowuje wszystkie symbole
+#   (ATTACHMENT_FILENAME, ATTACHMENT_EXTRA_FILENAME, ID/URL Drive, ensure_*/resolve_* — także aliasy
+#   mfg) do pl_fas_email_attachment.
+# ROLA W PIPELINE: tylko kompatybilność importów; załączniki do maili B2B obsługuje moduł docelowy.
+# ZALEŻNOŚCI: pl_fas_email_attachment. Funkcji własnych brak.
+# ============================================================
 """
 Shim legacy: ``mfg_gu_email_attachment`` → ``pl_fas_email_attachment``.
 

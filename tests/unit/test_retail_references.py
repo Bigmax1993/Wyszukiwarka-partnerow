@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/unit/test_retail_references.py
+# CO ROBI: testy jednostkowe dowodów oferty/referencji spedycji na stronie www (pl_spedycja_filter).
+# ROLA W PIPELINE: bramka 'dowód oferty' w weryfikacji ICP.
+# ZALEŻNOŚCI: pytest, pl_spedycja_filter.
+# WEJŚCIE/WYJŚCIE: Moduł nie przyjmuje argumentów CLI; pytest/unittest odkrywa i uruchamia testy; nic nie zwraca (wynik = zielone/czerwone testy).
+# ============================================================
 """Testy jednostkowe: referencje / oferta spedycji na stronie www."""
 from __future__ import annotations
 
@@ -14,7 +21,14 @@ from pl_spedycja_filter import (
 pytestmark = pytest.mark.unit
 
 
+# >>> OPIS FUNKCJI: klasa TestRetailReferenceEvidence
+# Grupa testów: dowody referencji.
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class TestRetailReferenceEvidence:
+    # >>> OPIS FUNKCJI: funkcja TestRetailReferenceEvidence.test_classic_referenzen_tab
+    # Test: klasyczna zakładka referencji jest dowodem.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_classic_referenzen_tab(self):
         text = (
             "Firma spedycyjna. Referencje: transport FTL "
@@ -22,6 +36,10 @@ class TestRetailReferenceEvidence:
         )
         assert has_retail_references_or_portfolio(text)
 
+    # >>> OPIS FUNKCJI: funkcja TestRetailReferenceEvidence.test_offer_section_with_role_and_segment
+    # Test: oferta z rolą i segmentem jest dowodem.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_offer_section_with_role_and_segment(self):
         text = (
             "Firma spedycyjna. Flota i trasy. "
@@ -29,6 +47,10 @@ class TestRetailReferenceEvidence:
         )
         assert has_market_project_evidence_on_website(text)
 
+    # >>> OPIS FUNKCJI: funkcja TestRetailReferenceEvidence.test_gu_without_reference_rejected
+    # Test: rola bez referencji nie jest dowodem.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_gu_without_reference_rejected(self):
         text = (
             "Firma budowlana. Budujemy biurowce i hale. "
@@ -36,6 +58,10 @@ class TestRetailReferenceEvidence:
         )
         assert not has_market_project_evidence_on_website(text)
 
+    # >>> OPIS FUNKCJI: funkcja TestRetailReferenceEvidence.test_chain_markers_detected_in_text
+    # Test: markery segmentów (ftl, ltl) są wykrywane w tekście.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_chain_markers_detected_in_text(self):
         text = "Oferta: FTL, LTL i fracht Europa."
         low = text.lower()
@@ -43,6 +69,10 @@ class TestRetailReferenceEvidence:
         assert any("ftl" in m for m in found)
         assert any("ltl" in m for m in found)
 
+    # >>> OPIS FUNKCJI: funkcja TestRetailReferenceEvidence.test_portfolio_negates_non_retail
+    # Test: tekst negujący portfolio jest rozpoznawany.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_portfolio_negates_non_retail(self):
         text = "O nas: wyłącznie usługi magazynowe. Nie prowadzimy spedycji."
         assert portfolio_negates_market_projects(text)

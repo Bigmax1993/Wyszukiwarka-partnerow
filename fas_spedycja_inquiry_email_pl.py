@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu fas_spedycja_inquiry_email_pl (komentarz; docstring poniżej opisuje stałe i szablony).
+#   Rola w pipeline: warstwa treści maila B2B (oferta systemu FAS dla biur spedycyjnych) — stałe nadawcy,
+#   temat, podpis i draft bazowy / fallback bez LLM. Aktualnie wysyłka B2B jest domyślnie wyłączona
+#   (DISABLE_CONTRACTOR_EMAILS), ale moduł pozostaje źródłem treści.
+#   Zależności: tylko __future__ (brak importów projektowych). Wejście: build_fas_inquiry_draft_pl() bez
+#   argumentów; build_fas_inquiry_fallback_pl(company_name="") z opcjonalną nazwą firmy. Wyjście: str
+#   (treść maila).
+# ============================================================
 """
 Outreach B2B PL — oferta systemu **Forwarding Assistant (FAS)** dla biur spedycyjnych.
 

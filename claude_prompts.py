@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu claude_prompts (komentarz; docstring poniżej wylicza funkcje publiczne).
+#   Rola w pipeline: biblioteka szablonów — każdy etap LLM (page verify, row cleanup, contact extract,
+#   discovery terms, mail personalizowany) ma tu funkcję budującą tekst promptu; moduł NIE wywołuje API.
+#   Zależności: campaign_keyword_profile (próbki słów kluczowych), pl_spedycja_filter
+#   (TRANSPORT_SEGMENT_MARKERS), stdlib re. Wołany przez: page_verify, claude_row_cleanup (przez wrapper
+#   scrapera), claude_contact_extract, claude_discovery_terms oraz moduły maila.
+#   Wejście: kontekst firmy / tekst crawla / parametry limitów. Wyjście: str (prompt).
+# ============================================================
 """
 Prompty Claude (Sonnet / Haiku) dla kampanii PL spedycja drogowa (FAS).
 
@@ -277,17 +286,23 @@ def build_page_verify_prompt(
     small_kw = ", ".join(small_company_markers_sample())
     large_kw = ", ".join(large_company_markers_sample())
     return f"""ROLA
-Jesteś analitykiem due-diligence B2B dla outreachu do małych/średnich biur
-spedycyjnych w Polsce (organizacja transportu drogowego FTL/LTL, Europa,
-cross-dock, ADR, chłodnia — Forwarding Assistant / FAS).
+Jesteś sędzią ICP (warstwa 2) dla outreachu Forwarding Assistant / FAS w Polsce.
+Warstwa 1 (reguły) już odcięła oczywisty śmieć — Ty oceniasz STRONĘ FIRMY.
+
+ICP = TAK gdy to:
+• biuro spedycyjne / freight forwarder / organizator transportu drogowego, ALBO
+• firma transportowa drogowa (przewozy FTL/LTL/całopojazdowe / międzynarodowe
+  dla klientów — nie kurier paczkowy).
 
 NIE jesteś celem: kurierzy paczkowi (InPost/DPD/DHL Express jako produkt),
 giełdy frachtów (Timocom, Trans.eu), portale ogłoszeń, media logistyczne,
-same firmy produkcyjne z flotą własną, oferty pracy HR, urzędy.
+producent/hurtownia z wyłącznie flotą własną (bez oferty dla klientów),
+same oferty pracy HR, urzędy, przeprowadzki, autokary, OSK.
 
-WAŻNE — słowo „spedycja” nie zawsze widnieje w H1.
-Decyduje DOWÓD usług: oferta spedycji / linie / flota / FTL / LTL / ADR /
-temperatura / organizacja przewozu — nie sam logo 3PL.
+WAŻNE — słowo „spedycja” NIE musi być w H1.
+Decyduje DOWÓD usług drogowych dla klientów: FTL / LTL / ADR / fracht /
+temperatura / linie / flota usługowa / organizacja przewozu.
+Zakładka „Praca / kariera” na stronie REALNEJ firmy NIE jest powodem odrzutu.
 
 ZADANIE
 Przeczytaj pełny wyciąg ze strony (wszystkie podstrony crawla, oznaczone
@@ -295,26 +310,31 @@ Przeczytaj pełny wyciąg ze strony (wszystkie podstrony crawla, oznaczone
 Czy firma pasuje do ICP? Odpowiedz TYLKO obiektem JSON — bez Markdown, bez komentarza.
 
 CO LICZY SIĘ JAKO DOWÓD (oferta — nie musi być osobna zakładka „Referencje")
-• Opis usług: spedycja drogowa, FTL, LTL, grupaż, fracht, transport międzynarodowy
-• Flota / naczepy / plandeki / chłodnie / ADR jako usługa (nie tylko „nasze ciężarówki producenta")
+• Opis usług: spedycja drogowa LUB firma transportowa drogowa, FTL, LTL, grupaż,
+  fracht, transport międzynarodowy / całopojazdowy
+• Flota / naczepy / plandeki / chłodnie / ADR jako usługa dla klientów
+  (nie tylko „nasze ciężarówki producenta do własnych towarów")
 • Linie / kierunki (PL–DE, Europa), cross-dock, dyspozytornia
-• Sekcje Oferta / Usługi / O firmie wskazujące organizację transportu dla klientów
+• Sekcje Oferta / Usługi / O firmie wskazujące przewozy drogowe dla klientów
 
 NATYCHMIAST is_gu=false / has_retail_context=false
 • Kurier paczkowy / last-mile (InPost, DPD, DHL Express, Orlen Paczka) jako główny produkt
-• Giełda frachtów / marketplace (Timocom, Trans.eu, TimoCom) bez własnego biura spedycji
-• Portal ogłoszeń, media, blog branżowy, pracuj.pl / oferty kierowcy
-• Producent / hurtownia z wyłącznie flotą własną (bez oferty spedycji dla klientów)
+• Giełda frachtów / marketplace (Timocom, Trans.eu, TimoCom) bez własnego biura
+• Portal ogłoszeń, media, blog branżowy, SAM portal pracy (pracuj.pl) jako podmiot
+• Producent / hurtownia z wyłącznie flotą własną (bez oferty transportu/spedycji
+  dla klientów zewnętrznych)
 • Przeprowadzki, autokary, OSK, urzędy
 
 DRZEWO DECYZYJNE (w tej kolejności)
-1) Kurier / giełda / portal / HR / urząd dominuje → is_gu=false
+1) Kurier / giełda / portal / HR-jako-podmiot / urząd dominuje → is_gu=false
 2) primary_role = Kurier / GieldaFrachtowa / PortalOgloszeniowy / MediaLogistyczne /
    TylkoFlotaWlasna / Producent / HR / Urzad → is_gu=false
-3) Brak roli spedytora / freight forwardera → is_gu=false
+3) Brak roli spedycji ORAZ brak firmy transportowej drogowej (dla klientów) →
+   is_gu=false
 4) Jest „logistyka", ale BRAK usług drogowych ICP (FTL/LTL/fracht/ADR/…) →
    has_retail_context=false
-5) Pasuje: is_gu=true, has_retail_context=true, matched_chains niepuste
+5) Pasuje (spedycja LUB firma transportowa drogowa + segment): is_gu=true,
+   has_retail_context=true, matched_chains niepuste
 6) Wielkość → is_small_firm
 
 SEGMENTY — WHITELIST (matched_chains)
@@ -326,9 +346,10 @@ Dozwolone TYLKO: {_REQUIRED_CHAINS}
 • Bez nazwanego segmentu z whitelisty → has_retail_context=false
 
 POLE is_small_firm — TY DECYDUJESZ (obowiązkowe)
-Cel: lokalne / regionalne biuro spedycji — NIE globalny 3PL.
+Cel: lokalna / regionalna firma spedycyjna LUB transportowa — NIE globalny 3PL.
 is_small_firm=true np.:
-• firma rodzinna, biuro w jednym mieście, polska spedycja, właściciel, < ~250 osób
+• firma rodzinna, biuro w jednym mieście, polski przewoźnik/spedytor, właściciel,
+  < ~250 osób
 is_small_firm=false np.:
 • Raben, DB Schenker, DHL, DPD, InPost, GEODIS, Kuehne+Nagel, DSV, PEKAES,
   FM Logistic, holding, giełda globalna
@@ -337,8 +358,11 @@ MAŁE — INDYCJE: {small_kw}
 DUŻE — INDYCJE: {large_kw}
 
 POLE is_gu (nazwa legacy) — znaczenie w tej kampanii
-true = biuro spedycyjne / freight forwarder / organizator transportu drogowego
-(NIE kurier paczkowy, NIE sama flota producenta).
+true = biuro spedycyjne / freight forwarder / organizator transportu DROGOWEGO
+       ALBO firma transportowa drogowa świadcząca przewozy dla klientów
+(NIE kurier paczkowy, NIE sama flota producenta do własnych towarów).
+Gdy ICP = TAK → MUSISZ ustawić is_gu=true (także dla firmy transportowej bez
+słowa „spedycja” w nazwie) — inaczej lead nie wejdzie do Excela.
 
 POLE has_retail_context (nazwa legacy) — znaczenie
 true = ma usługi drogowe ICP (FTL/LTL/fracht/ADR/… z whitelisty) w ofercie.
@@ -346,7 +370,7 @@ true = ma usługi drogowe ICP (FTL/LTL/fracht/ADR/… z whitelisty) w ofercie.
 W WĄTPLIWOŚCI: is_gu=false, has_retail_context=false.
 
 SŁOWA POMOCNICZE (nie muszą wystąpić wszystkie)
-[ROLA SPEDYCJI]
+[ROLA SPEDYCJI / TRANSPORT]
 {role_kw}
 
 [USŁUGI / KONTEKST TRANSPORTOWY]
@@ -359,12 +383,16 @@ SŁOWA POMOCNICZE (nie muszą wystąpić wszystkie)
 {neg_kw}
 
 PRZYKŁADY
-✓ TAK: „Spedycja drogowa FTL/LTL Europa" + sekcja Oferta
-✓ TAK: „Organizujemy transport całopojazdowy i grupaż; ADR; chłodnia"
-✓ TAK: „Freight forwarding PL–DE" + flota / linie → matched_chains=[ftl] lub [europa]
+✓ TAK: „Spedycja drogowa FTL/LTL Europa" + sekcja Oferta → is_gu=true
+✓ TAK: „Organizujemy transport całopojazdowy i grupaż; ADR; chłodnia" → is_gu=true
+✓ TAK: „Freight forwarding PL–DE" + flota / linie → is_gu=true, matched_chains=[ftl]/[europa]
+✓ TAK: „Firma transportowa — przewozy FTL Europa / flota naczep" (bez słowa spedycja)
+  → is_gu=true, primary_role=FirmaTransportowa
+✓ TAK: HIT Transport + FTL/spedycja, nawet jeśli jest zakładka „Praca" → is_gu=true
 ✗ NIE: „Nadaj paczkę InPost / DPD" (kurier)
 ✗ NIE: „Giełda Timocom — znajdź fracht" (marketplace)
-✗ NIE: „Pracuj jako kierowca — oferty pracy" (HR)
+✗ NIE: sam portal „Pracuj jako kierowca — oferty pracy" (HR jako podmiot)
+✗ NIE: fabryka mebli z flotą tylko do własnych dostaw (TylkoFlotaWlasna)
 ✗ NIE: Raben / DB Schenker jako główny podmiot → is_small_firm=false
 
 POLA JSON (dokładnie te klucze)
@@ -382,11 +410,12 @@ POLA JSON (dokładnie te klucze)
 
 REGUŁY
 • matched_*: tylko pojęcia z wyciągu (w tym URL/alt) — nic nie wymyślaj
-• matched_gu_keywords: np. spedycja, spedytor, freight forwarder, dyspozytornia
+• matched_gu_keywords: np. spedycja, spedytor, freight forwarder, dyspozytornia,
+  firma transportowa
 • matched_retail_keywords: np. transport drogowy, organizacja przewozu, flota, oferta
 • matched_chains: segmenty whitelist (ftl, ltl, adr, …) — małe litery
-• primary_role: Spedytor, FreightForwarder, Kurier, GieldaFrachtowa, PortalOgloszeniowy,
-  MediaLogistyczne, TylkoFlotaWlasna, Producent, HR, Urzad, Inne
+• primary_role: Spedytor, FreightForwarder, FirmaTransportowa, Kurier, GieldaFrachtowa,
+  PortalOgloszeniowy, MediaLogistyczne, TylkoFlotaWlasna, Producent, HR, Urzad, Inne
 • reason: max. 2 zdania PL — jaki dowód oferty (lub dlaczego odrzut)
 
 KONTEKST
@@ -988,6 +1017,12 @@ def debug_claude_prompts(
     }
 
 
+# >>> OPIS FUNKCJI: funkcja _cli_debug
+# Cel: CLI diagnostyczne promptów (python claude_prompts.py [--preview NAZWA] [--json]), bez wywołania API.
+# Parametry: argv (list[str]|None). Zwraca: int — 0, gdy wszystkie testy sanity z debug_claude_prompts
+# przeszły (checks_ok), w przeciwnym razie 1.
+# Efekty uboczne: wypisuje raport (lub JSON bez pełnych promptów) na stdout; opcjonalnie pełny tekst
+# wybranego promptu. Błędy: argparse kończy proces przy błędnych argumentach; brak innego try/except.
 def _cli_debug(argv: list[str] | None = None) -> int:
     """CLI: ``python claude_prompts.py [--preview NAME] [--json]``."""
     import argparse

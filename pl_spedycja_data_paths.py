@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu pl_spedycja_data_paths (komentarz; docstring poniżej opisuje drzewo katalogów).
+#   Rola w pipeline: najwcześniejszy krok — ustala, gdzie scraper zapisuje cache JSON, Excel, log i kopie
+#   wysłanych maili (Wyniki/, wyslane/); chroni przed zapisem cache/logu na zmapowany Google Drive.
+#   Zależności: stdlib (os, pathlib). Wejście: katalog kampanii (Path), zmienna env KANBUD_DATA_DIR.
+#   Wyjście: Path-e katalogów/plików, słowniki ścieżek, tekst/JSON diagnostyczny (CLI). Shim legacy:
+#   campaign_data_paths.py.
+# ============================================================
 """
 Ścieżki wyników kampanii PL FAS / spedycja: cache JSON, Excel, log, ``wyslane/``.
 
@@ -124,6 +132,10 @@ def wyslane_dir(data_root: Path) -> Path:
     return data_root / "wyslane"
 
 
+# >>> OPIS FUNKCJI: funkcja ensure_data_dirs
+# Cel: utworzyć katalogi Wyniki/ i wyslane/ pod data_root. Parametry: data_root (Path).
+# Zwraca: None. Efekty uboczne: mkdir(parents=True, exist_ok=True) — idempotentne, nie kasuje plików.
+# Błędy: OSError (brak uprawnień, ścieżka-plik) nie jest łapany.
 def ensure_data_dirs(data_root: Path) -> None:
     """
     Tworzy ``Wyniki/`` i ``wyslane/`` jeśli nie istnieją (``mkdir -p``).

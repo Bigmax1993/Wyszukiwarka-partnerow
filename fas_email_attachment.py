@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: fas_email_attachment — SHIM skrótowy do pl_fas_email_attachment.
+#
+# CO ROBI: reeksportuje stałe (nazwy plików załączników, ID/URL plików na Google Drive) oraz
+#   funkcje resolve_/ensure_ dla załączników maila FAS (oraz aliasy ensure_mfg_/resolve_mfg_
+#   zachowane dla starego kodu).
+# ROLA W PIPELINE: krótsza nazwa modułu dla kodu wysyłki zapytań (warstwa e-mail B2B).
+# ZALEŻNOŚCI: pl_fas_email_attachment. Funkcji własnych brak.
+# ============================================================
 """
 Shim: ``fas_email_attachment`` → ``pl_fas_email_attachment``.
 

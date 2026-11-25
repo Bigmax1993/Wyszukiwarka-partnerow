@@ -1,4 +1,25 @@
 ﻿# -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: libs/scraper_env — jedno miejsce odczytu zmiennych środowiskowych i flag „kill-switch”.
+#
+# CO ROBI
+#   Definiuje nazwy zmiennych (ENV_*: klucze Serper/Anthropic, dane SMTP/IMAP, Cc/Bcc, katalog danych,
+#   adres raportu Excel), ładuje plik .env (libs/.env) przy imporcie (bez nadpisywania już ustawionych
+#   zmiennych), udostępnia get_env_value (proces → cache → PowerShell User → Machine na Windows)
+#   oraz gettery kluczy/poczty i flagi: is_contractor_emails_disabled, is_google_drive_disabled,
+#   is_excel_report_email_disabled. Flagi DISABLE_CONTRACTOR_EMAILS i DISABLE_GOOGLE_DRIVE są
+#   domyślnie WŁĄCZONE (funkcje wyłączone; rollback = ustawić 0), DISABLE_EXCEL_REPORT_EMAIL domyślnie wyłączona.
+#
+# ROLA W PIPELINE
+#   Bramka konfiguracji dla wszystkich etapów: discovery (klucz Serper), Claude (klucz Anthropic),
+#   e-mail B2B (kill switch + dane SMTP), raport Excel na adres wewnętrzny, Google Drive.
+#
+# ZALEŻNOŚCI: os, subprocess, pathlib oraz polish_text.configure_utf8_environment (import w module).
+# STAN GLOBALNY: _DOTENV_LOADED, _WINDOWS_ENV_CACHE (cache odczytów z rejestru/PowerShell),
+#   _LEGACY_ENV_ALIASES (GMAIL_* → MAIL_*).
+# BEZPIECZEŃSTWO: check_env_status zwraca tylko informację „ustawiona/nie”, nigdy wartości sekretów.
+# Uwaga: docstring pliku zawiera zniekształcone znaki (mojibake) — pozostawiono bez zmian.
+# ============================================================
 """
 Wsp├│lne nazwy zmiennych ┼Ťrodowiskowych (identyczne jak w PowerShell User/Machine).
 
@@ -19,6 +40,11 @@ from pathlib import Path
 _DOTENV_LOADED = False
 
 
+# >>> OPIS FUNKCJI: funkcja _load_dotenv_file
+# Cel: jednorazowo wczytać plik .env z katalogu libs/ do os.environ. Parametry: brak. Zwraca: None.
+# Efekty uboczne: ustawia zmienne tylko wtedy, gdy ich jeszcze nie ma w os.environ; pomija puste linie,
+# komentarze (#) i linie bez "="; zdejmuje cudzysłowy z wartości; ustawia globalne _DOTENV_LOADED.
+# Błędy: OSError przy czytaniu pliku jest łapany i ignorowany; brak pliku .env = brak działania.
 def _load_dotenv_file() -> None:
     """┼üaduje .env z katalogu projektu (nie commituj .env z kluczami)."""
     global _DOTENV_LOADED
@@ -85,28 +111,45 @@ REQUIRED_FOR_EMAIL = (ENV_MAIL_USER, ENV_MAIL_PASSWORD)
 REQUIRED_FOR_SERPER = (ENV_SERPER_API_KEY,)
 
 
+# >>> OPIS FUNKCJI: funkcja _env_flag_default_on
+# Cel: odczytać flagę, która domyślnie jest WŁĄCZONA. Parametry: name (str) — nazwa zmiennej.
+# Zwraca: bool — False tylko dla wartości 0/false/no/off (bez wielkości liter); brak zmiennej = True.
+# Efekty uboczne: odczyt os.getenv. Błędy: brak.
 def _env_flag_default_on(name: str) -> bool:
     """True gdy flaga włączona (domyślnie 1). Wyłącz: 0 / false / no / off."""
     raw = (os.getenv(name) if os.getenv(name) is not None else "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
 
+# >>> OPIS FUNKCJI: funkcja _env_flag_default_off
+# Cel: odczytać flagę, która domyślnie jest WYŁĄCZONA. Parametry: name (str).
+# Zwraca: bool — True tylko dla 1/true/yes/on; brak zmiennej = False. Efekty uboczne/błędy: brak.
 def _env_flag_default_off(name: str) -> bool:
     """True gdy flaga włączona (domyślnie 0 = flaga off). Włącz: 1 / true / yes / on."""
     raw = (os.getenv(name) if os.getenv(name) is not None else "0").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
+# >>> OPIS FUNKCJI: funkcja is_contractor_emails_disabled
+# Cel: kill switch wysyłki maili B2B do kontrahentów (DISABLE_CONTRACTOR_EMAILS). Parametry: brak.
+# Zwraca: bool — domyślnie True (wysyłka wyłączona); False dopiero po ustawieniu zmiennej na 0/false/no/off.
+# Efekty uboczne/błędy: brak (dry-run treści nadal możliwy).
 def is_contractor_emails_disabled() -> bool:
     """ZERO maili B2B do kontrahentów (SMTP/yagmail). Dry-run treści nadal OK."""
     return _env_flag_default_on(ENV_DISABLE_CONTRACTOR_EMAILS)
 
 
+# >>> OPIS FUNKCJI: funkcja is_google_drive_disabled
+# Cel: kill switch integracji Google Drive (DISABLE_GOOGLE_DRIVE) — brak upload/sync/download. Parametry: brak.
+# Zwraca: bool — domyślnie True (wyłączone). Efekty uboczne/błędy: brak.
 def is_google_drive_disabled() -> bool:
     """ZERO upload/sync/download przez Google Drive API oraz ścieżek Drive for desktop."""
     return _env_flag_default_on(ENV_DISABLE_GOOGLE_DRIVE)
 
 
+# >>> OPIS FUNKCJI: funkcja is_excel_report_email_disabled
+# Cel: sprawdzić, czy wyłączono wewnętrzny raport Excel e-mailem (DISABLE_EXCEL_REPORT_EMAIL). Parametry: brak.
+# Zwraca: bool — domyślnie False (raport WŁĄCZONY; odbiorca EXCEL_REPORT_TO). Efekty uboczne/błędy: brak.
 def is_excel_report_email_disabled() -> bool:
     """Raport wewnętrzny Excel (jeden odbiorca EXCEL_REPORT_TO). Domyślnie WŁĄCZONY."""
     return _env_flag_default_off(ENV_DISABLE_EXCEL_REPORT_EMAIL)
@@ -119,6 +162,13 @@ _LEGACY_ENV_ALIASES = {
 }
 
 
+# >>> OPIS FUNKCJI: funkcja get_env_value
+# Cel: odczytać zmienną środowiskową z kilku źródeł. Parametry: name (str); default (str, "").
+# Zwraca: str — pierwsza niepusta wartość (po strip) w kolejności: os.environ[name], alias legacy
+# (GMAIL_* → MAIL_*), cache procesu, a na Windows PowerShell [Environment]::GetEnvironmentVariable
+# dla zakresów User i Machine; w ostatniej kolejności default.
+# Efekty uboczne: na Windows uruchamia subprocess powershell (stderr wyciszony); wartość znaleziona w
+# rejestrze trafia do cache i os.environ (setdefault). Błędy: wyjątki subprocess są łapane (continue).
 def get_env_value(name: str, default: str = "") -> str:
     """Odczyt zmiennej: proces Ôćĺ cache Ôćĺ PowerShell User Ôćĺ PowerShell Machine."""
     val = os.getenv(name)
@@ -154,42 +204,69 @@ def get_env_value(name: str, default: str = "") -> str:
     return (default or "").strip()
 
 
+# >>> OPIS FUNKCJI: funkcja get_serper_api_key
+# Cel: klucz API Serper. Parametry: brak. Zwraca: str — SERPER_API_KEY lub "". Efekty uboczne/błędy: jak get_env_value.
 def get_serper_api_key() -> str:
     return get_env_value(ENV_SERPER_API_KEY)
 
 
+# >>> OPIS FUNKCJI: funkcja get_anthropic_api_key
+# Cel: klucz API Anthropic (Claude). Parametry: brak. Zwraca: str — ANTHROPIC_API_KEY lub "".
+# Efekty uboczne/błędy: jak get_env_value.
 def get_anthropic_api_key() -> str:
     return get_env_value(ENV_ANTHROPIC_API_KEY)
 
 
+# >>> OPIS FUNKCJI: funkcja get_excel_report_to
+# Cel: adres odbiorcy raportu Excel. Parametry: brak. Zwraca: str — EXCEL_REPORT_TO lub DEFAULT_EXCEL_REPORT_TO.
+# Efekty uboczne/błędy: jak get_env_value.
 def get_excel_report_to() -> str:
     return get_env_value(ENV_EXCEL_REPORT_TO) or DEFAULT_EXCEL_REPORT_TO
 
 
+# >>> OPIS FUNKCJI: funkcja get_mail_user
+# Cel: login skrzynki do SMTP/IMAP. Parametry: brak. Zwraca: str — MAIL_USER, a gdy pusty GMAIL_USER (legacy).
+# Efekty uboczne/błędy: jak get_env_value.
 def get_mail_user() -> str:
     return get_env_value(ENV_MAIL_USER) or get_env_value(ENV_GMAIL_USER)
 
 
+# >>> OPIS FUNKCJI: funkcja get_mail_password
+# Cel: hasło skrzynki. Parametry: brak. Zwraca: str — MAIL_PASSWORD, a gdy pusty GMAIL_APP_PASSWORD.
+# Efekty uboczne/błędy: jak get_env_value. Uwaga: wartość sekretna — nie logować.
 def get_mail_password() -> str:
     return get_env_value(ENV_MAIL_PASSWORD) or get_env_value(ENV_GMAIL_APP_PASSWORD)
 
 
+# >>> OPIS FUNKCJI: funkcja get_mail_sender_name
+# Cel: nazwa nadawcy w polu From. Parametry: brak. Zwraca: str — MAIL_SENDER_NAME, a gdy pusty GMAIL_SENDER_NAME.
+# Efekty uboczne/błędy: jak get_env_value.
 def get_mail_sender_name() -> str:
     return get_env_value(ENV_MAIL_SENDER_NAME) or get_env_value(ENV_GMAIL_SENDER_NAME)
 
 
+# >>> OPIS FUNKCJI: funkcja get_gmail_user
+# Cel: alias zgodności wstecznej dla get_mail_user. Parametry: brak. Zwraca: str. Efekty uboczne/błędy: jak get_mail_user.
 def get_gmail_user() -> str:
     return get_mail_user()
 
 
+# >>> OPIS FUNKCJI: funkcja get_gmail_app_password
+# Cel: alias zgodności wstecznej dla get_mail_password. Parametry: brak. Zwraca: str (sekret). Efekty uboczne/błędy: jak get_mail_password.
 def get_gmail_app_password() -> str:
     return get_mail_password()
 
 
+# >>> OPIS FUNKCJI: funkcja get_gmail_sender_name
+# Cel: alias zgodności wstecznej dla get_mail_sender_name. Parametry: brak. Zwraca: str. Efekty uboczne/błędy: jak get_mail_sender_name.
 def get_gmail_sender_name() -> str:
     return get_mail_sender_name()
 
 
+# >>> OPIS FUNKCJI: funkcja check_env_status
+# Cel: sprawdzić, które ważne zmienne są ustawione, bez ujawniania wartości. Parametry: brak.
+# Zwraca: dict[str, bool] — nazwa zmiennej → czy ma niepustą wartość (Serper, dane poczty, SMTP/IMAP, Anthropic, modele Claude).
+# Efekty uboczne: odczyty get_env_value (na Windows mogą uruchamiać PowerShell). Błędy: brak.
 def check_env_status() -> dict[str, bool]:
     """Kt├│re zmienne s─ů ustawione (bez ujawniania warto┼Ťci)."""
     all_names = (

@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu claude_page_verify (komentarz; docstring poniżej opisuje 5 kroków orkiestracji).
+#   Rola w pipeline: etap „Claude verify” — jedyna funkcja publiczna claude_verify_company_page łączy cache,
+#   twarde NO-GO, wywołanie Claude (tier verify = Sonnet) i interpretację odpowiedzi w page_verify.
+#   Zależności: claude_client.claude_generate_text, page_verify (hard_reject_page_context, build_page_verify_prompt,
+#   parse_page_verify_response, apply_page_verdict …), pl_spedycja_filter.is_forwarder_role,
+#   scraper_env.get_anthropic_api_key. Wejście: nazwa firmy, www, tekst strony, cache, logger.
+#   Wyjście: dict werdyktu albo None (brak klucza API lub błąd).
+# ============================================================
 """
 Claude: weryfikacja kontekstu strony www pod ICP PL spedycja (FTL/LTL).
 

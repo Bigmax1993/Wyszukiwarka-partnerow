@@ -1,4 +1,19 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: libs/email_custom_template — własny szablon zapytania ofertowego z GUI + dopracowanie przez Claude per firma.
+#
+# CO ROBI
+#   Bierze treść wklejoną przez użytkownika (draft), buduje prompt Claude (PL domyślnie, DE legacy), wywołuje
+#   model, parsuje JSON {subject, body} i zwraca gotowy temat oraz treść. Gdy API jest niedostępne —
+#   fallback wstawia nazwę firmy do treści. NIE dotyczy maili przypominających (scraper_email_replies.build_reminder_email).
+#
+# ROLA W PIPELINE: opcjonalna personalizacja maila B2B przed wysyłką; scraper pyta inquiry_try_custom i, gdy
+#   zwróci None, używa standardowego generatora treści.
+#
+# ZALEŻNOŚCI: claude_client.claude_generate_text, claude_prompts (build_custom_email_prompt_pl/_de),
+#   scraper_env.get_anthropic_api_key; stdlib json, logging, re, typing.
+# WEJŚCIE: draft, nazwa firmy, język, miasto/adres dostawy, logger. WYJŚCIE: krotki (subject, body) lub None.
+# ============================================================
 """
 Własna treść zapytania ofertowego z GUI → dopracowanie Claude per firma.
 Nie dotyczy maili przypominających (scraper_email_replies.build_reminder_email).
@@ -48,7 +63,13 @@ def build_custom_draft_prompt(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja parse_llm_email_json
+# Cel: sparsować odpowiedź Claude z JSON-em {"subject","body"}. Parametry: text (str|None) — odpowiedź (wycinany
+# obiekt JSON regexem od "{" do "}"); fallback_subject (str) — temat, gdy model go nie zwrócił.
+# Zwraca: (subject: str, body: str). Efekty uboczne: brak.
+# Błędy: JSONDecodeError przy niepoprawnym JSON; ValueError("Claude zwróciło pusty body") gdy body jest puste.
 def parse_llm_email_json(text: str, fallback_subject: str) -> tuple[str, str]:
+    """Parsuj JSON Claude (subject/body); zwraca (subject, body)."""
     match = re.search(r"\{.*\}", text or "", flags=re.DOTALL)
     raw = match.group(0) if match else (text or "")
     parsed = json.loads(raw)
@@ -59,9 +80,15 @@ def parse_llm_email_json(text: str, fallback_subject: str) -> tuple[str, str]:
     return subject, body
 
 
+# >>> OPIS FUNKCJI: funkcja claude_generate_text_simple
+# Cel: jednorazowe wywołanie Claude bez cache i bez dziennego limitu. Parametry: prompt (str);
+# logger (Logger|None — domyślnie logger "email_custom_template"). Zwraca: (text, model).
+# Efekty uboczne: żądanie HTTP do API (cache=None, bypass_daily_limit=True), logowanie przez claude_generate_text.
+# Błędy: RuntimeError("Brak ANTHROPIC_API_KEY") gdy brak klucza; błędy sieci/API z claude_generate_text propagują się.
 def claude_generate_text_simple(
     prompt: str, logger: logging.Logger | None = None
 ) -> tuple[str, str]:
+    """Jednorazowe wywołanie Claude bez limitu dziennego cache; (text, model)."""
     api_key = get_anthropic_api_key()
     if not api_key:
         raise RuntimeError("Brak ANTHROPIC_API_KEY")
@@ -75,6 +102,14 @@ def claude_generate_text_simple(
     return text, model
 
 
+# >>> OPIS FUNKCJI: funkcja beautify_custom_email_draft
+# Cel: dopracować wklejony szablon pod konkretną firmę (zapytanie ofertowe) przy pomocy Claude.
+# Parametry: draft (str) — treść użytkownika; company_name (str); lang (str, "pl"|"de", domyślnie "pl");
+# fallback_subject (keyword-only, str) — temat awaryjny (domyślnie dla PL: "Maksym / Forwarding Assistant —
+# szybkie pytanie do spedycji", dla DE: "Preisanfrage – <firma>"); city_name, delivery_address (keyword-only, str);
+# logger (Logger|None). Zwraca: (subject, body) po parse_llm_email_json.
+# Efekty uboczne: wywołanie API Claude, logowanie modelu.
+# Błędy: ValueError("Pusta treść szablonu") dla pustego draftu; błędy API/JSON propagują się do wywołującego.
 def beautify_custom_email_draft(
     draft: str,
     company_name: str,
@@ -110,6 +145,10 @@ def beautify_custom_email_draft(
     return parse_llm_email_json(text, fallback_subject)
 
 
+# >>> OPIS FUNKCJI: funkcja fallback_email_without_llm
+# Cel: awaryjna wersja maila bez LLM. Parametry: draft (str); company_name (str); fallback_subject (str).
+# Zwraca: (fallback_subject, body) — body = draft, a jeśli nazwy firmy nie ma w treści, dopisane "(Firma: <nazwa>)".
+# Efekty uboczne/błędy: brak.
 def fallback_email_without_llm(
     draft: str, company_name: str, fallback_subject: str
 ) -> tuple[str, str]:

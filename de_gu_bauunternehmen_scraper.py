@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: de_gu_bauunternehmen_scraper — SHIM legacy → pl_fas_spedycja_scraper.
+#
+# CO ROBI
+#   Zachowuje starą nazwę pliku wejściowego (kampania DE GU/Filialbau). Importuje wszystko z
+#   pl_fas_spedycja_scraper (import *) oraz main(). Przy uruchomieniu jako skrypt wykonuje
+#   runpy.run_path na pl_fas_spedycja_scraper.py z run_name="__main__", dzięki czemu działają
+#   wszystkie przełączniki CLI (--test, --run-config, --serper-only-discovery itd.).
+#
+# ROLA W PIPELINE: wyłącznie most kompatybilności (stare workflowy, harmonogramy, dokumentacja).
+# ZALEŻNOŚCI: pl_fas_spedycja_scraper, runpy, pathlib. Funkcji własnych brak.
+# ============================================================
 """
 Shim legacy: ``de_gu_bauunternehmen_scraper`` → ``pl_fas_spedycja_scraper``.
 

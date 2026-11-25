@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu scripts/export_fas_email_attachment (komentarz; docstring poniżej opisuje CLI).
+#   Rola w pipeline: przygotowanie załączników PPTX (oferta + prezentacja) do maili B2B przed SMTP — pobranie z Google Drive do assets/campaign/.
+#   Zależności: pl_fas_email_attachment (ID plików Drive, ensure_*), poświadczenia GDRIVE_OAUTH_*, stdlib argparse, logging, os, sys, pathlib.
+#   Wejście: opcje CLI (np. --primary-only, --dest). Wyjście: kod wyjścia i pliki PPTX na dysku. Na czas pobrania tymczasowo zmienia flagę DISABLE_GOOGLE_DRIVE (patrz docstring).
+# ============================================================
 """
 Eksport załączników B2B FAS z Google Drive → lokalne PPTX (GHA / lokalnie).
 

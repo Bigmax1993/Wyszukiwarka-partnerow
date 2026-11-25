@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu pl_fas_email_attachment (komentarz; docstring poniżej opisuje dwa pliki B2B).
+#   Rola w pipeline: przygotowanie załączników PPTX dla maili B2B przed SMTP (get_email_attachments_pl_fas w scraperze):
+#   szuka lokalnie (env → cache Wyniki/ → assets/campaign/), a gdy brak, pobiera z Google Drive.
+#   Zależności: stdlib (io, logging, os, pathlib); biblioteki Google (Drive API) importowane leniwie.
+#   Shimy: fas_email_attachment, mfg_gu_email_attachment. Wejście: zmienne środowiskowe, katalog danych,
+#   logger. Wyjście: Path do pliku lub lista Path-ów (albo None/pusta lista, gdy brak).
+# ============================================================
 """
 Stałe załączniki do maili B2B (kampania PL FAS / spedycja).
 

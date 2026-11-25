@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu playwright_cookie_consent (komentarz; docstring poniżej opisuje zakres).
+#   Rola w pipeline: opcjonalny fallback pobierania strony — gdy zwykły requests zwrócił HTML zasłonięty
+#   banerem cookie (CMP), headless Chromium klika akceptację i oddaje pełniejszy DOM parserowi kontaktów.
+#   Zależności: logging, re, typing; Playwright importowany leniwie (brak → pusty HTML);
+#   scraper_web_config.ENABLE_PLAYWRIGHT_COOKIE_CONSENT (przy braku importu domyślnie włączone).
+#   Wejście: tekst/HTML strony, URL, logger. Wyjście: bool (czy odpalić / czy kliknięto) lub HTML (str);
+#   funkcje diagnostyczne zwracają dict. Błędy Playwrighta są logowane na debug i nie przerywają pipeline.
+# ============================================================
 """
 Playwright: wyłącznie zamknięcie banerów cookie (bez CAPTCHA, bez map).
 
@@ -371,6 +380,11 @@ def _click_by_exact_polish_text(page, logger: logging.Logger) -> bool:
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja _click_by_polish_role_regex
+# Cel: kliknąć przycisk akceptacji cookie dopasowany regexem nazwy roli (warianty fleksyjne, np.
+# „Akceptuj wszystkie cookies”). Parametry: page — strona Playwright; logger.
+# Zwraca: bool — True po pierwszym udanym kliknięciu (przez _click_locator_safe), inaczej False.
+# Efekty uboczne: klik w przeglądarce. Błędy: wyjątki dla pojedynczego wzorca są ignorowane (continue).
 def _click_by_polish_role_regex(page, logger: logging.Logger) -> bool:
     """
     Klika ``button`` po regexie nazwy (gdy dokładny tekst się nie zgadza).

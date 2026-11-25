@@ -15,15 +15,34 @@ Profil słów: [`campaign_keyword_profile.py`](../campaign_keyword_profile.py)
 
 ## Przepływ
 
+**Warstwa 1 (reguły = tylko śmieci):** `reject_reason` / `hard_reject_page_context` —
+portale pracy, giełdy, big 3PL, media, gov/OSK, kurier. **Nie** ocenia
+„dobra spedycja vs dobry transport”. Firma transportowa/spedycyjna + zakładka
+„praca” **nie** jest odrzucana (`_is_irrelevant_role_junk`).
+
 ```text
-1) reject_reason(email, url, name, text)
+1) reject_reason(email, url, name, text)   ← warstwa 1 (śmieci)
       media | exchange_or_big3pl | courier | irrelevant_role | irrelevant_service | non_commercial
 2) portfolio_negates  →  „nie prowadzimy spedycji” itd.
 3a) www / Excel / is_valid_* :
       has_forwarding_signal = ROLE ∧ (SEGMENT ∨ SERVICE)
 3b) Serper (tytuł/snippet + fraza) :
       has_serper_trade_signal = ROLE ∨ SEGMENT ∨ SERVICE
+4) Claude page_verify                      ← warstwa 2 (sędzia ICP)
 ```
+
+**Warstwa 2 (Claude):** prompt w `claude_prompts.build_page_verify_prompt`.
+TAK = biuro spedycji **lub** firma transportowa drogowa (dla klientów) → `is_gu=true`.
+NIE = kurier, giełda, portal, flota producenta, przeprowadzki, OSK, sam HR.
+
+**Po Claude (`apply_page_verdict`) — tylko tanie zabezpieczenia:**
+1. `hard_reject` śmieci (giełda / 3PL / kurier / media)
+2. `matched_negative` / `primary_role` na czarnej liście
+3. opcjonalnie `is_small_firm` (nie Raben)
+
+ICP biznesowe = `is_gu` z Claude. Bez dogrywki pure-forwarder / segmentów.
+`require_forwarder_role` = no-op.
+
 
 Komercyjność kontaktu (`is_valid_commercial_company_contact`) jest wymagana na bramkach Serper i www — **bez maila** wiele domen `.pl` odpada (pending discovery warto mieć `email_target`).
 

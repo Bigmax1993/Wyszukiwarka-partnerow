@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu claude_contact_extract (komentarz; docstring poniżej opisuje format zwrotu).
+#   Rola w pipeline: etap „contact extract” — uzupełnia regex/mailto, gdy crawl nie dał maila/telefonu:
+#   prosi Claude o kontakty z tekstu crawla i scala je z danymi zebranymi przez scraper (merge bez duplikatów).
+#   Zależności: claude_client.claude_generate_text, claude_prompts.build_contact_extract_prompt,
+#   contact_extract_utils.parse_contact_extract_response, scraper_env.get_anthropic_api_key.
+#   Wejście: tekst crawla, nazwa firmy, www, cache, logger, collected (dict scrapera). Wyjście: dict z
+#   kontaktami / zmodyfikowany słownik collected; błędy API są obsługiwane w funkcjach (bez przerwania pipeline).
+# ============================================================
 """
 Claude: ekstrakcja kontaktów ze stron www (kampania PL FAS / spedycja).
 

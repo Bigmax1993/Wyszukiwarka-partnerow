@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu website_full_crawl (komentarz; docstring poniżej opisuje przepływ BFS).
+#   Zależności: bs4.BeautifulSoup, email_targeting.get_registrable_domain, stdlib (os, collections.deque,
+#   dataclasses, urllib.parse); claude_page_text importowany leniwie w format_crawl_text_for_claude.
+#   Wejście: startowy URL firmy oraz wstrzykiwane callbacki scrapera (fetch_page_html, parse_html_page,
+#   normalize_website, on_step). Wyjście: WebsiteCrawlResult (pages, urls_visited, urls_skipped, capped).
+#   Sieć: sam moduł nie wykonuje żądań — robi to wstrzyknięty fetch_page_html. Limit stron:
+#   MAX_SITE_CRAWL_PAGES (80; env SITE_CRAWL_MAX_PAGES, minimum 10).
+# ============================================================
 """
 Pełny crawl witryny (ta sama domena) przed weryfikacją Claude.
 
@@ -80,6 +89,12 @@ _SKIP_PATH_MARKERS = (
 )
 
 
+# >>> OPIS FUNKCJI: klasa WebsiteCrawlResult
+# Klasa danych (dataclass) — wynik jednego crawla BFS po witrynie:
+#   pages (dict URL → słownik z parsera: e-maile, telefony, page_text, contact_urls…),
+#   urls_visited (kolejność udanych fetch+parse), urls_skipped (pusty HTML lub błąd parsowania),
+#   capped (True, gdy po osiągnięciu limitu stron kolejka nie była pusta).
+# Wszystkie pola mają wartości domyślne (puste kolekcje/False), więc WebsiteCrawlResult() = „pusty wynik”.
 @dataclass
 class WebsiteCrawlResult:
     """
@@ -97,11 +112,20 @@ class WebsiteCrawlResult:
     capped: bool = False
 
 
+# >>> OPIS FUNKCJI: funkcja website_crawl_result_to_dict
+# Cel: serializacja wyniku crawla do struktury JSON-owalnej (do cache).
+# Parametry: result (WebsiteCrawlResult). Zwraca: dict (dataclasses.asdict — głęboka kopia pól).
+# Efekty uboczne: brak. Błędy: TypeError, gdy result nie jest dataclassą.
 def website_crawl_result_to_dict(result: WebsiteCrawlResult) -> dict:
     """Serializacja do cache JSON (``asdict``)."""
     return asdict(result)
 
 
+# >>> OPIS FUNKCJI: funkcja website_crawl_result_from_dict
+# Cel: odtworzenie WebsiteCrawlResult z cache.
+# Parametry: data (dict) — zapis z website_crawl_result_to_dict (pola mogą być niekompletne).
+# Zwraca: WebsiteCrawlResult; dla danych niebędących dict — pusty wynik. Brakujące pola → puste kolekcje.
+# Efekty uboczne: brak. Błędy: nie rzuca dla typowych braków (używa "or" i rzutowań).
 def website_crawl_result_from_dict(data: dict) -> WebsiteCrawlResult:
     """
     Deserializacja z cache — odporna na braki pól / zły typ.
@@ -118,6 +142,14 @@ def website_crawl_result_from_dict(data: dict) -> WebsiteCrawlResult:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _normalize_crawl_url
+# Cel: oczyścić kandydata URL i zdecydować, czy wolno go dodać do kolejki BFS.
+# Parametry: raw_url (str); site_domain (keyword-only, str) — domena rejestracyjna crawlowanej firmy;
+#   normalize_website (callable str→str) — normalizator scrapera (może zwrócić "" = odrzuć).
+# Zwraca: znormalizowany URL (str) albo "" gdy: pusty/kotwica/mailto/tel/javascript, nie http(s),
+#   normalizator odrzucił, występuje marker ze _SKIP_PATH_MARKERS (wp-json, feed…), rozszerzenie z
+#   _SKIP_PATH_EXTENSIONS (pdf, obrazy, css, js…), lub domena rejestracyjna jest inna niż site_domain.
+# Efekty uboczne: brak. Błędy: wyjątki z normalize_website nie są łapane.
 def _normalize_crawl_url(
     raw_url: str,
     *,
@@ -153,6 +185,13 @@ def _normalize_crawl_url(
     return normalized
 
 
+# >>> OPIS FUNKCJI: funkcja extract_all_internal_links
+# Cel: zebrać unikalne linki wewnętrzne strony (HTML + opcjonalne extra_urls z parsera).
+# Parametry: page_url (str) — baza dla urljoin; html (str) — treść strony; site_domain (keyword-only, str);
+#   normalize_website (callable); extra_urls (list[str]|None) — np. contact_urls z parsera.
+# Zwraca: list[str] — najpierw extra_urls, potem <a href> (BeautifulSoup, parser html.parser),
+#   bez duplikatów, po przejściu przez _normalize_crawl_url.
+# Efekty uboczne: brak. Błędy: niepoprawny HTML jest tolerowany przez BeautifulSoup.
 def extract_all_internal_links(
     page_url: str,
     html: str,
@@ -171,6 +210,10 @@ def extract_all_internal_links(
     out: list[str] = []
     seen: set[str] = set()
 
+    # >>> OPIS FUNKCJI: funkcja extract_all_internal_links._add
+    # Pomocnicza (zagnieżdżona): normalizuje kandydata i dopisuje go do listy wynikowej, jeśli jest
+    # niepusty i jeszcze nie widziany. Parametry: candidate (str). Zwraca None.
+    # Efekty uboczne: mutuje domknięte out i seen. Błędy: jak _normalize_crawl_url.
     def _add(candidate: str) -> None:
         normalized = _normalize_crawl_url(
             candidate, site_domain=site_domain, normalize_website=normalize_website
@@ -192,6 +235,12 @@ def extract_all_internal_links(
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja format_crawl_text_for_claude
+# Cel: cienki wrapper — składa tekst crawla dla Claude, delegując do claude_page_text.format_crawl_text_for_claude.
+# Parametry: result (WebsiteCrawlResult); purpose (keyword-only, "verify"/"contact"); per_section_max_chars
+#   (keyword-only, int|None) — limit znaków na sekcję (None/0 → CRAWL_SECTION_MAX_CHARS).
+# Zwraca: str — sekcje "=== URL ===" oddzielone pustą linią.
+# Efekty uboczne: leniwy import claude_page_text (omija cykl importów). Błędy: jak funkcja docelowa.
 def format_crawl_text_for_claude(
     result: WebsiteCrawlResult,
     *,
@@ -216,6 +265,16 @@ def format_crawl_text_for_claude(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja crawl_entire_website
+# Cel: BFS po całej domenie startowego URL (strona → parsowanie → nowe linki wewnętrzne).
+# Parametry: website (str) — URL startowy; logger; fetch_page_html (callable url→html, "" = błąd/pusto);
+#   parse_html_page (callable (url, html)→dict); normalize_website (callable); on_step (callable|None) —
+#   raport postępu "Website-Crawl i/max: url"; max_pages (int, domyślnie MAX_SITE_CRAWL_PAGES).
+# Zwraca: WebsiteCrawlResult. Pusty wynik, gdy URL startowy lub jego domena rejestracyjna jest nieprawidłowa.
+# Efekty uboczne: wywołania sieciowe wykonywane PRZEZ fetch_page_html; logowanie (info) błędów parsowania
+#   i informacji o limicie; callback on_step. capped=True, jeśli po limicie kolejka nie jest pusta.
+# Błędy: wyjątek z parse_html_page jest łapany (log info, URL → urls_skipped); odpowiedź niebędąca dict
+#   traktowana jak {}. Wyjątki z fetch_page_html nie są łapane tutaj (zakłada się, że callback zwraca "" przy błędzie).
 def crawl_entire_website(
     website: str,
     logger,

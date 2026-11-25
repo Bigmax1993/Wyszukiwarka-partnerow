@@ -1,4 +1,27 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł: claude_discovery_terms — generowanie dodatkowych fraz Serper przez Claude (Haiku).
+#
+# CO ROBI
+#   Gdy gotowe szablony fraz dały za mało wyników, prosi Claude (tier „fast”) o dodatkowe frazy
+#   wyszukiwania dla wskazanych województw/miast, parsuje odpowiedź (linie, numeracja), WALIDUJE każdą
+#   frazę względem ICP PL spedycji (długość 12–55 znaków, rola spedytora, segment FTL/LTL/ADR…, brak
+#   negatywów Serper, brak „legacy DE” typu bauunternehmen/filialbau) i buforuje wynik w cache
+#   (klucz claude_discovery_terms → województwo, z datą i terminem ważności).
+#
+# ROLA W PIPELINE
+#   Etap discovery (przed zapytaniami Serper); aktywny tylko, gdy ENABLE_CLAUDE_DISCOVERY_TERMS=True
+#   (domyślnie False w scraper_web_config). Każda przepuszczona fraza jest bezpieczna dla filtra.
+#
+# ZALEŻNOŚCI
+#   claude_prompts.build_discovery_terms_prompt, claude_client.claude_generate_text,
+#   pl_spedycja_keywords (BUNDESLAND_CONFIG, RETAIL_CHAINS_ROTATION jako TRANSPORT_SEGMENTS,
+#   SERPER_NEGATIVE_TERMS), pl_spedycja_filter.is_forwarder_role, scraper_env.get_anthropic_api_key.
+#
+# WEJŚCIE / WYJŚCIE
+#   Wejście: cache (dict), logger, lista województw, parametry (liczba fraz, dni cache, wykluczenia).
+#   Wyjście: list[str] zwalidowanych fraz (max terms_requested) — pusta lista przy błędzie/braku klucza.
+# ============================================================
 """Claude Haiku: generowanie fraz Serper (uzupełnienie) gdy szablony dały za mało wyników."""
 from __future__ import annotations
 
@@ -29,7 +52,14 @@ _LEGACY_DE_DISCOVERY_MARKERS = (
 _PARSE_LINE_RE = re.compile(r"^\s*(?:\d+[\.\)]\s*)?(.+?)\s*$")
 
 
+# >>> OPIS FUNKCJI: funkcja parse_discovery_term_lines
+# Cel: wyciągnąć listę fraz z surowej odpowiedzi modelu (jedna fraza na linię, opcjonalna numeracja "1." / "1)").
+# Parametry: text (str|None) — odpowiedź Claude.
+# Zwraca: list[str] — unikalne frazy (kolejność zachowana), bez cudzysłowów brzegowych; linie puste oraz
+#   zaczynające się od "{" lub "[" (JSON) są pomijane.
+# Efekty uboczne/błędy: brak (czysta funkcja).
 def parse_discovery_term_lines(text: str) -> list[str]:
+    """Wyciągnij listę fraz z odpowiedzi Claude (linie / numeracja)."""
     lines: list[str] = []
     for raw in (text or "").splitlines():
         line = raw.strip()
@@ -42,6 +72,12 @@ def parse_discovery_term_lines(text: str) -> list[str]:
     return lines
 
 
+# >>> OPIS FUNKCJI: funkcja validate_discovery_term
+# Cel: sprawdzić, czy fraza Serper nadaje się do kampanii PL spedycja (patrz lista kroków w docstringu).
+# Parametry: term (str|None).
+# Zwraca: bool — True tylko gdy fraza przejdzie wszystkie 5 testów: długość, is_forwarder_role,
+#   obecność segmentu transportu, brak negatywów (tylko >= 4 znaków) oraz brak markerów legacy DE.
+# Efekty uboczne/błędy: brak.
 def validate_discovery_term(term: str) -> bool:
     """
     Czy fraza Serper pasuje do ICP PL spedycja (FAS).
@@ -73,7 +109,13 @@ def validate_discovery_term(term: str) -> bool:
     return True
 
 
+# >>> OPIS FUNKCJI: funkcja _cities_for_lands
+# Cel: zebrać listę miast z konfiguracji województw (BUNDESLAND_CONFIG[land]["cities"]).
+# Parametry: lands (list[str]); max_cities (keyword-only, int, domyślnie 8).
+# Zwraca: list[str] — unikalne miasta w kolejności; kończy zbieranie po osiągnięciu limitu.
+# Efekty uboczne: brak. Błędy: nieznane województwo jest ignorowane (pusty słownik).
 def _cities_for_lands(lands: list[str], *, max_cities: int = 8) -> list[str]:
+    """Zbierz miasta z BUNDESLAND_CONFIG dla podanych województw."""
     cities: list[str] = []
     for land in lands:
         cfg = BUNDESLAND_CONFIG.get(land) or {}
@@ -85,6 +127,14 @@ def _cities_for_lands(lands: list[str], *, max_cities: int = 8) -> list[str]:
     return cities
 
 
+# >>> OPIS FUNKCJI: funkcja build_discovery_terms_prompt
+# Cel: złożyć prompt dla Haiku generujący dodatkowe frazy Serper.
+# Parametry: lands (list[str]) — województwa; cities (keyword-only, list[str]|None) — miasta (domyślnie
+#   z _cities_for_lands); terms_requested (int, domyślnie 10); exclude_terms (list[str]|None) — frazy
+#   już użyte (do 20 trafia do bloku "nie powtarzaj").
+# Zwraca: str — prompt zbudowany przez claude_prompts.build_discovery_terms_prompt (land_str = lista
+#   województw lub DEFAULT_DISCOVERY_LAND="Polska"; miasta ograniczone do 8).
+# Efekty uboczne/błędy: brak.
 def build_discovery_terms_prompt(
     lands: list[str],
     *,
@@ -92,6 +142,7 @@ def build_discovery_terms_prompt(
     terms_requested: int = 10,
     exclude_terms: list[str] | None = None,
 ) -> str:
+    """Złóż prompt Haiku na dodatkowe frazy Serper dla województw/miast."""
     city_list = cities or _cities_for_lands(lands)
     land_str = ", ".join(lands) if lands else DEFAULT_DISCOVERY_LAND
     city_str = ", ".join(city_list[:8]) if city_list else "—"
@@ -111,16 +162,29 @@ def build_discovery_terms_prompt(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _cache_bucket
+# Cel: zwrócić (i w razie braku utworzyć) sekcję cache["claude_discovery_terms"].
+# Parametry: cache (dict). Zwraca: dict — referencja do sekcji (mutowalna).
+# Efekty uboczne: setdefault tworzy klucz w cache. Błędy: AttributeError, gdy cache nie jest dict.
 def _cache_bucket(cache: dict) -> dict:
+    """Sekcja cache na frazy Claude discovery (tworzy klucz jeśli brak)."""
     return cache.setdefault("claude_discovery_terms", {})
 
 
+# >>> OPIS FUNKCJI: funkcja get_cached_discovery_terms
+# Cel: odczytać frazy zapisane wcześniej dla danego województwa, jeśli nie wygasły.
+# Parametry: cache (dict); land (str); cache_days (keyword-only, int) — maksymalny wiek wpisu w dniach.
+# Zwraca: list[str] niepustych fraz albo None (brak wpisu, zła struktura, błędna data, wygaśnięcie,
+#   pusta lista). Obsługuje też stary klucz cache["gemini_discovery_terms"] (migracja z Gemini).
+# Efekty uboczne: utworzenie pustej sekcji claude_discovery_terms (przez _cache_bucket); poza tym tylko odczyt.
+# Błędy: TypeError/ValueError przy parsowaniu daty są łapane → None.
 def get_cached_discovery_terms(
     cache: dict,
     land: str,
     *,
     cache_days: int,
 ) -> list[str] | None:
+    """Odczytaj zcache'owane frazy dla województwa (None = brak/expired)."""
     bucket = _cache_bucket(cache)
     entry = bucket.get((land or "").strip())
     if entry is None:
@@ -142,7 +206,13 @@ def get_cached_discovery_terms(
     return None
 
 
+# >>> OPIS FUNKCJI: funkcja store_cached_discovery_terms
+# Cel: zapisać wygenerowane frazy w cache z bieżącym znacznikiem czasu.
+# Parametry: cache (dict, mutowany); land (str) — pusty → "Polska"; terms (list[str]).
+# Zwraca: None. Efekty uboczne: cache["claude_discovery_terms"][land] = {"at": ISO now, "terms": [...]}.
+# Błędy: brak własnej obsługi.
 def store_cached_discovery_terms(cache: dict, land: str, terms: list[str]) -> None:
+    """Zapisz frazy Claude discovery dla województwa z timestampem."""
     land_key = (land or "").strip() or DEFAULT_DISCOVERY_LAND
     _cache_bucket(cache)[land_key] = {
         "at": datetime.now().isoformat(),
@@ -150,6 +220,14 @@ def store_cached_discovery_terms(cache: dict, land: str, terms: list[str]) -> No
     }
 
 
+# >>> OPIS FUNKCJI: funkcja generate_claude_discovery_terms
+# Cel: zwrócić zwalidowane frazy Serper — z cache albo świeżo wygenerowane przez Claude.
+# Parametry: cache (dict); logger; lands (list[str]) — pierwszy element jest kluczem cache (pusty → "Polska");
+#   terms_requested (keyword-only, int, 10); cache_days (7); use_cache (True); exclude_terms (list|None).
+# Zwraca: list[str] — max terms_requested fraz; [] gdy brak klucza API albo błąd wywołania.
+# Efekty uboczne: wywołanie API Anthropic (model_tier="fast", liczone w cache przez claude_client),
+#   odczyt/zapis cache (store_cached_discovery_terms tylko gdy są wyniki i use_cache), logowanie.
+# Błędy: wyjątki z claude_generate_text są łapane (warning) → []. Brak klucza → warning + [].
 def generate_claude_discovery_terms(
     cache: dict,
     logger,

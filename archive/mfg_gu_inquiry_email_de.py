@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł (ARCHIWUM): mfg_gu_inquiry_email_de — historyczny, stały tekst maila MFG po niemiecku.
+#
+# CO ROBI: udostępnia jedną funkcję zwracającą nieedytowalny tekst zapytania ofertowego z dawnej
+#   kampanii DE GU / Filialbau (firma MFG, sieci ALDI/REWE/…).
+# ROLA W PIPELINE: żadna — plik archiwalny, nieużywany przez pl_fas_spedycja_scraper. Kanoniczny outreach
+#   PL to fas_spedycja_inquiry_email_pl.py w katalogu głównym repozytorium.
+# ZALEŻNOŚCI: brak importów. WEJŚCIE: brak. WYJŚCIE: str z treścią maila.
+# ============================================================
 """
 ARCHIWUM — stały tekst maila MFG (kampanie DE GU / Filialbau).
 
@@ -9,7 +18,12 @@ Nie modyfikować przez LLM ani szablony GUI — wyłącznie ten blok (historyczn
 """
 
 
+# >>> OPIS FUNKCJI: funkcja build_fixed_gu_inquiry_de
+# Cel: zwrócić stały, historyczny tekst maila MFG (DE) — bez LLM i bez parametrów.
+# Parametry: brak. Zwraca: str (wieloliniowy tekst po niemiecku). Efekty uboczne: brak. Błędy: brak.
+# Uwaga: treści nie modyfikować (archiwum); nie używać w kampanii PL.
 def build_fixed_gu_inquiry_de() -> str:
+    """Zwróć stały (historyczny) tekst maila MFG DE — bez LLM."""
     return """Sehr geehrte Damen und Herren,
 
 ich wende mich im Namen der Firma MFG Moderner Fliesenboden GmbH an Sie. Wir sind ein spezialisiertes Bodenlegerunternehmen, dessen Schwerpunkt die Realisierung von Einzelhandelsobjekten liegt.

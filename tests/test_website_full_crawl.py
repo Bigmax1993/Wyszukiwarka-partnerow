@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/test_website_full_crawl.py
+# CO ROBI: testy pełnego crawla domeny: linki wewnętrzne, odwiedzanie stron, serializacja wyniku.
+# ROLA W PIPELINE: zabezpiecza website_full_crawl używany do zebrania tekstu dla Claude.
+# ZALEŻNOŚCI: unittest, unittest.mock.MagicMock, json, website_full_crawl.
+# WEJŚCIE/WYJŚCIE: Moduł nie przyjmuje argumentów CLI; pytest/unittest odkrywa i uruchamia testy; nic nie zwraca (wynik = zielone/czerwone testy).
+# ============================================================
 from __future__ import annotations
 
 import sys
@@ -22,6 +29,8 @@ from website_full_crawl import (
 )
 
 
+# >>> OPIS FUNKCJI: funkcja _norm
+# Pomocnik testowy: normalizuje URL na potrzeby crawlera (dodaje prefiks https://, jeśli brak http, i usuwa końcowy ukośnik przy URL-ach ze ścieżką). Parametry: url (str). Zwraca: str — znormalizowany URL. Efekty uboczne/błędy: brak.
 def _norm(url: str) -> str:
     u = url.strip()
     if not u.startswith("http"):
@@ -29,7 +38,14 @@ def _norm(url: str) -> str:
     return u.rstrip("/") if u.endswith("/") and u.count("/") > 2 else u
 
 
+# >>> OPIS FUNKCJI: klasa WebsiteFullCrawlTest
+# Grupa testów: crawl całej domeny z atrapami fetch/parse.
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class WebsiteFullCrawlTest(unittest.TestCase):
+    # >>> OPIS FUNKCJI: funkcja WebsiteFullCrawlTest.test_extract_internal_links_same_domain
+    # Test: extract_internal_links zwraca linki z tej samej domeny (np. karriere) i pomija zewnętrzne.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_extract_internal_links_same_domain(self):
         html = '<a href="/karriere/stelle">Jobs</a><a href="https://other.com/x">X</a>'
         links = extract_all_internal_links(
@@ -41,6 +57,10 @@ class WebsiteFullCrawlTest(unittest.TestCase):
         self.assertTrue(any("karriere" in u for u in links))
         self.assertFalse(any("other.com" in u for u in links))
 
+    # >>> OPIS FUNKCJI: funkcja WebsiteFullCrawlTest.test_crawl_visits_all_internal_pages
+    # Test: crawl_entire_website odwiedza 3 strony wewnętrzne i buduje tekst z nagłówkami '=== URL' (zawiera treść sekcji karriere).
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: funkcje fetch i parse są atrapami w pamięci (bez sieci). Błędy: AssertionError przy niespełnionej asercji.
     def test_crawl_visits_all_internal_pages(self):
         pages = {
             "https://example.de": (
@@ -54,10 +74,14 @@ class WebsiteFullCrawlTest(unittest.TestCase):
             "https://example.de/karriere": "<p>Retail Projekte</p>",
         }
 
+        # >>> OPIS FUNKCJI: funkcja WebsiteFullCrawlTest.test_crawl_visits_all_internal_pages.fetch
+        # Atrapa pobierania strony w teście: zwraca zdefiniowany HTML dla znanego URL-a. Parametry: url (str). Zwraca: str. Efekty uboczne/błędy: brak.
         def fetch(url: str) -> str:
             key = url.rstrip("/")
             return pages.get(key, pages.get(key + "/", ""))
 
+        # >>> OPIS FUNKCJI: funkcja WebsiteFullCrawlTest.test_crawl_visits_all_internal_pages.parse
+        # Atrapa parsowania strony w teście: zwraca słownik (emails, phones, company_name, contact_urls, page_text) wraz z linkami wewnętrznymi. Parametry: url, html (str). Zwraca: dict. Efekty uboczne/błędy: brak.
         def parse(url: str, html: str) -> dict:
             from bs4 import BeautifulSoup
 
@@ -83,6 +107,10 @@ class WebsiteFullCrawlTest(unittest.TestCase):
         self.assertIn("=== https://example.de/karriere", text)
         self.assertIn("Netto", text)
 
+    # >>> OPIS FUNKCJI: funkcja WebsiteFullCrawlTest.test_crawl_result_json_roundtrip
+    # Test: wynik crawla serializowany do JSON i odtworzony zachowuje urls_visited, pages i flagę capped.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_crawl_result_json_roundtrip(self):
         original = WebsiteCrawlResult(
             pages={"https://firma.de/impressum": {"emails": ["info@firma.de"]}},

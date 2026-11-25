@@ -1,4 +1,23 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł (skrypt CLI): scripts/gdrive_upload_wyniki — upload plików z Wyniki/ (oraz opcjonalnie wyslane/) na Google Drive.
+#
+# CO ROBI
+#   Ładuje poświadczenia (preferowany OAuth użytkownika z GDRIVE_OAUTH_*, w drugiej kolejności konto usługowe
+#   z GDRIVE_SERVICE_ACCOUNT_JSON/FILE, opcjonalnie delegacja DWD), ustala folder docelowy (OAuth / Shared Drive /
+#   impersonacja), wysyła pliki płasko do folderu Excela, a katalog wyslane/ do podfolderu "wyslane". Pliki .json i .log
+#   (cache, logi) NIE są uploadowane. Arkusze .xlsx są domyślnie wersjonowane datą (GDRIVE_VERSION_XLSX=1): powstaje plik
+#   z sufiksem _RRRR-MM-DD_GGMM oraz aktualna kopia bez daty.
+#
+# ROLA W PIPELINE: ostatni krok publikacji wyników (po discovery/backfill) w GitHub Actions lub lokalnie. Cały moduł jest
+#   NO-OP, gdy DISABLE_GOOGLE_DRIVE jest włączone (domyślnie włączone — patrz scraper_env.is_google_drive_disabled).
+#
+# ZALEŻNOŚCI: pl_spedycja_data_paths (resolve_data_root, wyniki_dir, wyslane_dir, ID folderu Drive), scraper_env (kill switch),
+#   google-auth / google-api-python-client (importowane leniwie), stdlib argparse, json, mimetypes, os, sys, datetime, pathlib.
+# WEJŚCIE: argumenty CLI --campaign-dir, --folder-id oraz zmienne środowiskowe GDRIVE_*. WYJŚCIE: kod wyjścia (0 sukces/NO-OP,
+#   1 gdy nie było plików), komunikaty na stdout; funkcje pomocnicze zwracają id plików/folderów lub liczniki.
+# BŁĘDY: brakujące/niepoprawne poświadczenia kończą proces przez SystemExit z czytelnym komunikatem.
+# ============================================================
 """
 Upload folderu Wyniki/ (+ opcjonalnie wyslane/) do Google Drive.
 
@@ -55,16 +74,28 @@ _GU_FOLDER_NAME = "PL Spedycja Wyniki"
 _GDRIVE_SKIP_SUFFIXES = frozenset({".json", ".log"})
 
 
+# >>> OPIS FUNKCJI: funkcja _skip_gdrive_upload
+# Cel: zdecydować, czy pominąć plik przy uploadzie. Parametry: path (Path). Zwraca: bool — True dla rozszerzeń z _GDRIVE_SKIP_SUFFIXES
+# (cache .json, logi .log — zostają jako artefakty GHA). Efekty uboczne/błędy: brak.
 def _skip_gdrive_upload(path: Path) -> bool:
+    """True = nie uploaduj (cache .json / logi — tylko artefakt GHA)."""
     return path.suffix.lower() in _GDRIVE_SKIP_SUFFIXES
 
 
+# >>> OPIS FUNKCJI: funkcja _gdrive_version_xlsx_enabled
+# Cel: sprawdzić, czy Excel ma być wysyłany jako nowy plik z datą. Parametry: brak. Zwraca: bool — zmienna GDRIVE_VERSION_XLSX
+# (domyślnie włączona; wyłączają ją 0/false/no/off). Efekty uboczne/błędy: brak.
 def _gdrive_version_xlsx_enabled() -> bool:
+    """Czy Excel ma iść jako nowy plik z datą (GDRIVE_VERSION_XLSX, domyślnie ON)."""
     raw = (os.environ.get("GDRIVE_VERSION_XLSX") or "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
 
+# >>> OPIS FUNKCJI: funkcja _upload_stamp
+# Cel: znacznik czasu do nazw wersjonowanych plików. Parametry: brak. Zwraca: str "RRRR-MM-DD_GGMM" w strefie SCRAPER_TIMEZONE
+# (domyślnie Europe/Warsaw). Błędy: przy błędzie strefy/braku zoneinfo — czas lokalny OS (wyjątek łapany).
 def _upload_stamp() -> str:
+    """Znacznik czasu Europe/Warsaw do nazw wersjonowanych .xlsx."""
     try:
         from zoneinfo import ZoneInfo
 
@@ -74,6 +105,10 @@ def _upload_stamp() -> str:
         return datetime.now().strftime("%Y-%m-%d_%H%M")
 
 
+# >>> OPIS FUNKCJI: funkcja versioned_xlsx_upload_name
+# Cel: zbudować nazwę wersjonowaną pliku xlsx. Parametry: filename (str); stamp (keyword-only, str|None — domyślnie _upload_stamp()).
+# Zwraca: str — np. pl_spedycja_kontakte.xlsx → pl_spedycja_kontakte_2026-06-08_1405.xlsx; dla plików innych niż .xlsx sama nazwa.
+# Efekty uboczne/błędy: brak.
 def versioned_xlsx_upload_name(filename: str, *, stamp: str | None = None) -> str:
     """pl_spedycja_kontakte.xlsx → pl_spedycja_kontakte_2026-06-08_1405.xlsx"""
     path = Path(filename)
@@ -83,7 +118,12 @@ def versioned_xlsx_upload_name(filename: str, *, stamp: str | None = None) -> st
     return f"{path.stem}_{tag}{path.suffix}"
 
 
+# >>> OPIS FUNKCJI: funkcja _load_oauth_credentials
+# Cel: wczytać poświadczenia OAuth użytkownika. Parametry: brak. Zwraca: obiekt Credentials (odświeżony refresh tokenem) albo None, gdy
+# brak GDRIVE_OAUTH_REFRESH_TOKEN. Efekty uboczne: żądanie odświeżenia tokenu do Google, import bibliotek google-auth.
+# Błędy: SystemExit przy braku GDRIVE_OAUTH_CLIENT_ID/SECRET lub biblioteki google-auth.
 def _load_oauth_credentials():
+    """OAuth użytkownika z env GDRIVE_OAUTH_* albo None gdy brak refresh tokena."""
     refresh = (os.environ.get("GDRIVE_OAUTH_REFRESH_TOKEN") or "").strip()
     if not refresh:
         return None
@@ -112,7 +152,13 @@ def _load_oauth_credentials():
     return creds
 
 
+# >>> OPIS FUNKCJI: funkcja _load_service_account_credentials
+# Cel: wczytać poświadczenia konta usługowego (JSON z env lub plik) i opcjonalnie włączyć delegację DWD. Parametry: brak.
+# Zwraca: obiekt Credentials (z subject, jeśli ustawiono GDRIVE_IMPERSONATE_EMAIL). Efekty uboczne: wypisuje informację o delegacji.
+# Błędy: SystemExit — brak biblioteki, wartość wyglądająca jak klucz API (AIza…), niepoprawny JSON, JSON niebędący kluczem konta usługowego
+# lub brak źródła poświadczeń.
 def _load_service_account_credentials():
+    """Credentials konta usługowego (JSON env / plik) + opcjonalna delegacja DWD."""
     try:
         from google.oauth2 import service_account
     except ImportError as e:
@@ -154,7 +200,11 @@ def _load_service_account_credentials():
     return creds
 
 
+# >>> OPIS FUNKCJI: funkcja _load_credentials
+# Cel: wybrać metodę uwierzytelnienia. Parametry: brak. Zwraca: (creds, use_oauth: bool) — OAuth, jeśli skonfigurowany, inaczej konto usługowe.
+# Efekty uboczne: komunikaty na stdout. Błędy: propagowane (SystemExit) z funkcji ładujących.
 def _load_credentials():
+    """Preferuj OAuth; fallback = service account. Zwraca (creds, use_oauth)."""
     oauth = _load_oauth_credentials()
     if oauth is not None:
         print("OAuth: upload na Twoj Dysk Google (folder udostepniony uzytkownikowi)")
@@ -162,7 +212,11 @@ def _load_credentials():
     return _load_service_account_credentials(), False
 
 
+# >>> OPIS FUNKCJI: funkcja _drive_service
+# Cel: zbudować klienta Google Drive API v3. Parametry: creds. Zwraca: (service, MediaFileUpload) — klient oraz klasa do uploadu.
+# Efekty uboczne: leniwy import googleapiclient. Błędy: ImportError, gdy brak biblioteki.
 def _drive_service(creds):
+    """Zbuduj klienta Drive API v3 oraz klasę MediaFileUpload."""
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
 
@@ -170,7 +224,11 @@ def _drive_service(creds):
     return service, MediaFileUpload
 
 
+# >>> OPIS FUNKCJI: funkcja _folder_metadata
+# Cel: pobrać metadane folderu Drive. Parametry: service; folder_id (str). Zwraca: dict (id, name, driveId, mimeType, parents).
+# Efekty uboczne: wywołanie API. Błędy: wyjątki API propagują się.
 def _folder_metadata(service, folder_id: str) -> dict:
+    """Metadane folderu Drive (id, name, driveId, …)."""
     return (
         service.files()
         .get(
@@ -182,7 +240,11 @@ def _folder_metadata(service, folder_id: str) -> dict:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _list_shared_drives
+# Cel: wylistować dyski współdzielone dostępne dla poświadczeń. Parametry: service. Zwraca: list[dict] (id, name), z paginacją.
+# Efekty uboczne: wywołania API. Błędy: propagowane.
 def _list_shared_drives(service) -> list[dict]:
+    """Lista Shared Drives dostępnych dla bieżących credentials."""
     drives: list[dict] = []
     page_token = None
     while True:
@@ -198,7 +260,11 @@ def _list_shared_drives(service) -> list[dict]:
     return drives
 
 
+# >>> OPIS FUNKCJI: funkcja _find_folder_in_parent
+# Cel: znaleźć podfolder o nazwie w folderze nadrzędnym. Parametry: service; parent_id (str); name (str; apostrofy escapowane).
+# Zwraca: str|None — id pierwszego pasującego, nieusuniętego folderu. Efekty uboczne: zapytanie list API. Błędy: propagowane.
 def _find_folder_in_parent(service, parent_id: str, name: str) -> str | None:
+    """Znajdź ID podfolderu o danej nazwie w parent_id (lub None)."""
     safe_name = name.replace("'", "\\'")
     q = (
         f"'{parent_id}' in parents and name = '{safe_name}' "
@@ -213,7 +279,11 @@ def _find_folder_in_parent(service, parent_id: str, name: str) -> str | None:
     return files[0]["id"] if files else None
 
 
+# >>> OPIS FUNKCJI: funkcja _create_folder
+# Cel: utworzyć folder na Drive. Parametry: service; parent_id (str); name (str); drive_id (keyword-only, str|None) — dla Shared Drive.
+# Zwraca: str — id nowego folderu. Efekty uboczne: tworzenie folderu przez API. Błędy: propagowane.
 def _create_folder(service, parent_id: str, name: str, *, drive_id: str | None = None) -> str:
+    """Utwórz folder w parent_id; zwróć nowe file id."""
     meta: dict = {
         "name": name,
         "mimeType": "application/vnd.google-apps.folder",
@@ -225,6 +295,11 @@ def _create_folder(service, parent_id: str, name: str, *, drive_id: str | None =
     return created["id"]
 
 
+# >>> OPIS FUNKCJI: funkcja _resolve_shared_drive_upload_folder
+# Cel: ustalić folder docelowy na Shared Drive. Parametry: service; preferred_folder_id (str).
+# Zwraca: (folder_id, shared_drive_id) — preferowany folder, jeśli już leży na Shared Drive; inaczej folder o nazwie _GU_FOLDER_NAME (istniejący
+# lub nowo utworzony) w wybranym dysku (GDRIVE_SHARED_DRIVE_ID albo pierwszy dostępny).
+# Efekty uboczne: komunikaty, ewentualne utworzenie folderu. Błędy: SystemExit, gdy konto nie widzi żadnego Shared Drive.
 def _resolve_shared_drive_upload_folder(service, preferred_folder_id: str) -> tuple[str, str]:
     """
     Zwraca (folder_id, shared_drive_id) do uploadu na Shared Drive.
@@ -277,6 +352,10 @@ def _resolve_shared_drive_upload_folder(service, preferred_folder_id: str) -> tu
     return created, shared_drive_id
 
 
+# >>> OPIS FUNKCJI: funkcja _resolve_upload_folder
+# Cel: wybrać folder, do którego można uploadować. Parametry: service; folder_id (str); use_oauth (keyword-only, bool).
+# Zwraca: str — folder_id przy OAuth, przy folderze na Shared Drive albo przy delegacji DWD; w przeciwnym razie folder z
+# _resolve_shared_drive_upload_folder. Efekty uboczne: komunikaty. Błędy: odczyt metadanych jest łapany (komunikat); dalsze błędy — propagowane.
 def _resolve_upload_folder(service, folder_id: str, *, use_oauth: bool) -> str:
     """Ustal folder, do którego można uploadować (OAuth / Shared Drive / impersonacja)."""
     if use_oauth:
@@ -302,13 +381,23 @@ def _resolve_upload_folder(service, folder_id: str, *, use_oauth: bool) -> str:
     return upload_id
 
 
+# >>> OPIS FUNKCJI: funkcja _find_or_create_folder
+# Cel: zwrócić id istniejącego podfolderu lub utworzyć go. Parametry: service; parent_id (str); name (str).
+# Zwraca: str — id folderu. Efekty uboczne: ewentualne utworzenie folderu. Błędy: propagowane.
 def _find_or_create_folder(service, parent_id: str, name: str) -> str:
+    """Zwróć istniejący podfolder lub utwórz nowy."""
     existing = _find_folder_in_parent(service, parent_id, name)
     if existing:
         return existing
     return _create_folder(service, parent_id, name)
 
 
+# >>> OPIS FUNKCJI: funkcja _upload_file
+# Cel: wysłać plik lokalny do folderu Drive. Parametry: service; MediaFileUpload (klasa); local (Path); parent_id (str);
+# version_xlsx (keyword-only, bool|None — domyślnie wg GDRIVE_VERSION_XLSX).
+# Zwraca: str — id pliku. Zachowanie: .xlsx z wersjonowaniem zawsze tworzy NOWY plik z datą w nazwie; w pozostałych przypadkach aktualizuje istniejący
+# plik o tej samej nazwie albo tworzy nowy (upload wznawialny, MIME zgadywany).
+# Efekty uboczne: upload przez API. Błędy: propagowane.
 def _upload_file(
     service,
     MediaFileUpload,
@@ -317,6 +406,7 @@ def _upload_file(
     *,
     version_xlsx: bool | None = None,
 ) -> str:
+    """Upload pliku lokalnego do folderu Drive; zwraca file id."""
     mime, _ = mimetypes.guess_type(str(local))
     media = MediaFileUpload(str(local), mimetype=mime or "application/octet-stream", resumable=True)
     use_version = _gdrive_version_xlsx_enabled() if version_xlsx is None else version_xlsx
@@ -352,7 +442,12 @@ def _upload_file(
     return created["id"]
 
 
+# >>> OPIS FUNKCJI: funkcja upload_files_flat
+# Cel: wysłać wszystkie pliki z katalogu lokalnego bezpośrednio do folderu Drive. Parametry: service; MediaFileUpload; local_dir (Path); drive_parent_id (str).
+# Zwraca: int — liczba wysłanych plików (0, gdy katalog nie istnieje). Pliki .json/.log pomijane; dla .xlsx (wersjonowanie włączone) wysyłane są dwie wersje:
+# z datą i aktualna bez daty (liczone jako jeden plik). Efekty uboczne: upload, wypisywanie OK/SKIP. Błędy: propagowane.
 def upload_files_flat(service, MediaFileUpload, local_dir: Path, drive_parent_id: str) -> int:
+    """Upload plików z katalogu lokalnego bezpośrednio do drive_parent_id."""
     if not local_dir.is_dir():
         return 0
     count = 0
@@ -376,9 +471,13 @@ def upload_files_flat(service, MediaFileUpload, local_dir: Path, drive_parent_id
     return count
 
 
+# >>> OPIS FUNKCJI: funkcja upload_folder_named
+# Cel: wysłać pliki katalogu lokalnego do podfolderu na Drive. Parametry: service; MediaFileUpload; local_dir (Path); drive_parent_id (str); drive_name (str).
+# Zwraca: int — liczba wysłanych plików (0, gdy katalog nie istnieje). Efekty uboczne: znajduje/tworzy podfolder, upload, komunikaty; pliki .json/.log pomijane. Błędy: propagowane.
 def upload_folder_named(
     service, MediaFileUpload, local_dir: Path, drive_parent_id: str, drive_name: str
 ) -> int:
+    """Upload lokalnego katalogu do podfolderu drive_name na Drive."""
     if not local_dir.is_dir():
         return 0
     sub_id = _find_or_create_folder(service, drive_parent_id, drive_name)
@@ -400,7 +499,13 @@ def upload_folder_named(
     return count
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: wejście CLI skryptu. Parametry: brak (argumenty z argparse: --campaign-dir, --folder-id). Zwraca: int — 0 po uploadzie lub w trybie NO-OP
+# (DISABLE_GOOGLE_DRIVE włączone), 1 gdy nie było plików do wysłania.
+# Efekty uboczne: uwierzytelnienie, upload plików z Wyniki/ i wyslane/, komunikaty na stdout z linkiem do folderu.
+# Błędy: SystemExit z funkcji pomocniczych (poświadczenia); błąd odczytu scraper_env jest łapany (wtedy flaga czytana bezpośrednio z env).
 def main() -> int:
+    """CLI: upload Wyniki/ (+ opcjonalnie wyslane/) na Google Drive."""
     parser = argparse.ArgumentParser(description="Upload Wyniki do Google Drive")
     parser.add_argument(
         "--campaign-dir",

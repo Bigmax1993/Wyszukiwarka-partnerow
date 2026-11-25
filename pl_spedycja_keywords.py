@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu pl_spedycja_keywords (komentarz; docstring poniżej opisuje zakres ICP i nazewnictwo).
+#   Rola w pipeline: etap discovery — słowniki (BUNDESLAND_CONFIG = województwa i miasta, segmenty
+#   RETAIL_CHAINS_ROTATION, szablony fraz, SERPER_NEGATIVE_TERMS) oraz generatory kolejnych „fal” fraz Serper
+#   (główna, powiat/okolice, places, broad, fallback).
+#   Zależności: tylko __future__ (moduł liściowy) — dlatego importują go filter, prompty i rotacja.
+#   Wejście: lista województw, limit fraz. Wyjście: list[str] fraz lub konfiguracja ustawiona na module
+#   (configure_campaign_bundeslaender mutuje atrybuty przekazanego modułu scrapera).
+# ============================================================
 """
 Słowniki i generatory fraz Serper / www — polskie spedycje drogowe.
 
@@ -237,7 +246,7 @@ DE_OST_RURAL_HINTS: tuple[str, ...] = (
     "okolice",
 )
 
-# Każda fraza Serper: spedycja + {city} + rotujący {chain} (= segment).
+# Frazy Serper: część z rotującym {chain} (= segment FTL/LTL/…), część bez (lepsze małe miasta).
 CHAIN_SIMPLE_TERM_TEMPLATES = (
     "spedycja {chain} {city}",
     "firma spedycyjna {city} {chain}",
@@ -249,6 +258,16 @@ CHAIN_SIMPLE_TERM_TEMPLATES = (
     "spedycja {city} transport drogowy {chain}",
     "freight forwarding {city} {chain}",
     "biuro spedycyjne {city} {chain}",
+    # Bez {chain}
+    "spedycja {city}",
+    "firma spedycyjna {city}",
+    "spedycja drogowa {city}",
+    "spedycja międzynarodowa {city}",
+    "organizacja transportu {city}",
+    "spedycja {city} transport drogowy",
+    "freight forwarding {city}",
+    "biuro spedycyjne {city}",
+    "dyspozytor fracht {city}",
 )
 
 TERM_TEMPLATES = (
@@ -262,6 +281,21 @@ TERM_TEMPLATES = (
     "logistyka kontraktowa spedycja {city} {chain}",
     "transport ciężarowy spedycja {city} {chain}",
     "oferty frachtowe spedycja {city} {chain}",
+    # Bez {chain}
+    "spedycja {city}",
+    "firma spedycyjna {city}",
+    "spedycja drogowa {city}",
+    "biuro spedycyjne {city}",
+    "spedytor {city}",
+    "firma spedycyjna transport międzynarodowy {city}",
+    "transport całopojazdowy {city}",
+    "spedycja {city} {land}",
+    "firma transportowa spedycja {city}",
+    "spedytor {city} fracht",
+    "logistyka kontraktowa spedycja {city}",
+    "transport ciężarowy spedycja {city}",
+    "oferty frachtowe spedycja {city}",
+    "spedycja drogowa Europa {city}",
 )
 
 SIMPLE_TERM_TEMPLATES = CHAIN_SIMPLE_TERM_TEMPLATES
@@ -648,6 +682,16 @@ def build_discovery_terms(
             "freight forwarding Poland {chain}",
             "spedycja Polska Niemcy {chain}",
             "spedytor fracht Polska {chain}",
+            # Bez {chain}
+            "spedycja Polska",
+            "firma spedycyjna Polska",
+            "spedycja drogowa Polska",
+            "biuro spedycyjne Polska",
+            "organizacja transportu Polska",
+            "freight forwarding Poland",
+            "spedycja Polska Niemcy",
+            "spedytor Polska",
+            "firma spedycyjna transport międzynarodowy Polska",
         )
         for tmpl in nationwide:
             chain = _rotating_chain(chain_counter)
@@ -681,6 +725,11 @@ def build_landkreis_discovery_terms(active: list[str] | None = None) -> list[str
                 "spedycja {city} powiat {chain}",
                 "firma spedycyjna okolice {city} {chain}",
                 "transport FTL {city} {short} {chain}",
+                # Bez segmentu {chain} — lepsze pokrycie mniejszych miast (Serper).
+                "spedycja {city} powiat",
+                "firma spedycyjna okolice {city}",
+                "spedycja drogowa {city}",
+                "biuro spedycyjne {city}",
             ):
                 chain = _rotating_chain(chain_counter)
                 _append_unique_term(
@@ -696,6 +745,51 @@ def build_landkreis_discovery_terms(active: list[str] | None = None) -> list[str
             f"spedycja drogowa {land} {chain}",
             max_terms=10_000,
         )
+        _append_unique_term(
+            terms,
+            seen,
+            f"spedycja drogowa {land}",
+            max_terms=10_000,
+        )
+        _append_unique_term(
+            terms,
+            seen,
+            f"firma spedycyjna {land}",
+            max_terms=10_000,
+        )
+    return terms
+
+
+def build_maps_discovery_terms(active: list[str] | None = None) -> list[str]:
+    """
+    Frazy pod Google Maps (Faza A) — bez FTL/LTL/ADR/{chain}.
+
+    Local Pack lubi krótkie zapytania jak „firma spedycyjna Głogów”.
+    Segmenty FTL/LTL w query Maps pogarszają wyniki (puste / śmieci).
+    """
+    lands = resolve_active_bundeslaender(active)
+    seen: set[str] = set()
+    terms: list[str] = []
+    for land in lands:
+        for city in BUNDESLAND_CONFIG[land]["cities"]:
+            for tmpl in (
+                "firma spedycyjna {city}",
+                "spedycja {city}",
+                "spedytor {city}",
+                "biuro spedycyjne {city}",
+                "firma transportowa {city}",
+            ):
+                _append_unique_term(
+                    terms, seen, tmpl.format(city=city), max_terms=10_000
+                )
+        for tmpl in (
+            "firma spedycyjna {land}",
+            "spedycja {land}",
+            "biuro spedycyjne {land}",
+        ):
+            _append_unique_term(
+                terms, seen, tmpl.format(land=land), max_terms=10_000
+            )
     return terms
 
 
@@ -703,31 +797,36 @@ def build_places_discovery_terms(active: list[str] | None = None) -> list[str]:
     """
     Krótkie frazy pod endpoint Serper ``/places`` (wizytówki firm).
 
-    Places lubi zwięzłe zapytania typu „spedycja {city} {chain}” —
+    Places lubi zwięzłe zapytania typu „spedycja {city}” —
     dłuższe szablony z fali 1 słabiej działają na lokalnym indeksie.
     Bierze do 8 miast na województwo + jedną frazę na samo woj.
+    Bez FTL/LTL w query (Local Pack ich nie potrzebuje).
     """
     lands = resolve_active_bundeslaender(active)
     seen: set[str] = set()
     terms: list[str] = []
-    chain_counter = [0]
     for land in lands:
         for city in BUNDESLAND_CONFIG[land]["cities"][:8]:
             for tmpl in (
-                "spedycja {city} {chain}",
-                "firma spedycyjna {city} {chain}",
-                "transport FTL {city} {chain}",
-                "spedytor {city} {chain}",
+                "spedycja {city}",
+                "firma spedycyjna {city}",
+                "spedytor {city}",
+                "biuro spedycyjne {city}",
+                "firma transportowa {city}",
             ):
-                chain = _rotating_chain(chain_counter)
                 _append_unique_term(
-                    terms, seen, tmpl.format(city=city, chain=chain), max_terms=10_000
+                    terms, seen, tmpl.format(city=city), max_terms=10_000
                 )
-        chain = _rotating_chain(chain_counter)
         _append_unique_term(
             terms,
             seen,
-            f"spedycja {land} {chain}",
+            f"spedycja {land}",
+            max_terms=10_000,
+        )
+        _append_unique_term(
+            terms,
+            seen,
+            f"firma spedycyjna {land}",
             max_terms=10_000,
         )
     return terms
@@ -753,6 +852,10 @@ def build_broad_discovery_terms(active: list[str] | None = None) -> list[str]:
                 "firma spedycyjna {city}",
                 "transport drogowy {city}",
                 "spedytor {city} {chain}",
+                # Bez {chain}
+                "spedytor {city}",
+                "biuro spedycyjne {city}",
+                "spedycja drogowa {city}",
             ):
                 chain = _rotating_chain(chain_counter)
                 _append_unique_term(
@@ -764,6 +867,10 @@ def build_broad_discovery_terms(active: list[str] | None = None) -> list[str]:
             "transport FTL {short}",
             "spedycja drogowa {land}",
             "freight forwarding {land}",
+            # Bez {chain}
+            "spedycja {land}",
+            "spedytor {land}",
+            "biuro spedycyjne {land}",
         ):
             chain = _rotating_chain(chain_counter)
             _append_unique_term(
@@ -793,6 +900,11 @@ def build_fallback_terms(active: list[str] | None = None) -> list[str]:
             "firma spedycyjna {short} {chain}",
             "transport międzynarodowy {land}",
             "spedycja FTL {land}",
+            # Bez {chain}
+            "spedycja {land}",
+            "firma spedycyjna {short}",
+            "firma spedycyjna {land}",
+            "spedycja drogowa {land}",
         ):
             chain = _rotating_chain(chain_counter)
             fb.append(tmpl.format(land=land, short=short, chain=chain))
@@ -801,6 +913,11 @@ def build_fallback_terms(active: list[str] | None = None) -> list[str]:
         "firma spedycyjna Polska {chain}",
         "transport drogowy międzynarodowy Polska",
         "spedytor fracht Polska {chain}",
+        # Bez {chain}
+        "spedycja Polska",
+        "firma spedycyjna Polska",
+        "spedytor Polska",
+        "biuro spedycyjne Polska",
     ):
         chain = _rotating_chain(chain_counter)
         fb.append(tmpl.format(chain=chain))
@@ -860,6 +977,7 @@ def configure_campaign_bundeslaender(
     module.SERPER_DISCOVERY_BROAD_TERMS = build_broad_discovery_terms(active)
     module.SERPER_DISCOVERY_LANDKREIS_TERMS = build_landkreis_discovery_terms(active)
     module.SERPER_DISCOVERY_PLACES_TERMS = build_places_discovery_terms(active)
+    module.SERPER_DISCOVERY_MAPS_TERMS = build_maps_discovery_terms(active)
     module.SERPER_DISCOVERY_REGION_SUFFIX = build_region_suffix(active)
     return active
 
@@ -966,6 +1084,7 @@ SERPER_DISCOVERY_FALLBACK_TERMS = build_fallback_terms()
 SERPER_DISCOVERY_BROAD_TERMS = build_broad_discovery_terms()
 SERPER_DISCOVERY_LANDKREIS_TERMS = build_landkreis_discovery_terms()
 SERPER_DISCOVERY_PLACES_TERMS = build_places_discovery_terms()
+SERPER_DISCOVERY_MAPS_TERMS = build_maps_discovery_terms()
 SERPER_DISCOVERY_REGION_SUFFIX = build_region_suffix()
 
 

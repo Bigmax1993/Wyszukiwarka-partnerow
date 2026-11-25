@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ TESTOWY: tests/test_claude_contact_extract.py
+# CO ROBI: testy ekstrakcji kontaktów przez Claude: budowa promptu (priorytet /kontakt), priorytetyzacja tekstu, parsowanie odpowiedzi, scalanie do collected i cache wyników.
+# ROLA W PIPELINE: zabezpiecza krok 'contact extract' (fallback, gdy regex nie znajdzie e-maila).
+# ZALEŻNOŚCI: unittest, unittest.mock.patch, claude_contact_extract, claude_prompts, contact_extract_utils.
+# WEJŚCIE/WYJŚCIE: Moduł nie przyjmuje argumentów CLI; pytest/unittest odkrywa i uruchamia testy; nic nie zwraca (wynik = zielone/czerwone testy).
+# ============================================================
 """Testy extract kontaktów Claude + promptów PL FAS (bez live API)."""
 from __future__ import annotations
 
@@ -17,7 +24,14 @@ from claude_prompts import (
 from contact_extract_utils import parse_contact_extract_response
 
 
+# >>> OPIS FUNKCJI: klasa TestClaudeContactExtract
+# Grupa testów: ekstrakcja kontaktów Claude i jej narzędzia pomocnicze.
+# Klasa nie ma stanu współdzielonego poza tym, co opisano przy poszczególnych testach; testy są niezależne.
 class TestClaudeContactExtract(unittest.TestCase):
+    # >>> OPIS FUNKCJI: funkcja TestClaudeContactExtract.test_build_contact_extract_prompt_prioritizes_kontakt
+    # Test: prompt zawiera kontakt z podstrony /kontakt mimo długiego tekstu wstępu oraz polskie wskazówki (impressum_emails, WPROST, /dane-firmy), bez niemieckiego WÖRTLICH.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_build_contact_extract_prompt_prioritizes_kontakt(self):
         text = (
             "x " * 8000
@@ -33,6 +47,10 @@ class TestClaudeContactExtract(unittest.TestCase):
         self.assertIn("/dane-firmy", p)
         self.assertNotIn("WÖRTLICH", p)
 
+    # >>> OPIS FUNKCJI: funkcja TestClaudeContactExtract.test_prioritize_contact_keywords_pl
+    # Test: prioritize_page_text_for_verify zachowuje fragment z kontaktem (słowa kluczowe PL) przy ścisłym limicie znaków.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_prioritize_contact_keywords_pl(self):
         long_tail = "y " * 5000
         text = (
@@ -45,6 +63,10 @@ class TestClaudeContactExtract(unittest.TestCase):
         )
         self.assertIn("biuro@przyklad.pl", out)
 
+    # >>> OPIS FUNKCJI: funkcja TestClaudeContactExtract.test_parse_contact_extract_impressum_emails
+    # Test: parse_contact_extract_response odczytuje impressum_emails i nazwę firmy.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_parse_contact_extract_impressum_emails(self):
         parsed = parse_contact_extract_response(
             '{"company_name":"Trans Sp. z o.o.","emails":["biuro@trans.pl"],'
@@ -54,6 +76,10 @@ class TestClaudeContactExtract(unittest.TestCase):
         self.assertEqual(parsed["impressum_emails"], ["biuro@trans.pl"])
         self.assertEqual(parsed["company_name"], "Trans Sp. z o.o.")
 
+    # >>> OPIS FUNKCJI: funkcja TestClaudeContactExtract.test_merge_claude_contacts_into_collected
+    # Test: merge_claude_contacts_into_collected przenosi e-maile, telefony i nazwę firmy z wyniku Claude do struktury collected.
+    # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_merge_claude_contacts_into_collected(self):
         collected = {
             "emails": [],
@@ -74,6 +100,10 @@ class TestClaudeContactExtract(unittest.TestCase):
         self.assertEqual(out["phones"], ["+48 22 123 45 67"])
         self.assertEqual(out["company_name"], "Spedycja Sp. z o.o.")
 
+    # >>> OPIS FUNKCJI: funkcja TestClaudeContactExtract.test_claude_extract_uses_cache
+    # Test: drugie wywołanie claude_extract_contacts_from_pages z tym samym cache_key korzysta z cache — model jest wywołany tylko raz.
+    # Parametry: self, _key, mock_gen (mocki z dekoratorów patch). Zwraca: None (wynik = przejście lub błąd testu).
+    # Efekty uboczne: patche unittest.mock podmieniają klienta Claude/klucz API — brak połączeń sieciowych. Błędy: AssertionError przy niespełnionej asercji.
     @patch("claude_contact_extract.claude_generate_text")
     @patch("claude_contact_extract.get_anthropic_api_key", return_value="test-key")
     def test_claude_extract_uses_cache(self, _key, mock_gen):

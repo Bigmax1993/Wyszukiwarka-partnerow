@@ -1,5 +1,7 @@
 name: CI Deploy
 
+# Smoke scrapera + walidacja sekretów + dry-run email (bez SMTP).
+# Trigger: push na master oraz ręczne workflow_dispatch.
 on:
   push:
     branches: [master]

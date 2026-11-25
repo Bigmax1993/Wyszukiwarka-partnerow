@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu scripts/send_excel_gmail (komentarz; docstring poniżej opisuje cel i wymagane zmienne).
+#   Rola w pipeline: raport WEWNĘTRZNY (nie B2B) — wysyła Excel PL FAS (Kontakte) na jeden adres (EXCEL_REPORT_TO). Nie jest blokowany kill-switchem
+#   DISABLE_CONTRACTOR_EMAILS; osobna flaga DISABLE_EXCEL_REPORT_EMAIL (domyślnie wyłączona) steruje raportem.
+#   Zależności: kanbud_bootstrap (ścieżki), pl_spedycja_data_paths.campaign_output_paths, mail_transport.send_smtp_email_with_attachments,
+#   scraper_env.get_excel_report_to/get_mail_user, stdlib (argparse, logging, zoneinfo…).
+#   Wejście: --to, --excel, --dry-run. Wyjście: kod wyjścia 0/1 oraz komunikaty (OK/BŁĄD).
+# ============================================================
 """
 Wysyłka pliku Excel (PL FAS Kontakte) przez Gmail / yagmail.
 
@@ -132,6 +140,9 @@ def count_kontakte_rows(path: Path) -> int:
         return 0
 
 
+# >>> OPIS FUNKCJI: funkcja build_email_subject
+# Cel: zbudować temat maila raportu. Parametry: path (Path) — załączany plik. Zwraca: str "PL FAS Kontakte Excel — RRRR-MM-DD (nazwa_pliku)"
+# (data w strefie DEFAULT_TZ). Efekty uboczne/błędy: brak.
 def build_email_subject(path: Path) -> str:
     """
     Temat maila raportu PL FAS.
@@ -250,6 +261,9 @@ def send_excel_report(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: wejście CLI (--to, --excel, --dry-run) wywołujące send_excel_report. Parametry: brak. Zwraca: int — 0 po sukcesie; 1 przy braku pliku, błędzie SMTP lub złym adresie.
+# Efekty uboczne: konfiguracja logowania, ewentualna wysyłka maila, komunikaty na stdout/stderr. Błędy: FileNotFoundError łapany (log + komunikat); wynik (False, info) → BŁĄD i kod 1.
 def main() -> int:
     """
     CLI: ``--to`` / ``--excel`` / ``--dry-run`` → ``send_excel_report``.

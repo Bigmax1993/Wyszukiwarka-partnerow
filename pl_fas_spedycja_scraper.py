@@ -1,4 +1,41 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# MODUŁ: pl_fas_spedycja_scraper.py — główny orkiestrator kampanii PL FAS (polskie biura spedycyjne FTL/LTL).
+#
+# CO ROBI I JAKĄ ROLĘ PEŁNI W PIPELINE
+#   To „serce” repozytorium: łączy wszystkie pozostałe moduły w jeden przebieg:
+#     1) discovery: zapytania Serper (gl/hl = pl) dla fraz × województwo (rotacja) → surowi kandydaci,
+#     2) filtr ICP i geo (pl_spedycja_filter, is_poland_pl_candidate, filtr dużych firm),
+#     3) crawl całej domeny (website_full_crawl + fallback Playwright dla cookies),
+#     4) weryfikacja strony: Claude (claude_page_verify) albo reguły słów kluczowych,
+#     5) wyciągnięcie kontaktów: regex + mailto/tel, a przy braku e-maila Claude (claude_contact_extract),
+#     6) cache JSON (Wyniki/pl_spedycja_cache.json) oraz Excel w trybie APPEND (arkusze Kontakte, Wojewodztwa, Info),
+#     7) opcjonalnie kolejka maili B2B przez SMTP (domyślnie WYŁĄCZONA: DISABLE_CONTRACTOR_EMAILS).
+#   Raport Excel → Gmail i upload na Drive to osobne skrypty z katalogu scripts/ (wywoływane z GitHub Actions).
+#
+# KLUCZOWE STRUKTURY
+#   - Wiersz pipeline (dict): url, www, nazwa, company_name_clean, email_target, emails_found, retail_verified,
+#     verification_reason, retail_chains_found (= segmenty transportu), is_gu (= rola spedytora), is_small_firm, bundesland (= województwo).
+#   - cache (dict, JSON): kubełki places/contacts/serper/serper_discovery/serper_daily/email_*/claude_*/website_crawl (patrz _empty_cache).
+#   - Nazwy legacy zachowane celowo (bundesland, retail_*, *_de_gu) — dla zgodności z GHA, run_config i starym cache.
+#
+# CO PRZYJMUJE
+#   - Konfigurację z run_config/*.json (apply_run_config_file + apply_gu_run_config_extras), zmiennych środowiskowych
+#     (klucze API, SMTP, flagi kill-switch) oraz argumentów CLI (--run-config, --test/--smoke, --send-emails-only,
+#     --dry-run-email, --rebuild-from-cache, --backfill-emails-from-cache, --verify-pending-contacts, --reverify-all-contacts, --purge-institutions).
+#
+# CO ZWRACA / EFEKTY
+#   - Nic nie zwraca (CLI); skutki uboczne: pliki w Wyniki/ (cache JSON, Excel, log), wywołania Serper/Claude/SMTP, stan rotacji województw.
+#
+# ZALEŻNOŚCI (importy)
+#   kanbud_bootstrap, pl_spedycja_data_paths, scraper_web_config, playwright_cookie_consent, pl_spedycja_keywords,
+#   libs: polish_text, scraper_env, scraper_email_replies (oraz leniwie: mail_transport, email_journal),
+#   scraper_runtime_limit, scraper_schedule_config, pl_fas_contractor_exclusions, commercial_contact_filter, contact_extract_utils,
+#   pl_spedycja_filter, email_targeting, fas_spedycja_inquiry_email_pl, pl_fas_email_attachment; leniwie: claude_* (client/verify/extract/discovery/prompts),
+#   website_full_crawl, http_page_guard, gu_bundesland_rotation, discovery_run_state, scraper_run_config, email_custom_template, pl_fas_mail_recipients; biblioteki: requests, BeautifulSoup, yagmail (opcjonalnie).
+#
+# SHIM: de_gu_bauunternehmen_scraper.py przekierowuje stare importy na ten moduł.
+# ============================================================
 """
 Orchestrator kampanii PL spedycja drogowa (Forwarding Assistant).
 
@@ -67,6 +104,7 @@ from pl_spedycja_keywords import (
     SERPER_DISCOVERY_BROAD_TERMS,
     SERPER_DISCOVERY_LANDKREIS_TERMS,
     SERPER_DISCOVERY_PLACES_TERMS,
+    SERPER_DISCOVERY_MAPS_TERMS,
     SERPER_DISCOVERY_FALLBACK_TERMS,
     SERPER_DISCOVERY_REGION_SUFFIX,
     SERPER_DISCOVERY_TERMS,
@@ -83,6 +121,10 @@ from pl_spedycja_keywords import (
 CAMPAIGN_ACTIVE_BUNDESLAENDER = list(_KW_ACTIVE_BL)
 
 
+# >>> OPIS FUNKCJI: funkcja apply_gu_run_config_extras
+# Uzupełnienie: parametry — module (moduł scrapera, którego stałe są ustawiane przez setattr), data (dict z JSON run_config). Zwraca: None.
+# Efekty uboczne: zmienia stałe modułu — active_bundeslaender (configure_campaign_bundeslaender), MIN_CONTACTS_TARGET, wyłączenie filtrów geo (geo_filter_enabled=false),
+# flagi bool (ENABLE_CLAUDE_*, REQUIRE_*, SERPER_UNLIMITED, CLAUDE_UNLIMITED — nazwa klucza w wielkich literach) oraz filtr roli w pl_spedycja_filter. Błędy: niepoprawny min_contacts_target jest ignorowany.
 def apply_gu_run_config_extras(module, data: dict) -> None:
     """
     Dopina pola z ``run_config/*.json`` niewspólne dla ``apply_run_config_file``.
@@ -579,6 +621,10 @@ CLAUDE_DISCOVERY_TERMS_PER_ROUND = 8
 SERPER_DISCOVERY_RESERVE = 333
 CLAUDE_DAILY_LIMIT = 3000
 CLAUDE_DISCOVERY_RESERVE = 1000
+# >>> OPIS FUNKCJI: funkcja _env_truthy
+# Cel: wspólny parser flag z env i run_config. Parametry: raw (str|Any) — wartość do oceny.
+# Zwraca: bool — True dla "1", "true", "yes", "tak", "on" (po strip, bez wielkości liter); None/puste → False.
+# Efekty uboczne/błędy: brak.
 def _env_truthy(raw: str) -> bool:
     """
     Czy wartość env/config jest „prawdą” (1/true/yes/tak/on).
@@ -607,6 +653,8 @@ if _claude_reserve_env:
     except ValueError:
         pass
 
+# >>> OPIS FUNKCJI: funkcja _sync_claude_limits_from_module
+# Uzupełnienie: parametry — brak. Zwraca: None. Efekt uboczny: wywołuje claude_client.configure_claude_limits z limitami dziennymi/rezerwą discovery z tego modułu. Błędy: propagowane z claude_client.
 def _sync_claude_limits_from_module() -> None:
     """
     Przekazuje limity Claude (dzień / rezerwa discovery) do ``claude_client``.
@@ -628,6 +676,30 @@ CLAUDE_DISCOVERY_CACHE_DAYS = 7
 # Pełny crawl domeny przed Claude (limit w website_full_crawl.MAX_SITE_CRAWL_PAGES)
 MAX_PAGES_FOR_RETAIL_VERIFICATION = 8  # legacy — testy / kompatybilność
 ENABLE_SERPER_PLACES_ENDPOINT = True
+# True: discovery firm przez scraping Google Maps (Selenium) zamiast Serper API
+# Env: GOOGLE_MAPS_DISCOVERY=0 wyłącza (fallback Serper).
+ENABLE_GOOGLE_MAPS_DISCOVERY = (
+    (os.environ.get("GOOGLE_MAPS_DISCOVERY") or "1").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+GOOGLE_MAPS_DISCOVERY_MAX_RESULTS = 20
+_maps_max_env = (os.environ.get("GOOGLE_MAPS_DISCOVERY_MAX_RESULTS") or "").strip()
+if _maps_max_env:
+    try:
+        GOOGLE_MAPS_DISCOVERY_MAX_RESULTS = max(1, int(_maps_max_env))
+    except ValueError:
+        pass
+# Faza A (Maps): zapis wizytówki do JSON bez Serper/crawl; uzupełnianie luk = osobna faza.
+GAP_STATUS_NEEDS_ENRICH = "needs_enrich"
+MAPS_PHASE_A_EMAIL_STATUS = "pending_gap_fill"
+# Po Fazie A (Maps) od razu Faza B (Serper gap-fill). Domyślnie OFF —
+# czystszy wariant: wieczorny cron run_gap_fill.sh (nie blokuje budżetu w discovery).
+ENABLE_GAP_FILL_AFTER_MAPS = (
+    (os.environ.get("GAP_FILL_AFTER_MAPS") or os.environ.get("ENABLE_GAP_FILL_AFTER_MAPS") or "0")
+    .strip()
+    .lower()
+    in ("1", "true", "yes", "on")
+)
 LARGE_COMPANY_DOMAINS = frozenset(
     {
         "strabag.com",
@@ -775,6 +847,9 @@ _OST_GU_SMTP_PORT_SSL = 465
 _OST_GU_SMTP_PORT_STARTTLS = 587
 
 
+# >>> OPIS FUNKCJI: funkcja _ost_gu_truthy
+# Cel: alias _env_truthy dla flag SMTP/Serper z historycznym prefiksem „Ost-GU”. Parametry: raw (str). Zwraca: bool (te same wartości prawdy).
+# Efekty uboczne/błędy: brak.
 def _ost_gu_truthy(raw: str) -> bool:
     """
     Alias ``_env_truthy`` dla flag SMTP / Serper z prefiksem legacy Ost-GU.
@@ -782,6 +857,10 @@ def _ost_gu_truthy(raw: str) -> bool:
     return str(raw or "").strip().lower() in ("1", "true", "yes", "tak", "on")
 
 
+# >>> OPIS FUNKCJI: funkcja is_serper_unlimited
+# Cel: sprawdzić, czy dzienny limit zapytań Serper jest wyłączony. Parametry: brak.
+# Zwraca: bool — True, gdy stała SERPER_UNLIMITED (run_config) jest ustawiona albo env SERPER_UNLIMITED / DISABLE_SERPER_DAILY_LIMIT ma wartość prawdy.
+# Efekty uboczne: odczyt os.getenv. Błędy: brak.
 def is_serper_unlimited() -> bool:
     """
     Pełny pipeline: wykorzystaj Serper bez dziennego limitu (env lub run_config).
@@ -795,6 +874,9 @@ def is_serper_unlimited() -> bool:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _ost_gu_split_recipients
+# Cel: rozbić listę odbiorców CC/BCC z env. Parametry: raw (str) — adresy rozdzielone "," lub ";".
+# Zwraca: list[str] — niepuste adresy po strip; [] dla pustego wejścia oraz dla wartości 0/off/false/no/nie. Efekty uboczne/błędy: brak.
 def _ost_gu_split_recipients(raw: str) -> list[str]:
     """
     Parsuje listę CC/BCC z env (przecinki/średniki); ``0/off/false`` = pusta lista.
@@ -807,6 +889,9 @@ def _ost_gu_split_recipients(raw: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+# >>> OPIS FUNKCJI: funkcja _ost_gu_smtp_host
+# Cel: ustalić host SMTP dla wysyłki scrapera. Parametry: brak. Zwraca: str — SMTP_HOST z env; dla adresu gmail.com/googlemail.com "smtp.gmail.com";
+# w przeciwnym razie domyślny _OST_GU_SMTP_DEFAULT_HOST. Efekty uboczne: odczyt env (scraper_env, import leniwy). Błędy: brak.
 def _ost_gu_smtp_host() -> str:
     """
     Host SMTP: ``SMTP_HOST`` albo domyślnie ``smtp.gmail.com`` dla kont Gmail.
@@ -822,6 +907,9 @@ def _ost_gu_smtp_host() -> str:
     return _OST_GU_SMTP_DEFAULT_HOST
 
 
+# >>> OPIS FUNKCJI: funkcja _ost_gu_smtp_port
+# Cel: ustalić port SMTP. Parametry: brak. Zwraca: int — SMTP_PORT (jeśli cyfry); inaczej port SSL (gdy SMTP_SSL włączone), a w pozostałych przypadkach port STARTTLS
+# (stałe _OST_GU_SMTP_PORT_SSL / _OST_GU_SMTP_PORT_STARTTLS). Efekty uboczne: odczyt env. Błędy: brak.
 def _ost_gu_smtp_port() -> int:
     """
     Port SMTP z env albo 465 (SSL) / 587 (STARTTLS) wg ``SMTP_SSL``.
@@ -836,6 +924,9 @@ def _ost_gu_smtp_port() -> int:
     return _OST_GU_SMTP_PORT_STARTTLS
 
 
+# >>> OPIS FUNKCJI: funkcja _ost_gu_smtp_use_ssl
+# Cel: zdecydować, czy używać SMTP_SSL zamiast STARTTLS. Parametry: brak. Zwraca: bool — wartość SMTP_SSL, jeśli ustawiona; inaczej True, gdy port == port SSL.
+# Efekty uboczne: odczyt env. Błędy: brak.
 def _ost_gu_smtp_use_ssl() -> bool:
     """
     Czy łączyć przez SMTP_SSL (port 465) zamiast STARTTLS.
@@ -847,6 +938,9 @@ def _ost_gu_smtp_use_ssl() -> bool:
     return _ost_gu_smtp_port() == _OST_GU_SMTP_PORT_SSL
 
 
+# >>> OPIS FUNKCJI: funkcja _ost_gu_yagmail_client
+# Cel: zbudować klienta yagmail z MAIL_USER/MAIL_PASSWORD i ustawień SMTP. Parametry: brak. Zwraca: yagmail.SMTP (bez hosta: ustawienia domyślne yagmail; z hostem: host, port, SSL lub STARTTLS).
+# Efekty uboczne: import yagmail, odczyt env. Błędy: ImportError bez yagmail; ValueError("brak MAIL_USER / MAIL_PASSWORD") bez loginu lub hasła.
 def _ost_gu_yagmail_client():
     """
     Buduje klienta yagmail z ``MAIL_USER`` / ``MAIL_PASSWORD`` i ustawień SMTP.
@@ -876,6 +970,10 @@ def _ost_gu_yagmail_client():
     )
 
 
+# >>> OPIS FUNKCJI: funkcja get_email_attachments_de_gu
+# Cel: zwrócić ścieżki załączników PPTX (oferta + prezentacja) wymaganych przy wysyłce SMTP. Parametry: logger (Logger|None).
+# Zwraca: list[str] — absolutne ścieżki istniejących plików z ensure_fas_email_attachments(CAMPAIGN_DIR, logger). Nazwa legacy; preferowany alias get_email_attachments_pl_fas.
+# Efekty uboczne: może pobrać pliki z Google Drive (przy włączonym Drive) lub użyć lokalnych. Błędy: jak ensure_fas_email_attachments.
 def get_email_attachments_de_gu(logger: logging.Logger | None = None) -> list[str]:
     """
     Załączniki PPTX FAS (oferta + prezentacja) — wymagane przy wysyłce SMTP.
@@ -890,6 +988,9 @@ def get_email_attachments_de_gu(logger: logging.Logger | None = None) -> list[st
 get_email_attachments_pl_fas = get_email_attachments_de_gu
 
 
+# >>> OPIS FUNKCJI: funkcja _build_de_gu_outgoing_email
+# Uzupełnienie: parametry — username (nadawca/From), to_email, subject, body_plain (str); cc (keyword-only, list[str]); attachment_path / attachment_paths (Path|list[Path]) — załączniki PPTX.
+# Zwraca: email.message.EmailMessage z nagłówkami From/To/Cc/Subject, treścią tekstową i załącznikami. Efekty uboczne: odczyt plików załączników z dysku. Błędy: OSError przy nieczytelnym pliku propaguje się (łapie je send_email_de_gu).
 def _build_de_gu_outgoing_email(
     username: str,
     to_email: str,
@@ -1028,6 +1129,9 @@ def console_step(message: str) -> None:
         print(f"[KROK] {message}", flush=True)
 
 
+# >>> OPIS FUNKCJI: funkcja is_running_in_jupyter
+# Cel: rozpoznać uruchomienie w Jupyterze. Parametry: brak. Zwraca: bool — True, gdy powłoka IPython to ZMQInteractiveShell. Efekty uboczne: import IPython (leniwy).
+# Błędy: każdy wyjątek (np. brak IPython) łapany → False.
 def is_running_in_jupyter() -> bool:
     """
     True, gdy kod działa w Jupyter (ZMQInteractiveShell), nie w zwykłym CLI.
@@ -1043,6 +1147,9 @@ def is_running_in_jupyter() -> bool:
         return False
 
 
+# >>> OPIS FUNKCJI: funkcja wait_for_user_confirmation
+# Cel: wstrzymać program do potwierdzenia użytkownika (Enter). Parametry: message (str) — komunikat; jupyter_mode (bool) — dodatkowa podpowiedź w Jupyterze.
+# Zwraca: None. Efekty uboczne: wypisuje komunikat, czeka na input(); przy braku stdin (EOFError) czeka 15 s (time.sleep) i kontynuuje. Błędy: EOFError obsłużony.
 def wait_for_user_confirmation(message: str, jupyter_mode: bool = False) -> None:
     """
     Pauza na Enter (CLI) albo komunikat w Jupyter przed kontynuacją.
@@ -1057,6 +1164,9 @@ def wait_for_user_confirmation(message: str, jupyter_mode: bool = False) -> None
         time.sleep(15)
 
 
+# >>> OPIS FUNKCJI: funkcja setup_logging
+# Cel: skonfigurować logger scrapera (konsola UTF-8 + plik w Wyniki/). Parametry: brak. Zwraca: logging.Logger "pl_fas_spedycja_scraper".
+# Efekty uboczne: tworzy OUTPUT_DIR (mkdir parents) i podłącza handler pliku LOG_FILE (setup_script_logging czyści poprzednie handlery). Błędy: OSError z mkdir/otwarcia pliku propaguje się.
 def setup_logging() -> logging.Logger:
     """
     Konfiguruje logger scrapera (plik lokalny w Wyniki/ + konsola) i zwraca go.
@@ -1065,6 +1175,9 @@ def setup_logging() -> logging.Logger:
     return setup_script_logging("pl_fas_spedycja_scraper", LOG_FILE)
 
 
+# >>> OPIS FUNKCJI: funkcja save_csv
+# Cel: zapisać wiersze do CSV (legacy fallback). Parametry: rows (list[dict]) — klucze zgodne z listą pól (fraza, nazwa, ocena, adres, telefon, www, url…); path (Path).
+# Zwraca: None. Efekty uboczne: tworzy OUTPUT_DIR, zapisuje plik (separator ";", UTF-8 z BOM). Błędy: ValueError przy kluczach spoza listy pól (DictWriter) oraz OSError propagują się.
 def save_csv(rows, path: Path) -> None:
     """
     Zapisuje wiersze do CSV (separator ``;``, UTF-8 BOM) — legacy fallback Excela.
@@ -1091,6 +1204,8 @@ def save_csv(rows, path: Path) -> None:
         writer.writerows(rows)
 
 
+# >>> OPIS FUNKCJI: funkcja _excel_cell_str
+# Uzupełnienie: parametry — value (dowolny typ komórki). Zwraca: str — pusty string dla None/NaN, w pozostałych przypadkach tekst po strip. Efekty uboczne/błędy: brak.
 def _excel_cell_str(value) -> str:
     """
     Normalizuje komórkę Excela do stringa (bez NaN / None).
@@ -1110,11 +1225,16 @@ def _excel_cell_str(value) -> str:
     return str(value).strip()
 
 
+# >>> OPIS FUNKCJI: funkcja _excel_yes_no
+# Cel: zamienić bool na etykietę Excela. Parametry: flag (bool). Zwraca: str — "tak" lub "nie" (kolumny „WWW sprawdzone”, „Spedycja”). Efekty uboczne/błędy: brak.
 def _excel_yes_no(flag: bool) -> str:
     """Flagę bool → ``tak`` / ``nie`` (kolumny WWW sprawdzone, Spedycja)."""
     return "tak" if flag else "nie"
 
 
+# >>> OPIS FUNKCJI: funkcja _excel_flag_truthy
+# Cel: odczytać flagę tak/nie z komórki Excela (także legacy ja/nein). Parametry: raw — wartość komórki.
+# Zwraca: bool|None — True dla tak/ja/yes/true/1, False dla nie/nein/no/false/0, None dla pustej lub nierozpoznanej. Efekty uboczne/błędy: brak.
 def _excel_flag_truthy(raw) -> bool | None:
     """Odczyt ``tak``/``nie`` oraz legacy ``ja``/``nein`` z Excela."""
     s = _excel_cell_str(raw).lower()
@@ -1127,6 +1247,10 @@ def _excel_flag_truthy(raw) -> bool | None:
     return None
 
 
+# >>> OPIS FUNKCJI: funkcja _normalize_excel_row_headers
+# Cel: ujednolicić nagłówki wiersza wczytanego z Excela (stare DE/PL → aktualne, np. Bundesland → Województwo). Parametry: row (dict|None).
+# Zwraca: dict z kanonicznymi kluczami wg EXCEL_HEADER_ALIASES; kolumna Kleinunternehmen jest pomijana; przy kolizji kluczy wygrywa pierwsza niepusta wartość.
+# Efekty uboczne/błędy: brak.
 def _normalize_excel_row_headers(row: dict) -> dict:
     """
     Mapuje stare nagłówki DE/PL na aktualne (Bundesland→Województwo, …).
@@ -1143,6 +1267,9 @@ def _normalize_excel_row_headers(row: dict) -> dict:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja _excel_region_cell
+# Cel: odczytać region z wiersza Excela lub pipeline. Parametry: row (dict). Zwraca: str — pierwsza niepusta wartość z: Województwo, Bundesland, bundesland, discovery_wojewodztwo
+# (po _excel_cell_str). Efekty uboczne/błędy: brak.
 def _excel_region_cell(row: dict) -> str:
     """Wartość regionu z wiersza Excel lub pipeline (Województwo / legacy)."""
     return _excel_cell_str(
@@ -1153,6 +1280,8 @@ def _excel_region_cell(row: dict) -> str:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja export_row_dedupe_key
+# Uzupełnienie: parametry — row (dict w nagłówkach Excela lub kluczach pipeline). Zwraca: str — klucz prefiksowany typem (e-mail, URL albo nazwa+region), wszystko lowercase; "" gdy brak danych. Efekty uboczne/błędy: brak.
 def export_row_dedupe_key(row: dict) -> str:
     """
     Klucz deduplikacji wiersza arkusza Kontakte przy append.
@@ -1173,6 +1302,8 @@ def export_row_dedupe_key(row: dict) -> str:
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja bundesland_row_dedupe_key
+# Uzupełnienie: parametry — row (dict arkusza Wojewodztwa). Zwraca: str — URL lowercase lub złożony klucz nazwa|region|adres; "" gdy brak danych. Efekty uboczne/błędy: brak.
 def bundesland_row_dedupe_key(row: dict) -> str:
     """
     Klucz deduplikacji arkusza Wojewodztwa (geo-podsumowanie).
@@ -1189,6 +1320,8 @@ def bundesland_row_dedupe_key(row: dict) -> str:
     return f"name:{name}|{state}|{address}"
 
 
+# >>> OPIS FUNKCJI: funkcja _excel_preserve_columns
+# Uzupełnienie: parametry — brak. Zwraca: frozenset[str] — nazwy kolumn chronionych przed nadpisaniem (REPLY_EXPORT_COLUMNS + „Cena rel. 1..3”). Efekty uboczne/błędy: brak.
 def _excel_preserve_columns() -> frozenset[str]:
     """
     Kolumny chronione przy merge (odpowiedzi mail / ręczne pola).
@@ -1201,6 +1334,9 @@ def _excel_preserve_columns() -> frozenset[str]:
     return frozenset(cols)
 
 
+# >>> OPIS FUNKCJI: funkcja _merge_excel_export_row
+# Uzupełnienie: parametry — existing (dict, wiersz z Excela); incoming (dict, wiersz z pipeline). Zwraca: nowy dict (existing nie jest mutowany) —
+# kolumny chronione uzupełniane tylko gdy puste, pozostałe nadpisywane niepustą wartością z incoming. Efekty uboczne/błędy: brak.
 def _merge_excel_export_row(existing: dict, incoming: dict) -> dict:
     """
     Scala istniejący wiersz Excela z nowym z pipeline.
@@ -1225,6 +1361,8 @@ def _merge_excel_export_row(existing: dict, incoming: dict) -> dict:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja merge_export_rows_append
+# Uzupełnienie: parametry — existing, incoming (list[dict]); logger (keyword-only). Zwraca: (merged, appended, updated). Efekty uboczne: log info z licznikami; wejścia nie są mutowane. Błędy: brak własnej obsługi.
 def merge_export_rows_append(
     existing: list[dict],
     incoming: list[dict],
@@ -1267,6 +1405,10 @@ def merge_export_rows_append(
     return merged, appended, updated
 
 
+# >>> OPIS FUNKCJI: funkcja merge_bundesland_rows_append
+# Cel: dołączyć do istniejących wierszy arkusza Wojewodztwa nowe rekordy (append) i zaktualizować powtórzone. Parametry: existing (list[dict]); incoming (list[dict]);
+# logger (keyword-only, Logger|None). Zwraca: (merged, appended, updated) — klucz identyfikacji to bundesland_row_dedupe_key; istniejące wiersze są scalane przez _merge_excel_export_row.
+# Efekty uboczne: log info z licznikami; wejścia nie są mutowane (kopie). Błędy: brak własnej obsługi.
 def merge_bundesland_rows_append(
     existing: list[dict],
     incoming: list[dict],
@@ -1308,6 +1450,9 @@ def merge_bundesland_rows_append(
     return merged, appended, updated
 
 
+# >>> OPIS FUNKCJI: funkcja load_existing_excel_sheets
+# Uzupełnienie: parametry — path (Path do .xlsx); logger. Zwraca: dict[str, list[dict]] — nazwa arkusza → wiersze (z pominięciem arkusza Info); {} gdy plik nie istnieje, nie jest .xlsx lub odczyt się nie powiódł.
+# Efekty uboczne: odczyt pliku (pandas), logi. Błędy: łapane i logowane — funkcja nie propaguje wyjątków odczytu.
 def load_existing_excel_sheets(path: Path, logger: logging.Logger) -> dict[str, list[dict]]:
     """
     Wczytuje istniejący XLSX do append (wszystkie arkusze poza Info).
@@ -1347,6 +1492,8 @@ def load_existing_excel_sheets(path: Path, logger: logging.Logger) -> dict[str, 
     return sheets
 
 
+# >>> OPIS FUNKCJI: funkcja build_excel_info_sheet_rows
+# Uzupełnienie: parametry — brak. Zwraca: list[dict] — wiersze tekstowej instrukcji dla arkusza „Info” (opis trybu APPEND, cache JSON i arkuszy). Efekty uboczne/błędy: brak.
 def build_excel_info_sheet_rows() -> list[dict]:
     """
     Buduje wiersze arkusza Info (dokumentacja dla użytkownika Excela).
@@ -1408,6 +1555,11 @@ def build_excel_info_sheet_rows() -> list[dict]:
     ]
 
 
+# >>> OPIS FUNKCJI: funkcja save_excel
+# Uzupełnienie: parametry — rows (list[dict] wiersze pipeline); path (Path docelowy .xlsx); logger; cache (dict|None — potrzebny do cache cleanupu Claude). Zwraca: None.
+# Efekty uboczne: tworzy OUTPUT_DIR; opcjonalny Claude cleanup każdego wiersza (wywołania API, gdy podano logger i cache oraz cleanup włączony); odczyt istniejącego pliku i scalenie (append) arkuszy Kontakte i Wojewodztwa;
+# zapis XLSX przez write_excel_with_reply_styles (arkusze Info/Kontakte/Wojewodztwa, synchronizacja kolumn odpowiedzi z cache). Przy zablokowanym pliku (PermissionError) zapisuje kopię <nazwa>_export.xlsx.
+# Błędy: ImportError (brak pandas/openpyxl) jest logowany i PROPAGOWANY dalej; pozostałe wyjątki nie są tu łapane.
 def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
     """
     Zapisuje / aktualizuje ``pl_spedycja_kontakte.xlsx`` (append).
@@ -1501,6 +1653,9 @@ def save_excel(rows, path: Path, logger: logging.Logger, cache=None) -> None:
         raise e
 
 
+# >>> OPIS FUNKCJI: funkcja extract_bundesland
+# Uzupełnienie: parametry — row (dict). Zwraca: str — klucz województwa (np. "Dolnoslaskie") z pól discovery_wojewodztwo/bundesland, nazwy w adresie lub miasta z BUNDESLAND_CONFIG; "" gdy nie rozpoznano.
+# Efekty uboczne/błędy: brak (czysta funkcja).
 def extract_bundesland(row: dict) -> str:
     """
     Wyciąga województwo PL do kolumny Excel ``Województwo``.
@@ -1559,6 +1714,9 @@ def extract_bundesland(row: dict) -> str:
     return best_land
 
 
+# >>> OPIS FUNKCJI: funkcja extract_miasto
+# Cel: ustalić miasto do kolumny Excela. Parametry: row (dict) — pola miasto/city, full_address, adres, nazwa, company_name_clean.
+# Zwraca: str — jawne miasto albo najdłuższa nazwa miasta (>= 3 znaki) z BUNDESLAND_CONFIG znaleziona w tekście wiersza; "" gdy brak. Efekty uboczne/błędy: brak.
 def extract_miasto(row: dict) -> str:
     """
     Miasto do kolumny Excel — jawne pole albo dopasowanie z ``BUNDESLAND_CONFIG``.
@@ -1587,6 +1745,9 @@ def extract_miasto(row: dict) -> str:
     return best
 
 
+# >>> OPIS FUNKCJI: funkcja sanitize_log_url
+# Cel: ukryć klucz API w URL-u zapisywanym w logach. Parametry: url (str). Zwraca: str — fragment "key=..." zamieniony na "key=***"; puste wejście zwracane bez zmian.
+# Efekty uboczne/błędy: brak.
 def sanitize_log_url(url: str) -> str:
     """
     Skraca URL do bezpiecznej formy w logach (bez query/tokenów gdy zbędne).
@@ -1596,6 +1757,9 @@ def sanitize_log_url(url: str) -> str:
     return re.sub(r"key=[^&\s]+", "key=***", url)
 
 
+# >>> OPIS FUNKCJI: funkcja _is_rate_limit_error
+# Cel: rozpoznać błąd rate limit (HTTP 429). Parametry: err (Exception). Zwraca: bool — True, gdy tekst błędu zawiera "429", "too many requests" lub "resource exhausted" albo
+# response.status_code == 429. Efekty uboczne/błędy: brak.
 def _is_rate_limit_error(err: Exception) -> bool:
     """
     Czy wyjątek wygląda na HTTP 429 / rate limit API (Serper, Claude, SMTP).
@@ -1621,6 +1785,10 @@ _SERPER_QUOTA_ERROR_MARKERS = (
 )
 
 
+# >>> OPIS FUNKCJI: funkcja _is_serper_quota_error
+# Cel: rozpoznać wyczerpanie kredytów Serper (a nie dzienny limit własny). Parametry: err (Exception).
+# Zwraca: bool — True dla markerów z _SERPER_QUOTA_ERROR_MARKERS w tekście, statusu HTTP 402 lub treści JSON zawierającej credit/balance/payment/quota (przy statusie 402/403/400 albo słowie "credit").
+# Efekty uboczne/błędy: błąd parsowania JSON odpowiedzi łapany → False.
 def _is_serper_quota_error(err: Exception) -> bool:
     """
     True gdy Serper odrzuca zapytanie z powodu braku kredytów (nie dziennego limitu).
@@ -1646,6 +1814,9 @@ def _is_serper_quota_error(err: Exception) -> bool:
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja is_serper_api_exhausted
+# Cel: sprawdzić, czy kredyty Serper zostały oznaczone jako wyczerpane dzisiaj. Parametry: cache (dict|None). Zwraca: bool — True, gdy cache["serper_api_exhausted"][campaign_today()] jest ustawione;
+# False dla pustego cache. Efekty uboczne/błędy: brak.
 def is_serper_api_exhausted(cache: dict | None) -> bool:
     """
     Kredyty Serper wyczerpane dziś — nie wysyłaj kolejnych zapytań API.
@@ -1657,6 +1828,9 @@ def is_serper_api_exhausted(cache: dict | None) -> bool:
     return bool(flags.get(today))
 
 
+# >>> OPIS FUNKCJI: funkcja mark_serper_api_exhausted
+# Cel: zapisać w cache, że API Serper jest wyczerpane (discovery przestaje wołać API). Parametry: cache (dict, mutowany); reason (str) — powód (ucinany do 240 znaków; domyślnie "credits_exhausted").
+# Zwraca: None. Efekty uboczne: zapis cache["serper_api_exhausted"][data], mark_serper_limit_reached_today(cache), komunikat console_step. Błędy: brak.
 def mark_serper_api_exhausted(cache: dict, reason: str = "") -> None:
     """
     Oznacza w cache, że klucz Serper wyczerpany — discovery przestaje wołać API.
@@ -1672,6 +1846,9 @@ def mark_serper_api_exhausted(cache: dict, reason: str = "") -> None:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja handle_serper_api_failure
+# Cel: obsłużyć błąd wywołania Serper. Parametry: cache (dict); err (Exception); logger. Zwraca: bool — True, gdy błąd oznacza brak kredytów (wtedy oznacza API jako wyczerpane i loguje warning);
+# False dla innych błędów (wywołujący decyduje o ponowieniu). Efekty uboczne: modyfikacja cache, log. Błędy: brak.
 def handle_serper_api_failure(
     cache: dict, err: Exception, logger: logging.Logger
 ) -> bool:
@@ -1796,6 +1973,9 @@ _COMPANY_NAME_SOFT_REJECT_IF_NO_LEGAL_FORM = (
 )
 
 
+# >>> OPIS FUNKCJI: funkcja _company_name_has_legal_form
+# Cel: wykryć formę prawną w nazwie firmy (Sp. z o.o., S.A., GmbH, AG…) jako sygnał „prawdziwa firma”. Parametry: name (str). Zwraca: bool — dopasowanie regexu _COMPANY_LEGAL_FORM_PATTERN (bez wielkości liter).
+# Efekty uboczne/błędy: brak.
 def _company_name_has_legal_form(name: str) -> bool:
     """
     Czy nazwa zawiera formę prawną (Sp. z o.o., GmbH, AG, …) — sygnał „prawdziwa firma”.
@@ -1853,6 +2033,9 @@ def is_rejected_company_name_for_export(
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja finalize_company_name_for_export
+# Uzupełnienie: parametry — llm_name (str, nazwa z Claude); fallback_raw (keyword-only, str — surowa nazwa); website, email (keyword-only, str). Zwraca: str — wybrana nazwa albo "" (wiersz zwykle nie trafi do Excela).
+# Efekty uboczne/błędy: brak.
 def finalize_company_name_for_export(
     llm_name: str,
     *,
@@ -1887,6 +2070,9 @@ def finalize_company_name_for_export(
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja build_claude_row_cleanup_prompt
+# Cel: zbudować prompt Claude do czyszczenia pól wiersza przed zapisem do Excela (wrapper claude_prompts.build_row_cleanup_prompt). Parametry (keyword-only): company, address, phone, email, website, states (str — województwa),
+# handelsketten (str, segmenty), url (str). Zwraca: str — gotowy prompt. Efekty uboczne: leniwy import claude_prompts. Błędy: propagowane z funkcji docelowej.
 def build_claude_row_cleanup_prompt(
     *,
     company: str,
@@ -1915,6 +2101,10 @@ def build_claude_row_cleanup_prompt(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja row_cleanup_fallback
+# Cel: wynik „cleanup” wiersza bez udziału LLM. Parametry: row (dict) — wiersz pipeline; company, address, phone, email, website (str) — surowe wartości do przepisania.
+# Zwraca: dict w formacie odpowiedzi cleanup (company_name_clean, address, phone, email, website, bundesland z extract_bundesland(row), "_fallback": True; pozostałe klucze patrz kod).
+# Efekty uboczne/błędy: brak (czysta funkcja).
 def row_cleanup_fallback(
     row: dict, company: str, address: str, phone: str, email: str, website: str
 ) -> dict:
@@ -1933,6 +2123,10 @@ def row_cleanup_fallback(
     }
 
 
+# >>> OPIS FUNKCJI: funkcja apply_row_enrichment_to_row
+# Cel: nanieść wynik cleanupu (LLM lub fallback) na wiersz pipeline. Parametry: row (dict, MUTOWANY w miejscu); llm_result (dict) — klucze company_name_clean, address, phone, website, bundesland,
+# handelsketten, url. Zwraca: None. Nadpisuje: company_name_clean, nazwa, adres, full_address, telefon, official_website, www (normalize_website), bundesland, retail_chains_found
+# (format_handelsketten_for_excel), url (website_base_url). E-mail NIE jest zmieniany (zostaje z pick_best kontaktów). Błędy: brak własnej obsługi; brakujące klucze → wartości z row.
 def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
     """
     LLM czyści nazwę/adres/telefon — e-mail zostaje z pick_best kontaktów.
@@ -1955,6 +2149,8 @@ def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
         row["url"] = website_base_url(llm_result.get("url")) or row.get("url", "")
 
 
+# >>> OPIS FUNKCJI: funkcja format_handelsketten_for_excel
+# Uzupełnienie: parametry — raw (str; separatory ",", ";", "/", "|"). Zwraca: str — unikalne tagi lowercase w kolejności wystąpienia, rozdzielone ", " (pusty wynik → ""). Efekty uboczne/błędy: brak.
 def format_handelsketten_for_excel(raw: str) -> str:
     """
     Normalizuje listę tagów do komórki Excel (unique, lowercase, ``, ``).
@@ -1970,6 +2166,8 @@ def format_handelsketten_for_excel(raw: str) -> str:
     return ", ".join(parts)
 
 
+# >>> OPIS FUNKCJI: funkcja finalize_row_for_excel_tables
+# Uzupełnienie: parametry — row (dict, MUTOWANY i zwracany). Zwraca: ten sam dict z ujednoliconymi polami (www/url, adres, telefon — jeden numer, retail_chains_found, bundesland/region). Efekty uboczne: mutacja wiersza. Błędy: brak.
 def finalize_row_for_excel_tables(row: dict) -> dict:
     """
     Ujednolica pola wiersza przed mapowaniem na kolumny Excel.
@@ -2003,6 +2201,9 @@ def finalize_row_for_excel_tables(row: dict) -> dict:
     return row
 
 
+# >>> OPIS FUNKCJI: funkcja row_to_excel_kontakte_columns
+# Uzupełnienie: parametry — row (dict); email (str, opcjonalny — nadpisuje email_target). Zwraca: dict z kolumnami arkusza Kontakte (m.in. Nazwa firmy, Województwo, Miasto, Segmenty, E-mail, Telefon, Strona www).
+# Efekty uboczne: brak (pracuje na kopii wiersza). Błędy: brak.
 def row_to_excel_kontakte_columns(row: dict, email: str = "") -> dict:
     """
     Mapuje wiersz pipeline → kolumny arkusza Kontakte (nagłówki PL FAS).
@@ -2025,6 +2226,9 @@ def row_to_excel_kontakte_columns(row: dict, email: str = "") -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja row_to_excel_wojewodztwa_columns
+# Cel: zmapować wiersz pipeline na krótki zestaw kolumn arkusza Wojewodztwa (bez e-maila i telefonu). Parametry: row (dict) — kopiowany i normalizowany przez finalize_row_for_excel_tables.
+# Zwraca: dict z kluczami: Nazwa firmy, Województwo, Miasto (extract_miasto jako fallback), Adres, Strona www, URL. Efekty uboczne: brak (kopia wiersza). Błędy: brak.
 def row_to_excel_wojewodztwa_columns(row: dict) -> dict:
     """
     Mapuje wiersz → krótszy zestaw kolumn arkusza Wojewodztwa (geo).
@@ -2042,6 +2246,8 @@ def row_to_excel_wojewodztwa_columns(row: dict) -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja is_row_llm_cleanup_enabled
+# Cel: sprawdzić, czy włączony jest Claude cleanup wierszy przed Excelem. Parametry: brak. Zwraca: bool — wartość flagi ENABLE_CLAUDE_ROW_CLEANUP. Efekty uboczne/błędy: brak.
 def is_row_llm_cleanup_enabled() -> bool:
     """
     True, gdy ``ENABLE_CLAUDE_ROW_CLEANUP`` — cleanup przed zapisem Excela.
@@ -2049,6 +2255,9 @@ def is_row_llm_cleanup_enabled() -> bool:
     return bool(ENABLE_CLAUDE_ROW_CLEANUP)
 
 
+# >>> OPIS FUNKCJI: funkcja enrich_row_with_llm_cleanup
+# Cel: jednolity punkt wywołania cleanupu — alias do enrich_row_with_claude_cleanup. Parametry: row (dict); logger; cache (dict). Zwraca: dict — wynik z enrich_row_with_claude_cleanup.
+# Efekty uboczne/błędy: jak funkcja docelowa (cache Claude, wywołania API).
 def enrich_row_with_llm_cleanup(
     row: dict, logger: logging.Logger, cache: dict
 ) -> dict:
@@ -2058,6 +2267,10 @@ def enrich_row_with_llm_cleanup(
     return enrich_row_with_claude_cleanup(row, logger, cache)
 
 
+# >>> OPIS FUNKCJI: funkcja enrich_row_with_claude_cleanup
+# Uzupełnienie: parametry — row (dict, MUTOWANY); logger; cache (dict — kubełek claude_row_enrichment). Zwraca: dict — wiersz po cleanupie. Kolejność: wpis w cache["claude_row_enrichment"] (klucz: url lub nazwa|www; także migracja ze starego kubełka gemini_row_enrichment) → przy wyłączonym ENABLE_CLAUDE_ROW_CLEANUP samo ustalenie województwa →
+# brak klucza Anthropic lub pusta odpowiedź → row_cleanup_fallback → wynik Claude (nazwa przez finalize_company_name_for_export, województwo spoza PL_WOJEWODZTWA zastępowane przez extract_bundesland). Każda ścieżka kończy się
+# apply_regex_row_contact_cleanup i finalize_row_for_excel_tables. Efekty uboczne: wywołanie Claude (tylko przy braku wpisu w cache), zapis wyniku w cache. Błędy: brak klucza lub błąd LLM → fallback; funkcja nie przerywa runu.
 def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dict) -> dict:
     """
     Czyści nazwę/adres/telefon/region przez Claude (z cache po URL/nazwie).
@@ -2157,6 +2370,9 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     return finalize_row_for_excel_tables(row)
 
 
+# >>> OPIS FUNKCJI: funkcja _contact_context_text
+# Cel: złożyć jeden tekst kontekstowy firmy pod filtry ICP. Parametry: row (dict). Zwraca: str — wartości pól verification_reason, page_snippet, retail_chains_found, kategoria, nazwa
+# połączone spacją (puste jako ""). Efekty uboczne/błędy: brak.
 def _contact_context_text(row: dict) -> str:
     """
     Blob tekstowy firmy (nazwa, adres, www, snippet) pod filtry ICP / GU.
@@ -2173,6 +2389,9 @@ def _contact_context_text(row: dict) -> str:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _row_has_gu_signal
+# Cel: sprawdzić, czy wiersz niesie sygnał roli ICP (legacy „GU”; w PL: spedytor wg kwalifikacji kampanii). Parametry: row (dict). Zwraca: bool — wynik qualifies_as_gu_for_campaign(tekst kontekstowy).
+# Efekty uboczne/błędy: brak.
 def _row_has_gu_signal(row: dict) -> bool:
     """
     Czy wiersz ma sygnał roli ICP (legacy GU — w PL spedycja: flagi/kwalifikacja kampanii).
@@ -2182,6 +2401,9 @@ def _row_has_gu_signal(row: dict) -> bool:
     return ok
 
 
+# >>> OPIS FUNKCJI: funkcja _excel_status_label
+# Cel: wyznaczyć etykietę kolumny Status w Excelu. Parametry: row (dict). Zwraca: str — email_status, jeśli niepusty; "pending_www_verify", gdy verification_reason == PENDING_WWW_VERIFY_REASON; inaczej "".
+# Efekty uboczne/błędy: brak.
 def _excel_status_label(row: dict) -> str:
     """
     Etykieta kolumny Status w Excelu.
@@ -2197,6 +2419,8 @@ def _excel_status_label(row: dict) -> str:
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja _row_chain_context_text
+# Uzupełnienie: parametry — row (dict). Zwraca: str — _contact_context_text(row) plus tagi retail_chains_found (segmenty). Efekty uboczne/błędy: brak.
 def _row_chain_context_text(row: dict) -> str:
     """
     Tekst do filtrów ICP / segmentów: nazwa+url+snippet + tagi ``retail_chains_found``.
@@ -2255,6 +2479,12 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
         return False
     if is_retail_store_operator_contact(url=url, email=email, text=text):
         return False
+    # Faza A Maps: wystarczy nazwa + (www|maps_url), bez crawla/email.
+    if (row.get("discovery_source") or "").strip() == "google_maps" and (
+        row.get("gap_status") or ""
+    ).strip() == GAP_STATUS_NEEDS_ENRICH:
+        maps_url = (row.get("maps_url") or "").strip()
+        return bool(name and (url or maps_url))
     if (row.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON:
         if not (url and name):
             return False
@@ -2276,6 +2506,10 @@ def is_row_eligible_for_excel_export(row: dict) -> bool:
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja build_export_rows
+# Uzupełnienie: parametry — rows (iterable[dict]); logger (opcjonalny); cache (opcjonalny). Zwraca: list[dict] wierszy arkusza Kontakte — tylko kwalifikujące się (is_row_eligible_for_excel_export), z wybranym e-mailem
+# i dołączonymi kolumnami odpowiedzi mail. Gdy brak email_target, wybiera adres z emails_found (pick_best_email_for_inquiry); bez Claude cleanup sam sanityzuje adres/telefon i wyznacza województwo; kolumny odpowiedzi dołącza merge_export_row (lang="pl") z cache.
+# Efekty uboczne: logger.info z podsumowaniem (liczba wierszy, z e-mailem/bez); normalize_row_company_name modyfikuje wiersze wejściowe. Błędy: brak własnej obsługi.
 def build_export_rows(rows, logger=None, cache=None):
     """
     Buduje listę dictów pod arkusz Kontakte z wierszy pipeline.
@@ -2334,6 +2568,9 @@ def build_export_rows(rows, logger=None, cache=None):
     return export_rows
 
 
+# >>> OPIS FUNKCJI: funkcja build_bundesland_rows
+# Cel: zbudować wiersze arkusza Wojewodztwa z wierszy pipeline z deduplikacją. Parametry: rows (iterable[dict]). Zwraca: list[dict] — kolumny wg row_to_excel_wojewodztwa_columns;
+# pomija „nieznana firma” bez URL oraz duplikaty (klucz: URL, w razie braku nazwa|województwo|adres). Efekty uboczne: brak (normalize_row_company_name pracuje na kopii). Błędy: brak własnej obsługi.
 def build_bundesland_rows(rows):
     """
     Buduje wiersze arkusza Wojewodztwa (dedupe po URL / nazwa+region+adres).
@@ -2359,6 +2596,9 @@ def build_bundesland_rows(rows):
     return state_rows
 
 
+# >>> OPIS FUNKCJI: funkcja persist_progress
+# Uzupełnienie: parametry — all_rows (list[dict]); cache (dict); logger; reason (str, tylko do komunikatu). Zwraca: None. Efekty uboczne: save_excel (OUTPUT_FILE) i save_cache (CACHE_FILE), console_step.
+# Błędy: błędy zapisu cache są łapane w save_cache; błędy zapisu Excela mogą propagować się.
 def persist_progress(all_rows, cache, logger: logging.Logger, reason: str = "") -> None:
     """
     Zapisuje postęp runu: Excel (append) + lokalny cache JSON.
@@ -2388,6 +2628,9 @@ EXCEL_IMPORT_COLUMNS = {
 }
 
 
+# >>> OPIS FUNKCJI: funkcja row_from_excel_record
+# Uzupełnienie: parametry — rec (dict — rekord arkusza Kontakte). Zwraca: dict wiersza pipeline (url, www, nazwa, email_target, retail_verified, is_gu, segmenty, region, kolumny odpowiedzi itd.).
+# Efekty uboczne/błędy: brak (nagłówki normalizowane przez _normalize_excel_row_headers).
 def row_from_excel_record(rec: dict) -> dict:
     """
     Mapuje rekord arkusza Kontakte (nagłówki PL + aliasy DE) → wiersz pipeline.
@@ -2445,6 +2688,9 @@ def row_from_excel_record(rec: dict) -> dict:
     return row
 
 
+# >>> OPIS FUNKCJI: funkcja load_existing_csv
+# Cel: wczytać stary plik CSV kontaktów do wznowienia pracy. Parametry: path (Path); logger. Zwraca: (rows: list[dict], seen_urls: set[str]); gdy plik nie istnieje — ([], set()).
+# Efekty uboczne: odczyt pliku (UTF-8 BOM, separator ";"), logowanie. Błędy: OSError/UnicodeError z otwarcia propagują się.
 def load_existing_csv(path: Path, logger: logging.Logger):
     """
     Wczytuje stary CSV kontaktu; zwraca ``(rows, seen_urls)`` do wznowienia.
@@ -2464,6 +2710,8 @@ def load_existing_csv(path: Path, logger: logging.Logger):
     return rows, seen_urls
 
 
+# >>> OPIS FUNKCJI: funkcja load_existing_output
+# Uzupełnienie: parametry — path (Path .xlsx lub .csv); logger. Zwraca: (rows: list[dict], seen_urls: set[str]). Efekty uboczne: odczyt pliku (arkusz Kontakte, w razie braku — pierwszy arkusz), logi; pomija wiersze „nieznana firma” bez URL. Błędy: brak pliku → puste wyniki; błąd odczytu XLSX jest łapany i logowany (start „od pustego”); rozszerzenie inne niż .xlsx → load_existing_csv.
 def load_existing_output(path: Path, logger: logging.Logger):
     """
     Wczytuje istniejący OUTPUT (XLSX Kontakte lub CSV) do ``all_rows`` + seen URLs.
@@ -2503,6 +2751,9 @@ def load_existing_output(path: Path, logger: logging.Logger):
     return rows, seen_urls
 
 
+# >>> OPIS FUNKCJI: funkcja _empty_cache
+# Cel: stworzyć pusty szkielet cache pipeline. Parametry: brak. Zwraca: dict ze wszystkimi kubełkami (places, contacts, serper, serper_daily, email_daily, email_sent_targets, email_domain_daily,
+# email_suppression, claude_*, serper_discovery, serper_term_stats, serper_limit_reached, serper_api_exhausted, website_crawl) jako pustymi słownikami. Efekty uboczne/błędy: brak.
 def _empty_cache() -> dict:
     """
     Pusty szkielet cache pipeline (kontakty, Serper, Claude, limity dzienne).
@@ -2529,6 +2780,9 @@ def _empty_cache() -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja _prepare_cache_for_json
+# Cel: przygotować cache do json.dump — obiekty WebsiteCrawlResult zamienić na słowniki. Parametry: cache (dict). Zwraca: nowy dict (płytka kopia; podmieniony kubełek website_crawl).
+# Efekty uboczne: leniwy import website_full_crawl; oryginał nie jest mutowany. Błędy: brak własnej obsługi.
 def _prepare_cache_for_json(cache: dict) -> dict:
     """
     Konwersja WebsiteCrawlResult → dict przed json.dump.
@@ -2549,6 +2803,9 @@ def _prepare_cache_for_json(cache: dict) -> dict:
     return payload
 
 
+# >>> OPIS FUNKCJI: funkcja _hydrate_website_crawl_cache
+# Cel: po json.load zamienić słowniki w kubełku website_crawl z powrotem na WebsiteCrawlResult. Parametry: cache (dict, MUTOWANY). Zwraca: None.
+# Gdy website_crawl nie jest słownikiem — ustawia {}; wpisy bez klucza "pages" zostają bez zmian. Błędy: brak własnej obsługi.
 def _hydrate_website_crawl_cache(cache: dict) -> None:
     """
     Po json.load: dict → WebsiteCrawlResult w website_crawl.
@@ -2566,6 +2823,8 @@ def _hydrate_website_crawl_cache(cache: dict) -> None:
             wc[site] = website_crawl_result_from_dict(val)
 
 
+# >>> OPIS FUNKCJI: funkcja reset_pipeline_cache
+# Cel: pełny reset cache JSON (Serper, kontakty, Claude, maile). Parametry: brak. Zwraca: dict — świeży szkielet z _empty_cache(). Efekty uboczne: brak (nie zapisuje na dysk).
 def reset_pipeline_cache() -> dict:
     """
     Pełny reset cache JSON (Serper, kontakty, Claude, maile).
@@ -2573,6 +2832,9 @@ def reset_pipeline_cache() -> dict:
     return _empty_cache()
 
 
+# >>> OPIS FUNKCJI: funkcja build_discovery_seen_urls
+# Cel: zebrać URL-e już obecne w pipeline, aby discovery ich nie powtarzał. Parametry: all_rows (list[dict]); cache (dict). Zwraca: set[str] — URL-e z wierszy oraz (gdy
+# DISCOVERY_IGNORE_CONTACT_CACHE jest False) klucze cache["contacts"]. Efekty uboczne/błędy: brak.
 def build_discovery_seen_urls(all_rows: list[dict], cache: dict) -> set[str]:
     """
     URL-e już w pipeline (Excel/wiersze). Opcjonalnie + contacts z JSON.
@@ -2585,6 +2847,9 @@ def build_discovery_seen_urls(all_rows: list[dict], cache: dict) -> set[str]:
     return seen
 
 
+# >>> OPIS FUNKCJI: funkcja index_all_rows_by_url
+# Cel: indeks url → wiersz do szybkiego merge. Parametry: all_rows (list[dict]). Zwraca: dict[str, dict] — wiersze z niepustym url (późniejszy wiersz o tym samym url nadpisuje wcześniejszy w indeksie).
+# Efekty uboczne: brak (zwracane obiekty to te same wiersze, nie kopie).
 def index_all_rows_by_url(all_rows: list[dict]) -> dict[str, dict]:
     """
     Indeks ``url → row`` dla szybkiego merge discovery / backfill.
@@ -2597,6 +2862,9 @@ def index_all_rows_by_url(all_rows: list[dict]) -> dict[str, dict]:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja index_all_rows_by_domain
+# Cel: indeks domena → wiersz do deduplikacji między wariantami URL. Parametry: all_rows (list[dict]). Zwraca: dict[str, dict] — klucz: domena rejestrowalna z url/www/official_website
+# (get_registrable_domain); przy kolizji wygrywa pierwszy wiersz. Efekty uboczne/błędy: brak.
 def index_all_rows_by_domain(all_rows: list[dict]) -> dict[str, dict]:
     """
     Indeks ``domena → row`` (pierwszy trafiony) pod dedupe między wariantami URL.
@@ -2611,6 +2879,10 @@ def index_all_rows_by_domain(all_rows: list[dict]) -> dict[str, dict]:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja row_from_cache_contact
+# Cel: zamienić jeden rekord contacts z cache JSON na wiersz pipeline. Parametry: place_url (str); info (dict). Zwraca: dict (po normalize_row_company_name) albo None, gdy info nie jest dict
+# lub rekord nie kwalifikuje się do Excela (is_row_eligible_for_excel_export) — wyjątek: leady pending_www_verify bez weryfikacji przechodzą bez tej bramki. Pierwszy numer telefonu wybierany z phones_found.
+# Efekty uboczne/błędy: brak.
 def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
     """
     Jeden rekord contacts JSON → wiersz pipeline (także bez e-mail).
@@ -2666,6 +2938,9 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja merge_pipeline_rows
+# Cel: scalić listy wierszy pipeline po URL. Parametry: existing (list[dict]); incoming (list[dict]). Zwraca: list[dict] — kopia listy existing z dopisanymi nowymi wierszami;
+# dla znanego URL pola wiersza w existing są NADPISYWANE (dict.update) polami z incoming (mutacja wierszy existing). Wiersze bez url są pomijane. Błędy: brak.
 def merge_pipeline_rows(existing: list[dict], incoming: list[dict]) -> list[dict]:
     """
     Łączy wiersze pipeline po URL (incoming nadpisuje pola istniejących).
@@ -2684,6 +2959,8 @@ def merge_pipeline_rows(existing: list[dict], incoming: list[dict]) -> list[dict
     return merged
 
 
+# >>> OPIS FUNKCJI: funkcja build_all_rows_from_cache
+# Cel: odtworzyć wiersze pipeline z cache["contacts"] (z e-mailem i bez). Parametry: cache (dict). Zwraca: list[dict] — wiersze z row_from_cache_contact (odrzucone pomijane). Efekty uboczne/błędy: brak.
 def build_all_rows_from_cache(cache: dict) -> list[dict]:
     """
     Rekonstruiert Pipeline-Zeilen aus contacts (mit und ohne E-Mail).
@@ -2696,6 +2973,9 @@ def build_all_rows_from_cache(cache: dict) -> list[dict]:
     return rows
 
 
+# >>> OPIS FUNKCJI: funkcja merge_cache_contacts_into_pipeline
+# Cel: dopisać/zaktualizować w all_rows wszystkie kontakty z cache JSON. Parametry: all_rows (list[dict], MUTOWANA); cache (dict). Zwraca: int — liczba DOPISANYCH nowych wierszy
+# (aktualizacje istniejących nie są liczone). Efekty uboczne: modyfikacja all_rows i istniejących wierszy (update). Błędy: brak.
 def merge_cache_contacts_into_pipeline(all_rows: list[dict], cache: dict) -> int:
     """
     Dopisuje/aktualizuje w pipeline wszystkie contacts z JSON (także bez maila).
@@ -2716,6 +2996,8 @@ def merge_cache_contacts_into_pipeline(all_rows: list[dict], cache: dict) -> int
     return added
 
 
+# >>> OPIS FUNKCJI: funkcja migrate_discovery_wojewodztwo_in_cache
+# Uzupełnienie: parametry — cache (dict, MUTOWANY). Zwraca: int — liczba zmigrowanych rekordów contacts. Efekty uboczne: zamiana klucza discovery_bundesland na discovery_wojewodztwo w rekordach. Błędy: niepoprawne typy pomijane.
 def migrate_discovery_wojewodztwo_in_cache(cache: dict) -> int:
     """
     Migracja kluczy cache: discovery_bundesland → discovery_wojewodztwo.
@@ -2738,6 +3020,10 @@ def migrate_discovery_wojewodztwo_in_cache(cache: dict) -> int:
     return migrated
 
 
+# >>> OPIS FUNKCJI: funkcja load_cache
+# Cel: wczytać lokalny cache JSON (CACHE_FILE, np. pl_spedycja_cache.json w Wyniki/). Parametry: logger. Zwraca: dict cache — uzupełniony o brakujące kubełki; po wczytaniu: hydrate website_crawl,
+# migracja discovery_bundesland → discovery_wojewodztwo oraz fallback ze starych kubełków gemini_* → claude_*; przy ENABLE_CACHE_PURGE_INSTITUTIONS czyści urzędy i w razie zmian zapisuje cache.
+# Efekty uboczne: odczyt pliku, logi, możliwy zapis (save_cache). Błędy: brak pliku → pusty cache; każdy wyjątek odczytu/parsowania jest łapany, logowany jako warning i zwraca pusty cache (dane z uszkodzonego pliku są pomijane).
 def load_cache(logger: logging.Logger) -> dict:
     """
     Wczytuje ``pl_spedycja_cache.json`` (lokalnie); migracje kluczy + hydrate crawl.
@@ -2809,6 +3095,10 @@ def load_cache(logger: logging.Logger) -> dict:
         return _empty_cache()
 
 
+# >>> OPIS FUNKCJI: funkcja purge_institutions_from_cache
+# Cel: usunąć z cache wpisy urzędów/instytucji i firm spoza ICP (contacts, serper, enrichment, suppression, sent targets). Parametry: cache (dict, MUTOWANY); logger (opcjonalny).
+# Zwraca: int — liczba usuniętych rekordów contacts. Efekty uboczne: modyfikacja kubełków cache (także claude_row_enrichment/claude_contact_extract dla usuniętych URL-i), log i print „[CACHE]”.
+# Kryteria: contact_info_excluded, is_cache_contact_institution, is_cache_contact_not_store_builder, is_cache_serper_entry_institution, is_non_commercial_email. Błędy: nieprawidłowe typy kubełków są naprawiane/pomijane.
 def purge_institutions_from_cache(
     cache: dict, logger: logging.Logger | None = None
 ) -> int:
@@ -2892,6 +3182,9 @@ def purge_institutions_from_cache(
     return len(removed_urls)
 
 
+# >>> OPIS FUNKCJI: funkcja save_cache
+# Cel: zapisać cache JSON do lokalnego Wyniki/ (nie na Drive). Parametry: cache (dict); logger. Zwraca: None. Efekty uboczne: opcjonalny purge instytucji (ENABLE_CACHE_PURGE_INSTITUTIONS),
+# zapis CACHE_FILE (json.dump, indent=2, WebsiteCrawlResult → dict) i log statystyk; zapis NIE jest atomowy (bezpośredni zapis do pliku). Błędy: każdy wyjątek zapisu łapany i logowany jako error — funkcja nie przerywa runu.
 def save_cache(cache: dict, logger: logging.Logger) -> None:
     """
     Zapisuje cache JSON atomowo do lokalnego ``Wyniki/`` (nie na Drive).
@@ -2911,6 +3204,9 @@ def save_cache(cache: dict, logger: logging.Logger) -> None:
         logger.error(f"Cache-Schreibfehler: {e}")
 
 
+# >>> OPIS FUNKCJI: funkcja contact_validation_fields
+# Cel: spójny zestaw pól do walidacji kontaktu (kolejka + wysyłka). Parametry: info (dict|None); place_url (str). Zwraca: (email, url, name, text) — email_target; official_website lub place_url;
+# nazwa (company_name_clean/company_name/company_name_raw); tekst z verification_reason, page_snippet, retail_chains(_found), serper_title, serper_snippet. Efekty uboczne/błędy: brak.
 def contact_validation_fields(
     info: dict | None, place_url: str = ""
 ) -> tuple[str, str, str, str]:
@@ -2941,6 +3237,10 @@ def contact_validation_fields(
     return email, url, name, text
 
 
+# >>> OPIS FUNKCJI: funkcja pipeline_row_to_contact_info
+# Cel: przetłumaczyć wiersz pipeline/Excela na pola rekordu contacts w cache. Parametry: row (dict). Zwraca: dict — nazwy, www, e-maile, telefony, status, retail_verified, powód weryfikacji,
+# snippet, segmenty, is_gu (rola), is_small_firm, gu_marker, contact_quality_score, adres, bundesland, discovery_wojewodztwo; puste wartości są odrzucane z wyjątkiem pól logicznych i email_target/email_status.
+# Efekty uboczne/błędy: brak.
 def pipeline_row_to_contact_info(row: dict) -> dict:
     """
     Wiersz pipeline / Excel → pola contacts JSON.
@@ -2983,6 +3283,10 @@ def pipeline_row_to_contact_info(row: dict) -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja sync_pipeline_rows_to_contacts_cache
+# Cel: scalić wiersze z Excela/pipeline do cache["contacts"] przed wysyłką. Parametry: all_rows (list[dict]); cache (dict, MUTOWANY). Zwraca: int — liczba zsynchronizowanych URL-i.
+# Zasady: puste wartości nie nadpisują istniejących (poza flagami retail_verified/is_gu/is_small_firm), pusty email_target nie nadpisuje; ujednolica klucz discovery_wojewodztwo.
+# Efekty uboczne: console_step. Błędy: wiersze bez url/www pomijane.
 def sync_pipeline_rows_to_contacts_cache(all_rows: list[dict], cache: dict) -> int:
     """
     Scala wiersze z Excela/pipeline do cache contacts przed wysyłką.
@@ -3011,6 +3315,10 @@ def sync_pipeline_rows_to_contacts_cache(all_rows: list[dict], cache: dict) -> i
     return synced
 
 
+# >>> OPIS FUNKCJI: funkcja build_email_jobs_from_cache_json
+# Cel: zbudować kolejkę wysyłek B2B z cache. Parametry: logger; force_resend (keyword-only, bool) — ponów także statusy „sent”; cache (dict|None) — gdy None, czyta CACHE_FILE.
+# Zwraca: list[dict] zadań {place_url, email_target, company_name, contact_quality_score}. Pomija: brak e-maila, wykluczone kontakty, niewalidne kontakty, niespełnienie bramek REQUIRE_* (rola, mała firma, segment) oraz już wysłane.
+# Efekty uboczne: console_step, logi; gdy kolejka pusta wypisuje diagnostykę. Błędy: brak/uszkodzony plik cache → [] (log warning).
 def build_email_jobs_from_cache_json(
     logger: logging.Logger,
     *,
@@ -3108,6 +3416,9 @@ def build_email_jobs_from_cache_json(
     return jobs
 
 
+# >>> OPIS FUNKCJI: funkcja get_remaining_daily_email_limit
+# Cel: policzyć ile maili jeszcze wolno dziś wysłać. Parametry: cache (dict; tworzy kubełek email_daily). Zwraca: (today ISO, sent_today, remaining) — remaining = max(0, DAILY_EMAIL_LIMIT − wysłane).
+# Efekty uboczne: console_step. Błędy: brak.
 def get_remaining_daily_email_limit(cache: dict):
     """
     Ile maili jeszcze wolno dziś (limit dzienny minus licznik w cache).
@@ -3122,6 +3433,8 @@ def get_remaining_daily_email_limit(cache: dict):
     return today, sent_today, remaining
 
 
+# >>> OPIS FUNKCJI: funkcja increase_daily_email_counter
+# Cel: zwiększyć dzienny licznik wysłanych maili. Parametry: cache (dict, MUTOWANY); increment (int, domyślnie 1). Zwraca: None. Efekty uboczne: zapis cache["email_daily"][dzisiaj]. Błędy: brak.
 def increase_daily_email_counter(cache: dict, increment: int = 1) -> None:
     """
     Inkrementuje dzienny licznik wysłanych maili w cache.
@@ -3131,6 +3444,8 @@ def increase_daily_email_counter(cache: dict, increment: int = 1) -> None:
     daily[today] = int(daily.get(today, 0)) + int(increment)
 
 
+# >>> OPIS FUNKCJI: funkcja get_email_domain
+# Cel: wyciągnąć domenę z adresu e-mail. Parametry: email_target (str). Zwraca: str — część po "@" (lowercase) lub "" gdy brak "@". Efekty uboczne/błędy: brak.
 def get_email_domain(email_target: str) -> str:
     """
     Domena z adresu e-mail (po ``@``), lowercased.
@@ -3140,6 +3455,8 @@ def get_email_domain(email_target: str) -> str:
     return email_target.split("@", 1)[1].strip().lower()
 
 
+# >>> OPIS FUNKCJI: funkcja get_email_local_part
+# Cel: wyciągnąć część lokalną adresu e-mail. Parametry: email_target (str). Zwraca: str — część przed "@" (lowercase) lub "" gdy brak "@". Efekty uboczne/błędy: brak.
 def get_email_local_part(email_target: str) -> str:
     """
     Lokalna część adresu (przed ``@``).
@@ -3149,6 +3466,9 @@ def get_email_local_part(email_target: str) -> str:
     return email_target.split("@", 1)[0].strip().lower()
 
 
+# >>> OPIS FUNKCJI: funkcja is_email_role_based_or_system
+# Cel: wykryć adresy rolowe/systemowe (info@, noreply@…) — gorszy target outreach. Parametry: email_target (str). Zwraca: bool — True dla części lokalnej z SUPPRESSED_EMAIL_LOCALPARTS,
+# adresów niekomercyjnych (is_non_commercial_email) lub nieodpowiednich do zapytań (is_unsuitable_inquiry_email). Efekty uboczne/błędy: brak.
 def is_email_role_based_or_system(email_target: str) -> bool:
     """
     True dla maili roli (info@, noreply@, …) — gorszy / blokowany target outreach.
@@ -3189,6 +3509,9 @@ def is_blocked_non_commercial_row(row: dict) -> bool:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja is_within_send_window
+# Cel: sprawdzić, czy bieżąca godzina mieści się w oknie wysyłki B2B. Parametry: brak. Zwraca: bool — wynik is_within_send_window z scraper_schedule_config dla konfiguracji _SEND_WINDOW_CFG.
+# Efekty uboczne/błędy: brak.
 def is_within_send_window() -> bool:
     """
     Czy bieżąca godzina mieści się w oknie wysyłki B2B (konfigurowalne).
@@ -3196,6 +3519,9 @@ def is_within_send_window() -> bool:
     return _schedule_within_send_window(_SEND_WINDOW_CFG)
 
 
+# >>> OPIS FUNKCJI: funkcja get_domain_remaining_daily_limit
+# Cel: policzyć pozostały dzienny limit maili na domenę odbiorcy (anty-spam). Parametry: cache (dict); domain (str). Zwraca: (today, sent_for_domain, remaining) przy limicie EMAIL_PER_DOMAIN_DAILY_LIMIT.
+# Efekty uboczne: tworzy kubełek email_domain_daily[dzień]. Błędy: brak.
 def get_domain_remaining_daily_limit(cache: dict, domain: str):
     """
     Pozostały dzienny limit maili na domenę odbiorcy (anty-spam per firma).
@@ -3207,6 +3533,8 @@ def get_domain_remaining_daily_limit(cache: dict, domain: str):
     return today, sent_for_domain, remaining
 
 
+# >>> OPIS FUNKCJI: funkcja increase_domain_daily_counter
+# Cel: zwiększyć dzienny licznik wysyłek do domeny. Parametry: cache (dict, MUTOWANY); domain (str); increment (int=1). Zwraca: None; pusta domena → nic nie robi. Błędy: brak.
 def increase_domain_daily_counter(cache: dict, domain: str, increment: int = 1) -> None:
     """
     Zwiększa licznik wysyłek na domenę w cache.
@@ -3218,6 +3546,8 @@ def increase_domain_daily_counter(cache: dict, domain: str, increment: int = 1) 
     domain_daily[domain] = int(domain_daily.get(domain, 0)) + int(increment)
 
 
+# >>> OPIS FUNKCJI: funkcja is_suppressed_target
+# Cel: sprawdzić listę suppression (bounce/spam/ręczna). Parametry: cache (dict); email_target (str). Zwraca: bool — czy adres (lowercase) jest w cache["email_suppression"]. Efekty uboczne: tworzy pusty kubełek, jeśli go brak.
 def is_suppressed_target(cache: dict, email_target: str) -> bool:
     """
     Czy e-mail jest na liście suppress (bounce/spam/manual).
@@ -3226,6 +3556,9 @@ def is_suppressed_target(cache: dict, email_target: str) -> bool:
     return email_target.lower() in suppression
 
 
+# >>> OPIS FUNKCJI: funkcja mark_suppressed_target
+# Cel: dodać adres do suppression z powodem — kolejne joby go pominą. Parametry: cache (dict, MUTOWANY); email_target (str); reason (str). Zwraca: None; pusty adres → bez efektu.
+# Efekty uboczne: zapis {reason, date} pod kluczem lowercase. Błędy: brak.
 def mark_suppressed_target(cache: dict, email_target: str, reason: str) -> None:
     """
     Dodaje e-mail do suppress z powodem (kolejne joby go pomijają).
@@ -3236,6 +3569,9 @@ def mark_suppressed_target(cache: dict, email_target: str, reason: str) -> None:
     suppression[email_target.lower()] = {"reason": reason, "date": date.today().isoformat()}
 
 
+# >>> OPIS FUNKCJI: funkcja is_soft_bounce_or_spam_error
+# Cel: heurystyka — czy tekst błędu SMTP wygląda na soft bounce / odrzucenie jako spam. Parametry: error_text (str). Zwraca: bool — True, gdy zawiera marker (np. "5.7.1", "unsolicited",
+# "blocked by policy", "spam", "try again later"); pusty tekst → False. Efekty uboczne/błędy: brak.
 def is_soft_bounce_or_spam_error(error_text: str) -> bool:
     """
     Heurystyka: treść błędu SMTP = soft bounce / spam reject.
@@ -3257,6 +3593,9 @@ def is_soft_bounce_or_spam_error(error_text: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+# >>> OPIS FUNKCJI: funkcja sleep_between_emails
+# Cel: losowa pauza między mailami (jitter) ograniczająca throttle SMTP. Parametry: logger; target_email (str) — tylko do komunikatu. Zwraca: None.
+# Efekty uboczne: time.sleep(losowo EMAIL_SEND_DELAY_MIN..MAX_SECONDS), console_step i log. Błędy: brak.
 def sleep_between_emails(logger: logging.Logger, target_email: str) -> None:
     """
     Pauza między mailami (jitter) — zmniejsza ryzyko throttle SMTP.
@@ -3267,6 +3606,9 @@ def sleep_between_emails(logger: logging.Logger, target_email: str) -> None:
     time.sleep(delay)
 
 
+# >>> OPIS FUNKCJI: funkcja sanitize_generated_email
+# Cel: oczyścić temat i treść wygenerowanego maila. Parametry: subject, body (str); company_name (str) — do wariantu tematu. Zwraca: (clean_subject, clean_body) — pusty temat/temat ze słowami
+# EMAIL_SPAMMY_TERMS → choose_subject_variant; usuwa numery telefonu, "!" i "?", ucina temat do 95 znaków; z treści usuwa spamowe frazy i zwija 3+ puste linie. Efekty uboczne/błędy: brak.
 def sanitize_generated_email(subject: str, body: str, company_name: str):
     """
     Sanityzacja subject/body po generatorze (puste linie, nazwa firmy, długość).
@@ -3289,6 +3631,9 @@ def sanitize_generated_email(subject: str, body: str, company_name: str):
     return clean_subject, clean_body
 
 
+# >>> OPIS FUNKCJI: funkcja sanitize_sender_name
+# Cel: oczyścić display name nadawcy (bez telefonu, URL-i, e-maili, stopki). Parametry: sender_name (str). Zwraca: str — oczyszczona nazwa, obcięta po formie prawnej (GmbH/Sp. z o.o./S.A.);
+# przy pustym wyniku domyślnie "Maksym Swinczak, Forwarding Assistant". Efekty uboczne/błędy: brak.
 def sanitize_sender_name(sender_name: str) -> str:
     """
     Czyści display name nadawcy (bez znaków nowej linii / śmieci).
@@ -3313,6 +3658,9 @@ def sanitize_sender_name(sender_name: str) -> str:
     return text
 
 
+# >>> OPIS FUNKCJI: funkcja was_email_target_sent_today
+# Cel: sprawdzić, czy adres dostał dziś już mail. Parametry: cache (dict); email_target (str). Zwraca: bool (porównanie bez wielkości liter); pusty adres → False.
+# Efekty uboczne: tworzy kubełek email_sent_targets[dzień]. Błędy: brak.
 def was_email_target_sent_today(cache: dict, email_target: str) -> bool:
     """
     True, jeśli ten adres dostał już mail dziś (z cache).
@@ -3324,6 +3672,8 @@ def was_email_target_sent_today(cache: dict, email_target: str) -> bool:
     return email_target.lower() in {x.lower() for x in sent_targets}
 
 
+# >>> OPIS FUNKCJI: funkcja mark_email_target_sent_today
+# Cel: oznaczyć adres jako wysłany dziś (dedupe dzienny). Parametry: cache (dict, MUTOWANY); email_target (str). Zwraca: None; pusty adres → bez efektu; adres dopisywany w lowercase bez duplikatów. Błędy: brak.
 def mark_email_target_sent_today(cache: dict, email_target: str) -> None:
     """
     Oznacza adres jako wysłany dziś (dedupe dzienny).
@@ -3337,6 +3687,9 @@ def mark_email_target_sent_today(cache: dict, email_target: str) -> None:
         sent_targets.append(lowered)
 
 
+# >>> OPIS FUNKCJI: funkcja get_remaining_daily_serper_limit
+# Cel: policzyć pozostały dzienny budżet zapytań Serper. Parametry: cache (dict). Zwraca: (today wg campaign_today, used_today, remaining); przy trybie unlimited remaining = 10**9,
+# inaczej max(0, SERPER_DAILY_LIMIT − użyte). Efekty uboczne: console_step; tworzy kubełek serper_daily. Błędy: brak.
 def get_remaining_daily_serper_limit(cache: dict):
     """
     Pozostały dzienny budżet zapytań Serper (None = unlimited).
@@ -3357,6 +3710,8 @@ def get_remaining_daily_serper_limit(cache: dict):
     return today, used_today, remaining
 
 
+# >>> OPIS FUNKCJI: funkcja increase_daily_serper_counter
+# Cel: zwiększyć dzienny licznik zapytań Serper. Parametry: cache (dict, MUTOWANY); increment (int=1). Zwraca: None. Efekty uboczne: zapis cache["serper_daily"][dzień kampanii]. Błędy: brak.
 def increase_daily_serper_counter(cache: dict, increment: int = 1) -> None:
     """
     Inkrementuje dzienny licznik Serper po udanym / zliczonym requeście.
@@ -3366,6 +3721,8 @@ def increase_daily_serper_counter(cache: dict, increment: int = 1) -> None:
     daily[today] = int(daily.get(today, 0)) + int(increment)
 
 
+# >>> OPIS FUNKCJI: funkcja campaign_today
+# Cel: dzień kampanii (ISO) wg strefy CAMPAIGN_TIMEZONE (domyślnie Europe/Warsaw). Parametry: brak. Zwraca: str "YYYY-MM-DD". Błędy: gdy brak zoneinfo/strefy — wyjątek łapany, fallback date.today().
 def campaign_today() -> str:
     """
     Dzień kampanii wg SCRAPER_TIMEZONE (domyślnie Europe/Warsaw).
@@ -3378,6 +3735,9 @@ def campaign_today() -> str:
         return date.today().isoformat()
 
 
+# >>> OPIS FUNKCJI: funkcja clear_serper_search_caches
+# Cel: wymusić świeże zapytania Serper przez wyczyszczenie kubełków serper i serper_discovery. Parametry: cache (dict, MUTOWANY). Zwraca: (liczba usuniętych wpisów serper, liczba wpisów serper_discovery).
+# Efekty uboczne: nadpisuje oba kubełki pustymi słownikami. Błędy: brak.
 def clear_serper_search_caches(cache: dict) -> tuple[int, int]:
     """
     Wyczyść serper + serper_discovery — wymusza świeże zapytania API (bez empty-TTL).
@@ -3389,6 +3749,9 @@ def clear_serper_search_caches(cache: dict) -> tuple[int, int]:
     return n_serper, n_discovery
 
 
+# >>> OPIS FUNKCJI: funkcja reset_serper_daily_for_discovery
+# Uzupełnienie: parametry — cache (dict, MUTOWANY); keep_search_caches (keyword-only, bool=False). Zwraca: None. Efekty uboczne: zeruje dzienny licznik Serper, kasuje flagi serper_limit_reached i serper_api_exhausted dla dnia kampanii oraz
+# (gdy keep_search_caches=False) czyści cache zapytań serper i serper_discovery (clear_serper_search_caches); wypisuje komunikat „Serper-Reset”. Błędy: brak.
 def reset_serper_daily_for_discovery(
     cache: dict, *, keep_search_caches: bool = False
 ) -> None:
@@ -3437,6 +3800,9 @@ def reset_serper_daily_for_discovery(
         console_step(f"Serper-Reset ({today}): " + "; ".join(parts))
 
 
+# >>> OPIS FUNKCJI: funkcja ensure_serper_budget_or_fail
+# Cel: przerwać discovery, gdy dzienny budżet Serper się skończył. Parametry: cache (dict). Zwraca: None. Tryb unlimited → natychmiastowy powrót.
+# Błędy: RuntimeError („Serper Tageslimit erreicht … Discovery abgebrochen”) przy remaining <= 0. Efekty uboczne: console_step z get_remaining_daily_serper_limit.
 def ensure_serper_budget_or_fail(cache: dict) -> None:
     """
     Rzuca / przerywa, gdy dzienny budżet Serper = 0 (chyba że unlimited).
@@ -3451,6 +3817,9 @@ def ensure_serper_budget_or_fail(cache: dict) -> None:
         )
 
 
+# >>> OPIS FUNKCJI: funkcja new_discovery_funnel
+# Cel: pusty słownik metryk lejka discovery. Parametry: brak. Zwraca: dict z licznikami 0: serper_queries, api_zero_terms, raw_hits, filtered_serper, filtered_large_serper, pending_saved, rejected_excel, claude_rounds, claude_terms.
+# Efekty uboczne/błędy: brak.
 def new_discovery_funnel() -> dict:
     """
     Pusty dict metryk lejka discovery (termy, hit, filtr, pending).
@@ -3468,6 +3837,9 @@ def new_discovery_funnel() -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja _record_serper_term_stat
+# Cel: zapisać statystykę jednego termu Serper w cache["serper_term_stats"]. Parametry: cache (dict, MUTOWANY); term (str); label (str) — źródło termu; raw_hits (int); pending_added (int) — keyword-only.
+# Zwraca: None. Efekty uboczne: wpis pod kluczem "label:term" z sumowanymi licznikami raw/pending. Błędy: brak.
 def _record_serper_term_stat(
     cache: dict,
     term: str,
@@ -3488,6 +3860,9 @@ def _record_serper_term_stat(
     entry["pending"] = int(entry.get("pending", 0)) + int(pending_added)
 
 
+# >>> OPIS FUNKCJI: funkcja log_discovery_funnel
+# Cel: zalogować podsumowanie lejka discovery po rundzie województwa. Parametry: funnel (dict z new_discovery_funnel); logger. Zwraca: None. Efekty uboczne: console_step i logger.info z linią „[LEjek] …”.
+# Błędy: KeyError, jeśli w funnel brakuje któregoś z oczekiwanych kluczy (format(**funnel)).
 def log_discovery_funnel(funnel: dict, logger: logging.Logger) -> None:
     """
     Loguje podsumowanie lejka discovery po rundzie województwa.
@@ -3503,6 +3878,9 @@ def log_discovery_funnel(funnel: dict, logger: logging.Logger) -> None:
     logger.info(msg)
 
 
+# >>> OPIS FUNKCJI: funkcja count_pending_for_bundesland
+# Cel: policzyć leady pending_www_verify dla województwa (nazwa legacy bundesland). Parametry: rows (list); cache (dict); land (str). Zwraca: int — unikalne URL-e (wiersze + cache["contacts"])
+# niezweryfikowane (retail_verified=False), z tagiem discovery_wojewodztwo lub regionem równym land; pusty land → 0. Efekty uboczne/błędy: brak.
 def count_pending_for_bundesland(
     rows: list, cache: dict, land: str
 ) -> int:
@@ -3546,6 +3924,9 @@ def count_pending_for_bundesland(
     return count
 
 
+# >>> OPIS FUNKCJI: funkcja count_all_pending_contacts
+# Cel: policzyć wszystkich kandydatów pending_www_verify (cała Polska / aktywne województwa). Parametry: rows (list); cache (dict). Zwraca: int — unikalne niezweryfikowane URL-e z wierszy i cache["contacts"].
+# Efekty uboczne/błędy: brak.
 def count_all_pending_contacts(rows: list, cache: dict) -> int:
     """
     Wszystkie kandydaty pending_www_verify (cała Polska / aktywne woj.).
@@ -3577,6 +3958,9 @@ def count_all_pending_contacts(rows: list, cache: dict) -> int:
     return count
 
 
+# >>> OPIS FUNKCJI: funkcja is_serper_limit_reached_today
+# Cel: sprawdzić, czy limit Serper na dziś jest wyczerpany. Parametry: cache (dict). Zwraca: bool — False w trybie unlimited; True, gdy flaga serper_limit_reached[dzień] ustawiona lub
+# pozostały budżet <= SERPER_DISCOVERY_RESERVE (wtedy flaga jest ustawiana). Efekty uboczne: tworzy/ustawia kubełki serper_daily i serper_limit_reached. Błędy: brak.
 def is_serper_limit_reached_today(cache: dict) -> bool:
     """
     True, gdy flaga / licznik mówi, że limit Serper na dziś wyczerpany.
@@ -3596,6 +3980,8 @@ def is_serper_limit_reached_today(cache: dict) -> bool:
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja mark_serper_limit_reached_today
+# Cel: ustawić w cache flagę wyczerpania limitu Serper na dziś. Parametry: cache (dict, MUTOWANY). Zwraca: None. Efekty uboczne: zapis flagi w cache["serper_limit_reached"] pod kluczem dnia kampanii. Błędy: brak.
 def mark_serper_limit_reached_today(cache: dict) -> None:
     """
     Ustawia w cache flagę limitu Serper na dziś.
@@ -3605,14 +3991,28 @@ def mark_serper_limit_reached_today(cache: dict) -> None:
     flags[today] = True
 
 
-def _serper_discovery_cache_key(query: str, *, use_places_endpoint: bool) -> str:
+# >>> OPIS FUNKCJI: funkcja _serper_discovery_cache_key
+# Cel: zbudować klucz cache dla wyniku Serper. Parametry: query (str); use_places_endpoint (keyword-only, bool) — Places vs zwykłe wyszukiwanie.
+# Zwraca: str — "places:<query>" lub "search:<query>". Efekty uboczne/błędy: brak.
+def _serper_discovery_cache_key(
+    query: str, *, use_places_endpoint: bool, use_maps: bool = False
+) -> str:
     """
-    Klucz cache wyniku Serper: query + czy Places vs Web.
+    Klucz cache wyniku discovery: query + maps/places/search.
     """
-    prefix = "places:" if use_places_endpoint else "search:"
+    if use_maps:
+        prefix = "maps:"
+    elif use_places_endpoint:
+        prefix = "places:"
+    else:
+        prefix = "search:"
     return f"{prefix}{query}"
 
 
+# >>> OPIS FUNKCJI: funkcja _parse_serper_discovery_cache_entry
+# Cel: zinterpretować wpis cache["serper_discovery"] (formaty: lista legacy, dict {rows, at}, dict {empty: True, at}). Parametry: entry — surowy wpis.
+# Zwraca: (rows|None, cache_miss: bool). None/nieznany typ → (None, True); lista → (lista, False); wpis „empty” świeższy niż SERPER_DISCOVERY_EMPTY_CACHE_DAYS → ([], False), starszy → miss;
+# dict z rows → (rows, False). Błędy: nieparsowalny timestamp (ValueError) traktowany jako miss.
 def _parse_serper_discovery_cache_entry(entry) -> tuple[list[dict] | None, bool]:
     """
     Zwraca (wiersze lub None, czy_traktować_jako_cache_miss).
@@ -3639,38 +4039,56 @@ def _parse_serper_discovery_cache_entry(entry) -> tuple[list[dict] | None, bool]
     return None, True
 
 
+# >>> OPIS FUNKCJI: funkcja get_cached_serper_discovery_rows
+# Cel: odczytać z cache wcześniej zapisane wyniki discovery dla zapytania. Parametry: cache (dict); query (str); use_places_endpoint (keyword-only). Zwraca: list[dict] (może być pusta dla świeżego wpisu „empty”)
+# albo None przy cache miss. Efekty uboczne: tworzy pusty kubełek serper_discovery. Błędy: brak.
 def get_cached_serper_discovery_rows(
-    cache: dict, query: str, *, use_places_endpoint: bool = False
+    cache: dict,
+    query: str,
+    *,
+    use_places_endpoint: bool = False,
+    use_maps: bool = False,
 ) -> list[dict] | None:
     """
     Zwraca wcześniej zapisane wiersze discovery dla query (albo None).
     """
     sd = cache.setdefault("serper_discovery", {})
-    key = _serper_discovery_cache_key(query, use_places_endpoint=use_places_endpoint)
+    key = _serper_discovery_cache_key(
+        query, use_places_endpoint=use_places_endpoint, use_maps=use_maps
+    )
     rows, miss = _parse_serper_discovery_cache_entry(sd.get(key))
     if miss:
         return None
     return rows
 
 
+# >>> OPIS FUNKCJI: funkcja store_serper_discovery_rows
+# Cel: zapisać wynik discovery w cache. Parametry: cache (dict, MUTOWANY); query (str); rows (list[dict]); use_places_endpoint / use_maps (keyword-only). Zwraca: None.
+# Efekty uboczne: wpis {rows, at} albo — dla pustej listy — {empty: True, at, rows: []} (negatywny cache z TTL, patrz _parse_serper_discovery_cache_entry). Błędy: brak.
 def store_serper_discovery_rows(
     cache: dict,
     query: str,
     rows: list[dict],
     *,
     use_places_endpoint: bool = False,
+    use_maps: bool = False,
 ) -> None:
     """
-    Cache’uje wynik Serper discovery pod kluczem query (oszczędność API).
+    Cache’uje wynik discovery pod kluczem query.
     """
     sd = cache.setdefault("serper_discovery", {})
-    key = _serper_discovery_cache_key(query, use_places_endpoint=use_places_endpoint)
+    key = _serper_discovery_cache_key(
+        query, use_places_endpoint=use_places_endpoint, use_maps=use_maps
+    )
     if rows:
         sd[key] = {"rows": rows, "at": datetime.now().isoformat()}
     else:
         sd[key] = {"empty": True, "at": datetime.now().isoformat(), "rows": []}
 
 
+# >>> OPIS FUNKCJI: funkcja count_retail_verified_for_bundesland
+# Cel: policzyć zweryfikowane (retail_verified) firmy w danym województwie — cel dzienny discovery. Parametry: rows (list); land (str). Zwraca: int — liczba wierszy z tagiem
+# discovery_wojewodztwo lub regionem == land; pusty land → 0. Efekty uboczne/błędy: brak.
 def count_retail_verified_for_bundesland(rows: list, land: str) -> int:
     """
     Liczy zweryfikowane www firmy w danym regionie (cel dzienny discovery).
@@ -3689,6 +4107,13 @@ def count_retail_verified_for_bundesland(rows: list, land: str) -> int:
     return count
 
 
+# >>> OPIS FUNKCJI: funkcja request_with_retry
+# Cel: wykonać żądanie HTTP z ponowieniami i backoffem (Serper, pobieranie stron). Parametry: method (callable, np. requests.get/post); url (str); logger; retry_on_rate_limit (keyword-only, bool=True) —
+# czy ponawiać przy 429; waf_skip (keyword-only, bool=False) — wykrywaj WAF/Cloudflare i pomiń bez retry; **kwargs przekazywane do method (headers, timeout, params, json…).
+# Zwraca: obiekt response po pomyślnym raise_for_status().
+# Efekty uboczne: console_step przy każdej próbie, time.sleep (HTTP_BACKOFF_SECONDS * próba; przy 429 co najmniej 30 s * próba), logi z zanonimizowanym URL (sanitize_log_url).
+# Błędy: PageAccessBlocked przy wykryciu WAF (bez ponowień); po HTTP_RETRY_ATTEMPTS nieudanych próbach ponownie rzuca ostatni wyjątek (RuntimeError, gdy brak błędu i odpowiedzi);
+# przy 429 i retry_on_rate_limit=False przerywa pętlę od razu.
 def request_with_retry(
     method,
     url: str,
@@ -3754,6 +4179,9 @@ def request_with_retry(
     raise RuntimeError("request_with_retry ohne Antwort")
 
 
+# >>> OPIS FUNKCJI: funkcja choose_subject_variant
+# Cel: wybrać temat maila B2B. Parametry: company_name (str) — obecnie ignorowany. Zwraca: str — stały temat FIXED_EMAIL_SUBJECT_PL (mimo nazwy funkcji nie ma już losowych wariantów).
+# Efekty uboczne/błędy: brak.
 def choose_subject_variant(company_name: str) -> str:
     """
     Wybiera wariant tematu maila B2B (hash nazwy → stabilna dywersyfikacja).
@@ -3762,6 +4190,9 @@ def choose_subject_variant(company_name: str) -> str:
     return FIXED_EMAIL_SUBJECT_PL
 
 
+# >>> OPIS FUNKCJI: funkcja choose_prompt_variant
+# Cel: wybrać wariant promptu generującego treść maila. Parametry: company_name (str). Zwraca: str — element PROMPT_VARIANTS wybrany z hasha nazwy firmy (hash() łańcuchów jest solony per proces,
+# więc wybór nie jest powtarzalny między uruchomieniami). Efekty uboczne: brak. Błędy: ZeroDivisionError przy pustej liście PROMPT_VARIANTS.
 def choose_prompt_variant(company_name: str) -> str:
     """
     Wybiera wariant promptu generacji treści maila (jak subject).
@@ -3770,6 +4201,8 @@ def choose_prompt_variant(company_name: str) -> str:
     return PROMPT_VARIANTS[idx]
 
 
+# >>> OPIS FUNKCJI: funkcja _domain_from_url
+# Cel: wyciągnąć hostname z URL-a bez prefiksu "www.". Parametry: url (str). Zwraca: str — host lowercase lub "" przy błędzie parsowania (wyjątki łapane). Efekty uboczne: brak.
 def _domain_from_url(url: str) -> str:
     """
     Wyciąga hostname z URL (bez www.) albo pusty string.
@@ -3783,6 +4216,9 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
+# >>> OPIS FUNKCJI: funkcja _max_employee_count_in_blob
+# Cel: znaleźć największą wzmiankowaną liczbę pracowników w tekście. Parametry: blob (str). Zwraca: int|None — maksimum spośród dopasowań wzorców _EMPLOYEE_COUNT_PATTERNS w zakresie 10–9999; None, gdy brak.
+# Efekty uboczne: brak. Błędy: nieparsowalne liczby są pomijane.
 def _max_employee_count_in_blob(blob: str) -> int | None:
     """
     Szuka największej liczby pracowników w tekście (regex) albo None.
@@ -3799,6 +4235,9 @@ def _max_employee_count_in_blob(blob: str) -> int | None:
     return max(counts) if counts else None
 
 
+# >>> OPIS FUNKCJI: funkcja _has_regional_gu_context
+# Cel: sprawdzić, czy tekst sugeruje lokalnego/regionalnego wykonawcę (legacy „GU Ost”). Parametry: blob (str); company_name (str); website (str). Zwraca: bool — True, gdy w połączonym tekście
+# (lowercase) występuje marker z _REGIONAL_GU_CONTEXT_MARKERS ORAZ marker z _REGIONAL_GU_REGIONAL_MARKERS. Efekty uboczne/błędy: brak.
 def _has_regional_gu_context(
     blob: str, company_name: str = "", website: str = ""
 ) -> bool:
@@ -3811,6 +4250,10 @@ def _has_regional_gu_context(
     return has_gu and has_regional
 
 
+# >>> OPIS FUNKCJI: funkcja _is_whitelisted_regional_gu_with_employees
+# Cel: wyjątek (whitelist) dla małej regionalnej firmy z podaną liczbą pracowników — nie odrzucać jako dużej. Parametry: blob (str, zakładany lowercase); company_name (str); website (str).
+# Zwraca: bool — False przy silnych markerach koncernu (_STRONG_KONZERN_OVERRIDE_MARKERS), braku kontekstu regionalnego lub braku liczby pracowników; inaczej liczba <= REGIONAL_GU_EMPLOYEE_WHITELIST_MAX.
+# Efekty uboczne/błędy: brak.
 def _is_whitelisted_regional_gu_with_employees(
     blob: str, company_name: str = "", website: str = ""
 ) -> bool:
@@ -3828,6 +4271,9 @@ def _is_whitelisted_regional_gu_with_employees(
     return emp <= REGIONAL_GU_EMPLOYEE_WHITELIST_MAX
 
 
+# >>> OPIS FUNKCJI: funkcja is_likely_large_company
+# Uzupełnienie: parametry — company_name, website, page_text, serper_blob (str). Zwraca: (is_large: bool, reason: str) — powód to kod: "grosses_unternehmen_domain:<marker>", "grosses_unternehmen_name:<marker>", "grosses_unternehmen_seite" lub "grosses_unternehmen_seite_stark"; (False, "") gdy nie jest duża.
+# Wcześniejsze wyjścia: przynajmniej jeden marker małej firmy (SMALL_COMPANY_PAGE_MARKERS) w tekście → False; whitelist małych regionalnych firm z liczbą pracowników (_is_whitelisted_regional_gu_with_employees). Efekty uboczne/błędy: brak.
 def is_likely_large_company(
     company_name: str = "",
     website: str = "",
@@ -3884,6 +4330,10 @@ def is_likely_large_company(
     return False, ""
 
 
+# >>> OPIS FUNKCJI: funkcja _is_small_ladenbau_specialist
+# Cel: (legacy DE) rozpoznać małego specjalistę ladenbau/filialbau. W kampanii PL FAS praktycznie nieużywane. Parametry: company_name, website, page_text (str).
+# Zwraca: bool — True, gdy nazwa/domena zawiera marker ladenbau/filialbau, firma nie jest duża (is_likely_large_company), (przy REQUIRE_GENERALUNTERNEHMER) przechodzi kwalifikację roli
+# i tekst zawiera słowo budowlane. Efekty uboczne/błędy: brak.
 def _is_small_ladenbau_specialist(
     company_name: str,
     website: str,
@@ -3925,6 +4375,9 @@ def _is_small_ladenbau_specialist(
     return any(m in blob for m in build_markers)
 
 
+# >>> OPIS FUNKCJI: funkcja detect_retail_chains_in_text
+# Cel: wykryć w tekście tagi segmentów (legacy „sieci handlowe”; w PL FAS: FTL/LTL/ADR itp.) z profilu keywordów. Parametry: text (str). Zwraca: list[str] — przy REQUIRE_NAMED_RETAIL_CHAIN
+# wynik detect_required_retail_chains, inaczej wszystkie RETAIL_CHAIN_KEYWORDS obecne w tekście (lowercase). Efekty uboczne/błędy: brak.
 def detect_retail_chains_in_text(text: str) -> list[str]:
     """
     Wykrywa tagi segmentów / sieci w tekście (lista keywordów kampanii).
@@ -3937,6 +4390,9 @@ def detect_retail_chains_in_text(text: str) -> list[str]:
     return [c for c in RETAIL_CHAIN_KEYWORDS if c in low]
 
 
+# >>> OPIS FUNKCJI: funkcja resolve_is_small_firm
+# Cel: rozstrzygnąć flagę „mała firma”. Parametry: blob (str) — tekst; large (keyword-only, bool) — czy firma uznana za dużą; small_hint (keyword-only, bool|None) — jawna podpowiedź (None = szukaj SMALL_COMPANY_PAGE_MARKERS w tekście).
+# Zwraca: bool — duże zawsze False; przy REQUIRE_SMALL_FIRM True tylko z pozytywną podpowiedzią; w przeciwnym razie podpowiedź lub „nie duża”. Efekty uboczne/błędy: brak.
 def resolve_is_small_firm(
     blob: str,
     *,
@@ -3958,6 +4414,11 @@ def resolve_is_small_firm(
     return bool(hint) or not large
 
 
+# >>> OPIS FUNKCJI: funkcja page_mentions_retail_store_projects
+# Cel: bramka ICP na tekście strony — spedycja/transport drogowy plus dowód oferty (referencje, flota, trasy, FTL/LTL). Nazwa legacy (retail store projects). Parametry: text (str).
+# Zwraca: (ok: bool, chains: list[str], reason: str) — powód to kod np. "einzelhandel_betrieb_kein_bau", "kein_generalunternehmer", "kein_gu_filialbau_kontext", "kein_markt_nachweis",
+# "keine_handelskette", "keine_referenzen_portfolio" (odrzucenie) albo "kette_und_referenz", "referenz_gu_filialbau", "markt_referenz_nachweis" itp. (akceptacja). Zachowanie zależy od flag REQUIRE_*.
+# Efekty uboczne/błędy: brak (czysta funkcja na słowach kluczowych).
 def page_mentions_retail_store_projects(text: str) -> tuple[bool, list[str], str]:
     """
     Spedycja / transport drogowy + dowód oferty (referencje, flota, trasy, FTL/LTL).
@@ -4023,10 +4484,15 @@ def page_mentions_retail_store_projects(text: str) -> tuple[bool, list[str], str
     return True, chains, "markt_referenz_nachweis"
 
 
+# >>> OPIS FUNKCJI: funkcja sort_verification_urls
+# Cel: posortować URL-e do weryfikacji — kontakt/o-nas/oferta przed głębokimi linkami. Parametry: urls (list[str]). Zwraca: list[str] — nowa lista posortowana wg priorytetu (0: RETAIL_URL_PRIORITY_KEYWORDS/kariera,
+# 1: o-nas i impressum, 2: kontakt, 3: reszta), w obrębie grupy alfabetycznie. Efekty uboczne/błędy: brak.
 def sort_verification_urls(urls: list[str]) -> list[str]:
     """
     Sortuje URL-e do weryfikacji (kontakt/o-nas/oferta przed deep linkami).
     """
+    # >>> OPIS FUNKCJI: funkcja sort_verification_urls.key
+    # Cel: funkcja kluczowa sortowania (zagnieżdżona). Parametry: u (str) — URL. Zwraca: (priorytet 0–3, url lowercase). Efekty uboczne/błędy: brak.
     def key(u: str) -> tuple[int, str]:
         low = u.lower()
         if any(x in low for x in RETAIL_URL_PRIORITY_KEYWORDS):
@@ -4047,6 +4513,9 @@ def sort_verification_urls(urls: list[str]) -> list[str]:
     return sorted(urls, key=key)
 
 
+# >>> OPIS FUNKCJI: funkcja _fetch_page_html
+# Cel: pobrać HTML jednej strony (requests + retry, z wykrywaniem WAF). Parametry: url (str); logger. Zwraca: str — treść HTML lub "" gdy URL nie jest http(s), strona zablokowana (WAF/Cloudflare) lub wystąpił błąd.
+# Efekty uboczne: żądanie sieciowe (User-Agent Chrome, timeout REQUEST_TIMEOUT), logi. Błędy: wszystkie wyjątki łapane i logowane — nigdy nie propaguje.
 def _fetch_page_html(url: str, logger: logging.Logger) -> str:
     """
     Pobierz HTML jednej strony (requests + retry).
@@ -4079,6 +4548,9 @@ def _fetch_page_html(url: str, logger: logging.Logger) -> str:
         return ""
 
 
+# >>> OPIS FUNKCJI: funkcja _parse_html_page_for_crawl
+# Cel: sparsować HTML jednej podstrony do struktury używanej przez website_full_crawl. Parametry: url (str); html (str); logger; cache (dict|None). Zwraca: dict {emails, phones, company_name, contact_urls, page_text}.
+# Efekty uboczne: parse_contacts_from_html; apply_playwright_cookie_fallback może uruchomić Playwright (zamknięcie banera cookies) i ponownie sparsować stronę. Błędy: propagowane z parsera.
 def _parse_html_page_for_crawl(
     url: str, html: str, logger: logging.Logger, cache: dict | None
 ) -> dict:
@@ -4087,6 +4559,8 @@ def _parse_html_page_for_crawl(
     """
     parsed = parse_contacts_from_html(url, html, logger=logger, cache=cache)
 
+    # >>> OPIS FUNKCJI: funkcja _parse_html_page_for_crawl._parse_html_playwright
+    # Cel: callback dla fallbacku Playwright — ponowne parsowanie HTML po kliknięciu cookies. Parametry: page_url (str); page_html (str). Zwraca: dict jak parse_contacts_from_html. Efekty uboczne/błędy: jak parser.
     def _parse_html_playwright(page_url: str, page_html: str) -> dict:
         return parse_contacts_from_html(
             page_url, page_html, logger=logger, cache=cache
@@ -4104,6 +4578,9 @@ def _parse_html_page_for_crawl(
     }
 
 
+# >>> OPIS FUNKCJI: funkcja _crawl_website_for_company
+# Cel: wykonać (lub odczytać z cache) pełny crawl domeny firmy. Parametry: website (str); logger; cache (dict|None) — kubełek "website_crawl". Zwraca: (WebsiteCrawlResult, tekst dla Claude);
+# pusty website → (pusty WebsiteCrawlResult, ""). Efekty uboczne: żądania HTTP (crawl_entire_website, limit stron), zapis wyniku w cache["website_crawl"], console_step. Błędy: propagowane z crawlera.
 def _crawl_website_for_company(
     website: str, logger: logging.Logger, cache: dict | None
 ):
@@ -4131,6 +4608,8 @@ def _crawl_website_for_company(
 
     console_step(f"Crawl www (cała domena): {website}")
 
+    # >>> OPIS FUNKCJI: funkcja _crawl_website_for_company._parse
+    # Cel: adapter przekazywany do crawlera — wywołuje _parse_html_page_for_crawl z zamkniętym logger i cache. Parametry: url, html (str). Zwraca: dict jak _parse_html_page_for_crawl.
     def _parse(url: str, html: str) -> dict:
         return _parse_html_page_for_crawl(url, html, logger, cache)
 
@@ -4150,6 +4629,9 @@ def _crawl_website_for_company(
     return result, format_crawl_text_for_claude(result)
 
 
+# >>> OPIS FUNKCJI: funkcja _get_website_crawl_text
+# Cel: pobrać z cache tekst pełnego crawla pod Claude. Parametry: website (str); cache (dict|None); purpose (keyword-only, str="verify") — przekazywany do format_crawl_text_for_claude.
+# Zwraca: str — tekst lub "" gdy brak crawla w cache. Efekty uboczne/błędy: brak (nie wykonuje crawla).
 def _get_website_crawl_text(
     website: str, cache: dict | None, *, purpose: str = "verify"
 ) -> str:
@@ -4167,6 +4649,10 @@ def _get_website_crawl_text(
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja merge_contacts_from_crawl
+# Cel: złączyć kontakty ze wszystkich odwiedzonych podstron po pełnym crawlu. Parametry: crawl (WebsiteCrawlResult — urls_visited, pages); website (str). Zwraca: dict {emails, impressum_emails, phones,
+# company_name (_pick_best_company_name), website, source_urls, page_snippet (_truncate_page_snippet)} — listy bez duplikatów, w kolejności odwiedzin; impressum_emails z podstron rozpoznanych jako impressum/kontakt.
+# Efekty uboczne: console_step przy znalezieniu maili impressum. Błędy: brak własnej obsługi.
 def merge_contacts_from_crawl(crawl, website: str) -> dict:
     """
     Złącz e-maile/telefony ze wszystkich podstron po pełnym crawlu.
@@ -4213,6 +4699,9 @@ def merge_contacts_from_crawl(crawl, website: str) -> dict:
     }
 
 
+# >>> OPIS FUNKCJI: funkcja gather_website_text_for_verification
+# Cel: pobrać pełny tekst domeny firmy do weryfikacji Claude. Parametry: website (str); logger; cache (dict|None). Zwraca: (tekst wszystkich podstron, lista odwiedzonych URL-i).
+# Efekty uboczne: crawl domeny (_crawl_website_for_company) z zapisem w cache["website_crawl"]. Błędy: propagowane z crawlera.
 def gather_website_text_for_verification(
     website: str, logger: logging.Logger, cache: dict | None = None
 ) -> tuple[str, list[str]]:
@@ -4223,6 +4712,10 @@ def gather_website_text_for_verification(
     return page_text, list(_crawl.urls_visited)
 
 
+# >>> OPIS FUNKCJI: funkcja _needs_claude_discovery_supplement
+# Cel: zdecydować, czy po rundzie Serper warto uruchomić dodatkowe discovery z Claude. Parametry: all_rows (list); cache (dict); rotation_land (str|None) — bieżące województwo rotacji;
+# total_new_rows (int) — dotychczasowy przyrost; rotate_mode, serper_only (keyword-only, bool). Zwraca: bool — w trybie rotate+serper_only True, gdy liczba pending dla województwa < MIN_CONTACTS_TARGET;
+# w pozostałych przypadkach negacja _discovery_target_reached. Efekty uboczne/błędy: brak.
 def _needs_claude_discovery_supplement(
     all_rows: list,
     cache: dict,
@@ -4246,6 +4739,12 @@ def _needs_claude_discovery_supplement(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _run_claude_discovery_supplement
+# Cel: uzupełnić discovery frazami wygenerowanymi przez Claude i przepuścić je przez Serper (_process_serper_terms). Parametry: all_rows (list, MUTOWANA przez przetwarzanie);
+# cache (dict); logger; rotation_land (str|None); serper_kw (dict — parametry wywołania, m.in. total_new_rows, stop_requested, rotate_mode, serper_only; aktualizowany po każdej rundzie); funnel (dict|None) — liczniki lejka.
+# Zwraca: (total_new_rows, stop_requested). Pętla do CLAUDE_DISCOVERY_MAX_ROUNDS rund; kończy się przy limicie czasu runu, osiągnięciu celu, rezerwie Serper, braku nowych fraz lub zysku
+# pending < CLAUDE_DISCOVERY_MIN_GAIN. Przy wyłączonym ENABLE_CLAUDE_DISCOVERY_TERMS zwraca wejściowe wartości bez zmian.
+# Efekty uboczne: wywołania Claude i Serper, zużycie kredytów, console_step, aktualizacja funnel. Błędy: brak własnej obsługi (propagacja z podfunkcji).
 def _run_claude_discovery_supplement(
     all_rows: list,
     cache: dict,
@@ -4360,6 +4859,10 @@ def _run_claude_discovery_supplement(
     return total_new_rows, stop_requested
 
 
+# >>> OPIS FUNKCJI: funkcja _finalize_verification_result
+# Cel: domknąć wynik verify_company_on_website — ustawić flagi roli ICP i wymusić bramki REQUIRE_*. Parametry: result (dict, MUTOWANY); blob (str) — tekst strony + snippet Serper.
+# Zwraca: ten sam dict z polami is_gu/gu_marker (qualifies_as_gu_for_campaign) oraz — przy niespełnieniu bramek — verified=False i powodem: "kein_generalunternehmer" (brak roli spedytora),
+# "kein_kleinunternehmen" (duża firma) lub "keine_handelskette" (brak segmentu); przy spełnieniu uzupełnia retail_chains. Efekty uboczne/błędy: brak (poza mutacją result).
 def _finalize_verification_result(result: dict, blob: str) -> dict:
     """
     Domknięcie wyniku verify_company: flagi ICP, markery, retail_verified.
@@ -4385,6 +4888,12 @@ def _finalize_verification_result(result: dict, blob: str) -> dict:
     return result
 
 
+# >>> OPIS FUNKCJI: funkcja verify_company_on_website
+# Cel: zweryfikować, czy firma pasuje do ICP (spedytor, mała firma, segment) na podstawie jej strony. Parametry: company_name, website (str); logger; cache (dict|None);
+# serper_blob (keyword-only, str) — tytuł+snippet z Serper; cache_key (keyword-only, str) — klucz cache werdyktu Claude (domyślnie website).
+# Zwraca: dict {verified, is_small_firm, retail_chains, verification_reason, verification_method ("claude"/"rules"/"bs4_rules"), pages_checked, page_snippet, is_gu, gu_marker}.
+# Kolejność: crawl domeny → (ENABLE_CLAUDE_PAGE_VERIFY, klucz API i brak rate limitu) werdykt Claude → w razie braku/None reguły słów kluczowych (duża firma → odrzut; page_mentions_retail_store_projects;
+# ewentualnie snippet Serper); każdy wynik przechodzi przez _finalize_verification_result. Efekty uboczne: żądania HTTP (crawl), wywołania Claude, zapisy w cache, logi. Błędy: propagowane z crawlera/klienta Claude.
 def verify_company_on_website(
     company_name: str,
     website: str,
@@ -4524,6 +5033,10 @@ def verify_company_on_website(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja score_serper_candidate
+# Cel: ocenić punktowo kandydata z Serper przed filtrem ICP. Parametry: link, title, snippet, company_name (str). Zwraca: int — wynik; -999 przy braku linku. Kary: SERPER_BAD_DOMAINS (-120),
+# SERPER_NEGATIVE_TERMS (-35 za termin), duża firma (-200), niepoprawny kontakt ICP (-400), "/maps/" (-80); premie: słowa pozytywne (+8), impressum/kontakt (+22), tokeny nazwy firmy (+12),
+# frazy małych firm (+10), https (+5). Efekty uboczne/błędy: brak.
 def score_serper_candidate(link: str, title: str = "", snippet: str = "", company_name: str = "") -> int:
     """
     Scoring kandydata Serper (link/title/snippet) przed filtrem ICP.
@@ -4647,6 +5160,9 @@ def is_poland_pl_candidate(link: str, title: str = "", snippet: str = "") -> boo
 is_germany_de_candidate = is_poland_pl_candidate
 
 
+# >>> OPIS FUNKCJI: funkcja compute_contact_quality_score
+# Cel: policzyć jakość kontaktu do sortowania w Excelu i kolejce wysyłek. Parametry: row (dict) — pola email_target, email_target_score, phones_found, official_website, full_address/adres, serper_source_score.
+# Zwraca: int — suma: e-mail 45 (+ do 25 z email_target_score/2), telefon 20, strona www 20, adres 10, do 15 z serper_source_score/5. Efekty uboczne/błędy: brak.
 def compute_contact_quality_score(row: dict) -> int:
     """
     Score jakości kontaktu (mail, www, telefon, weryfikacja) do sortowania Excel/wysyłki.
@@ -4667,6 +5183,9 @@ def compute_contact_quality_score(row: dict) -> int:
     return score
 
 
+# >>> OPIS FUNKCJI: funkcja normalize_website
+# Cel: sprowadzić URL firmowy do postaci z protokołem. Parametry: url (str). Zwraca: str — url po strip z prefiksem "https://", jeśli brak http(s); pusty wejściowy → "".
+# Efekty uboczne/błędy: brak (nie usuwa ścieżek ani query).
 def normalize_website(url: str) -> str:
     """
     Normalizuje URL firmowy do kanonicznej formy (https, bez zbędnych ścieżek).
@@ -4679,6 +5198,9 @@ def normalize_website(url: str) -> str:
     return u
 
 
+# >>> OPIS FUNKCJI: funkcja derive_name_from_website
+# Cel: zaproponować nazwę firmy na podstawie domeny. Parametry: website (str). Zwraca: str — pierwszy człon hosta (bez "www."), myślniki → spacje, każde słowo z wielkiej litery; "" gdy brak domeny
+# lub błąd parsowania (wyjątek łapany). Efekty uboczne: brak.
 def derive_name_from_website(website: str) -> str:
     """
     Propozycja nazwy firmy z domeny (gdy brak sensownej nazwy z Serper/Claude).
@@ -4718,6 +5240,9 @@ _GENERIC_DOMAIN_ROOTS = frozenset(
 )
 
 
+# >>> OPIS FUNKCJI: funkcja website_base_url
+# Cel: sprowadzić URL do kanonicznej domeny firmy (bez ścieżki). Parametry: url (str). Zwraca: str — "https://<domena>" (bez "www.") albo normalize_website(url), gdy domeny nie da się wyznaczyć.
+# Efekty uboczne/błędy: brak.
 def website_base_url(url: str) -> str:
     """
     Kanoniczna domena firmy: https://nazwa.de (bez ścieżki /referenz/…).
@@ -4726,6 +5251,9 @@ def website_base_url(url: str) -> str:
     return f"https://{domain}" if domain else normalize_website(url)
 
 
+# >>> OPIS FUNKCJI: funkcja _name_aligns_with_domain
+# Cel: sprawdzić spójność nazwy firmy z domeną (ochrona przed błędnie przypisanymi nazwami z katalogów). Parametry: name, website (str). Zwraca: bool — True, gdy token domeny (>= 4 znaki)
+# występuje w nazwie albo po usunięciu znaków niealfanumerycznych rdzeń domeny (>= 4 znaki) zawiera się w nazwie. Efekty uboczne/błędy: brak.
 def _name_aligns_with_domain(name: str, website: str) -> bool:
     """
     Czy nazwa firmy jest spójna z domeną www (anty-mismatch katalogów).
@@ -4784,6 +5312,10 @@ def should_prefer_domain_company_name(raw_name: str, website: str) -> bool:
     return False
 
 
+# >>> OPIS FUNKCJI: funkcja clean_company_name
+# Cel: oczyścić nazwę firmy pod Excel (sufiks SEO po " | ", " – ", słowa „startseite/homepage/home/wikipedia/firmenliste/hersteller”). Parametry: name (str); website (str, opcjonalny).
+# Zwraca: str — oczyszczona nazwa; gdy should_prefer_domain_company_name → nazwa z domeny; przy pustym wyniku nazwa z domeny, a w ostateczności "Unbekanntes Unternehmen" (stała legacy DE).
+# Efekty uboczne/błędy: brak.
 def clean_company_name(name: str, website: str = "") -> str:
     """
     Czyści nazwę (suffixy SEO, „Startseite”, lokalizacja w tytule) pod Excel.
@@ -4808,6 +5340,9 @@ def clean_company_name(name: str, website: str = "") -> str:
     return text or "Unbekanntes Unternehmen"
 
 
+# >>> OPIS FUNKCJI: funkcja normalize_row_company_name
+# Cel: ujednolicić nazwę firmy w wierszu pipeline. Parametry: row (dict, MUTOWANY). Zwraca: ten sam row z polami company_name_raw (surowa), company_name_clean i nazwa (po clean_company_name z podpowiedzią domeny).
+# Efekty uboczne: mutacja wiersza. Błędy: brak.
 def normalize_row_company_name(row: dict) -> dict:
     """
     Ustawia ``company_name_clean`` / ``nazwa`` na wierszu przez ``clean_company_name``.
@@ -4823,6 +5358,9 @@ def normalize_row_company_name(row: dict) -> dict:
     return row
 
 
+# >>> OPIS FUNKCJI: funkcja ensure_ssl_cert_env
+# Cel: ustawić certyfikaty SSL z paczki certifi, gdy środowisko (Jupyter/Windows) ich nie ma. Parametry: logger (opcjonalny; bez niego komunikaty idą przez console_step). Zwraca: None.
+# Efekty uboczne: ustawia os.environ SSL_CERT_FILE i (setdefault) REQUESTS_CA_BUNDLE; nic nie robi, gdy SSL_CERT_FILE już jest. Błędy: każdy wyjątek (np. brak certifi) łapany i logowany jako warning.
 def ensure_ssl_cert_env(logger=None) -> None:
     """
     Ustawia ``SSL_CERT_FILE`` / certifi gdy brak certów w Jupyter/Windows.
@@ -4847,6 +5385,9 @@ def ensure_ssl_cert_env(logger=None) -> None:
             logger.warning(f"certifi SSL nicht gesetzt: {e}")
 
 
+# >>> OPIS FUNKCJI: funkcja _normalize_href_email
+# Cel: znormalizować adres z linku mailto: (nie z regexu po tekście). Parametry: raw (str). Zwraca: str — adres po unquote, lowercase, "%40" → "@" i normalize_email_contact (pusty/niepoprawny → "").
+# Efekty uboczne/błędy: brak.
 def _normalize_href_email(raw: str) -> str:
     """
     mailto:-Links aus HTML — keine Regex auf Seitentext.
@@ -4855,6 +5396,8 @@ def _normalize_href_email(raw: str) -> str:
     return normalize_email_contact(low)
 
 
+# >>> OPIS FUNKCJI: funkcja _normalize_href_phone
+# Cel: znormalizować numer z linku tel: lub surowy numer do postaci w Excelu. Parametry: raw (str). Zwraca: str — wynik normalize_phone_contact po usunięciu prefiksu "tel:". Efekty uboczne/błędy: brak.
 def _normalize_href_phone(raw: str) -> str:
     """
     Normalizuje ``tel:`` / surowy numer do postaci zapisu w Excelu.
@@ -4878,6 +5421,9 @@ _PHONE_TEXT_RE = re.compile(
 )
 
 
+# >>> OPIS FUNKCJI: funkcja _deobfuscate_contact_text
+# Cel: odwrócić typowe zaciemnienia kontaktów przed regexem ("[at]", "(at)", " at " → "@"; "[dot]", "(punkt)", " punkt ", "[punkt]" → "."). Parametry: text (str). Zwraca: str — tekst po zamianach
+# (bez wielkości liter). Efekty uboczne/błędy: brak. Uwaga: zamiana " at " jest agresywna i może zmienić zwykły tekst.
 def _deobfuscate_contact_text(text: str) -> str:
     """
     Odwraca typowe obfuskacje (``[at]``, ``(dot)``) przed regex e-mail/telefon.
@@ -4896,6 +5442,9 @@ def _deobfuscate_contact_text(text: str) -> str:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja _email_within_contact_limits
+# Cel: odrzucić adresy o nieprawdopodobnej długości. Parametry: email (str). Zwraca: bool — True, gdy jest "@", część lokalna mieści się w CONTACT_EMAIL_LOCAL_MIN..MAX, a każdy człon domeny
+# niepusty i <= CONTACT_EMAIL_DOMAIN_LABEL_MAX. Efekty uboczne/błędy: brak.
 def _email_within_contact_limits(email: str) -> bool:
     """
     Czy e-mail mieści się w limitach długości / wygląda na używalny.
@@ -4911,6 +5460,8 @@ def _email_within_contact_limits(email: str) -> bool:
     return True
 
 
+# >>> OPIS FUNKCJI: funkcja _phone_raw_within_contact_limits
+# Cel: odrzucić zbyt długie surowe tokeny telefonu. Parametry: raw (str). Zwraca: bool — długość po strip <= CONTACT_DATA_TOKEN_MAX. Efekty uboczne/błędy: brak.
 def _phone_raw_within_contact_limits(raw: str) -> bool:
     """
     Czy surowy telefon ma sensowną długość cyfr.
@@ -4918,6 +5469,9 @@ def _phone_raw_within_contact_limits(raw: str) -> bool:
     return len((raw or "").strip()) <= CONTACT_DATA_TOKEN_MAX
 
 
+# >>> OPIS FUNKCJI: funkcja _find_emails_in_text_regex
+# Cel: znaleźć e-maile w tekście strony (regex po deobfuskacji), bez rankingu. Parametry: text (str). Zwraca: list[str] — unikalne, znormalizowane, mieszczące się w limitach długości,
+# przefiltrowane filter_commercial_emails; pusty tekst → []. Efekty uboczne/błędy: brak.
 def _find_emails_in_text_regex(text: str) -> list[str]:
     """
     Lista e-maili z tekstu (regex + deobfuscate), bez rankingu.
@@ -4932,6 +5486,9 @@ def _find_emails_in_text_regex(text: str) -> list[str]:
     return filter_commercial_emails(emails)
 
 
+# >>> OPIS FUNKCJI: funkcja _find_phones_in_text_regex
+# Cel: znaleźć telefony w tekście (regex PL/DE), bez rankingu. Parametry: text (str). Zwraca: list[str] — unikalne, znormalizowane numery w limicie CONTACT_DATA_TOKEN_MAX; pusty tekst → [].
+# Efekty uboczne/błędy: brak.
 def _find_phones_in_text_regex(text: str) -> list[str]:
     """
     Lista telefonów z tekstu (regex PL/DE), bez rankingu.
@@ -4948,6 +5505,9 @@ def _find_phones_in_text_regex(text: str) -> list[str]:
     return phones
 
 
+# >>> OPIS FUNKCJI: funkcja _extract_mailto_tel_from_soup
+# Cel: wyciągnąć strukturalne kontakty z linków <a href="mailto:"/"tel:"> (zamiast regexu po całym tekście). Parametry: soup (BeautifulSoup). Zwraca: (emails, phones) — unikalne, znormalizowane;
+# e-maile muszą mieścić się w limitach długości. Efekty uboczne/błędy: brak.
 def _extract_mailto_tel_from_soup(soup: BeautifulSoup) -> tuple[list[str], list[str]]:
     """
     Strukturalne mailto:/tel: z HTML — nie regex na całym tekście strony.
@@ -4967,6 +5527,9 @@ def _extract_mailto_tel_from_soup(soup: BeautifulSoup) -> tuple[list[str], list[
     return emails, phones
 
 
+# >>> OPIS FUNKCJI: funkcja _merge_contact_lists
+# Cel: scalić dwie listy kontaktów bez duplikatów. Parametry: primary (list[str]); extra (list[str]). Zwraca: list[str] — kolejność primary, potem nowe elementy z extra (puste pomijane).
+# Efekty uboczne/błędy: brak (wejścia nie są mutowane).
 def _merge_contact_lists(primary: list[str], extra: list[str]) -> list[str]:
     """
     Scala dwie listy kontaktów bez duplikatów (kolejność primary, potem extra).
@@ -4978,6 +5541,9 @@ def _merge_contact_lists(primary: list[str], extra: list[str]) -> list[str]:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja _apply_regex_contact_gate
+# Cel: końcowa bramka kontaktów znalezionych regexem — normalizacja, limity długości i filtr komercyjny. Parametry: emails, phones (list[str]). Zwraca: (emails, phones) po bramce
+# (e-maile przez filter_commercial_emails; telefony po normalizacji i limicie długości). Efekty uboczne/błędy: brak.
 def _apply_regex_contact_gate(
     emails: list[str], phones: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -5004,6 +5570,9 @@ def _apply_regex_contact_gate(
     return gated_emails, gated_phones
 
 
+# >>> OPIS FUNKCJI: funkcja _row_contact_text_blob
+# Cel: złożyć jeden tekst z pól wiersza do wyszukania kontaktów regexem. Parametry: row (dict). Zwraca: str — wartości pól adres, full_address, telefon, phones_found, emails_found, email_target,
+# page_snippet, company_name_clean, nazwa, official_website, www połączone spacją. Efekty uboczne/błędy: brak.
 def _row_contact_text_blob(row: dict) -> str:
     """
     Pełny tekst wiersza pod regex kontaktów (snippet + crawl fields).
@@ -5026,6 +5595,10 @@ def _row_contact_text_blob(row: dict) -> str:
     )
 
 
+# >>> OPIS FUNKCJI: funkcja apply_regex_row_contact_cleanup
+# Cel: po cleanupie Claude uporządkować e-maile i telefony w wierszu regexem (bez LLM). Parametry: row (dict, MUTOWANY).
+# Zwraca: ten sam row — emails_found/phones_found to listy po bramce (_apply_regex_contact_gate); email_target zostaje, jeśli jest na liście, inaczej wybierany przez pick_best_email_for_inquiry
+# (przy braku adresów czyszczony, gdy poza limitami); telefon analogicznie (domyślnie pierwszy z listy). Efekty uboczne: mutacja wiersza. Błędy: brak własnej obsługi.
 def apply_regex_row_contact_cleanup(row: dict) -> dict:
     """
     Po Claude row cleanup: regex na polach wiersza (e-mail local 1–50 znaków, tel do 40).
@@ -5069,6 +5642,9 @@ def apply_regex_row_contact_cleanup(row: dict) -> dict:
     return row
 
 
+# >>> OPIS FUNKCJI: funkcja find_emails_in_text
+# Cel: wyciągnąć e-maile z tekstu strony wyłącznie regexem (deobfuskacja at/punkt); mailto: obsługuje osobno parse_contacts_from_html. Parametry: text (str); logger, cache, page_url, website
+# (keyword-only, ignorowane — zachowane dla zgodności API). Zwraca: list[str] po filter_commercial_emails; pusty tekst → []. Efekty uboczne/błędy: brak.
 def find_emails_in_text(
     text: str,
     *,
@@ -5088,6 +5664,10 @@ def find_emails_in_text(
 
 
 _COMPANY_LEGAL_SUFFIX = _COMPANY_LEGAL_FORM_PATTERN
+# >>> OPIS FUNKCJI: funkcja _pick_best_company_name
+# Cel: wybrać najlepszą nazwę firmy spośród kandydatów. Parametry: candidates (list[str]); website (str); email (str). Zwraca: str — nazwa o najwyższym wyniku (forma prawna +40,
+# długość 8–80 znaków +10, zgodność z domeną +25, nazwy katalogów typu 11880/gelbeseiten/wikipedia −50) albo "", gdy żaden kandydat nie przejdzie czyszczenia i is_rejected_company_name_for_export.
+# Efekty uboczne/błędy: brak.
 def _pick_best_company_name(
     candidates: list[str], website: str = "", email: str = ""
 ) -> str:
@@ -5106,6 +5686,8 @@ def _pick_best_company_name(
     if not cleaned:
         return ""
 
+    # >>> OPIS FUNKCJI: funkcja _pick_best_company_name.score
+    # Cel: wynik punktowy kandydata na nazwę firmy (funkcja pomocnicza sortowania). Parametry: name (str). Zwraca: int (patrz _pick_best_company_name). Efekty uboczne/błędy: brak.
     def score(name: str) -> int:
         s = 0
         low = name.lower()
@@ -5125,6 +5707,9 @@ def _pick_best_company_name(
     return cleaned[0]
 
 
+# >>> OPIS FUNKCJI: funkcja find_company_names_in_text
+# Cel: (hak rozszerzeń) znaleźć kandydatów nazw firm w tekście strony. Parametry: text; logger, cache, page_url, website (keyword-only) — wszystkie obecnie ignorowane.
+# Zwraca: [] (stub — nazwy pochodzą z HTML przez _extract_company_names_from_html). Efekty uboczne/błędy: brak.
 def find_company_names_in_text(
     text: str,
     *,
@@ -5140,6 +5725,9 @@ def find_company_names_in_text(
     return []
 
 
+# >>> OPIS FUNKCJI: funkcja find_company_name_in_text
+# Cel: jedna najlepsza nazwa firmy z tekstu (wrapper na listę kandydatów). Parametry: text; logger, cache, page_url, website (keyword-only). Zwraca: str z _pick_best_company_name(find_company_names_in_text(...)),
+# w praktyce "" (bo kandydatów dostarcza stub). Efekty uboczne/błędy: brak.
 def find_company_name_in_text(
     text: str,
     *,
@@ -5161,6 +5749,8 @@ def find_company_name_in_text(
     return _pick_best_company_name(candidates, website, "")
 
 
+# >>> OPIS FUNKCJI: funkcja find_phones_in_text
+# Cel: wyciągnąć telefony z tekstu strony wyłącznie regexem. Parametry: text (str); logger, cache, page_url, website (keyword-only, ignorowane). Zwraca: list[str]; pusty tekst → []. Efekty uboczne/błędy: brak.
 def find_phones_in_text(
     text: str,
     *,
@@ -5178,6 +5768,9 @@ def find_phones_in_text(
     return _find_phones_in_text_regex(text)
 
 
+# >>> OPIS FUNKCJI: funkcja _extract_company_names_from_html
+# Cel: zebrać kandydatów nazwy firmy ze struktury HTML. Parametry: soup (BeautifulSoup); base_url (str, obecnie nieużywany). Zwraca: list[str] — <title>, meta og:site_name i og:title (property lub name),
+# do 3 pierwszych nagłówków <h1>. Efekty uboczne/błędy: brak.
 def _extract_company_names_from_html(soup: BeautifulSoup, base_url: str) -> list[str]:
     """
     Nazwy z title / h1 / schema.org w BeautifulSoup.
@@ -5196,6 +5789,8 @@ def _extract_company_names_from_html(soup: BeautifulSoup, base_url: str) -> list
     return names
 
 
+# >>> OPIS FUNKCJI: funkcja normalize_phone_for_compare
+# Cel: sprowadzić numer do samych cyfr na potrzeby porównań/deduplikacji. Parametry: phone (str). Zwraca: str — cyfry; puste wejście → "". Efekty uboczne/błędy: brak.
 def normalize_phone_for_compare(phone: str) -> str:
     """
     Telefon do porównań (same cyfry) — dedupe numerów.
@@ -5203,6 +5798,9 @@ def normalize_phone_for_compare(phone: str) -> str:
     return re.sub(r"\D", "", phone or "")
 
 
+# >>> OPIS FUNKCJI: funkcja build_company_query_from_row
+# Cel: zbudować zapytanie wyszukiwarki dla firmy z wiersza. Parametry: row (dict). Zwraca: str — nazwa; w razie braku "kategoria + adres"; w razie braku slug z URL Google Maps (/maps/place/…); inaczej "".
+# Efekty uboczne/błędy: błędy wyciągania sluga ignorowane.
 def build_company_query_from_row(row: dict) -> str:
     """
     Query Serper „oficjalna strona” z nazwy + adresu wiersza.
@@ -5227,6 +5825,11 @@ def build_company_query_from_row(row: dict) -> str:
     return ""
 
 
+# >>> OPIS FUNKCJI: funkcja reconcile_contact_sources
+# Cel: uzgodnić dane kontaktowe z Maps/Serper z danymi zebranymi z oficjalnej strony. Parametry: row (dict, MUTOWANY); collected (dict) — wynik zbierania kontaktów (website, phones, company_name…).
+# Zwraca: ten sam row. Jeśli telefon lub strona z Maps pokrywa się z danymi ze strony — przejmuje dane strony (contact_source="serper_bs4", maps_contact_rejected="yes"), inaczej "maps_or_mixed";
+# uzupełnia brakujący telefon/www, ustawia www i official_website na kanoniczną domenę, a nazwę firmy poprawia nazwą z domeny lub ze strony (przy słabej nazwie / formie prawnej).
+# Efekty uboczne: mutacja wiersza. Błędy: brak.
 def reconcile_contact_sources(row: dict, collected: dict) -> dict:
     """
     Scala kontakty z crawl / regex / Claude w jedno spójne ``email_target`` / telefony.
@@ -5290,6 +5893,11 @@ def reconcile_contact_sources(row: dict, collected: dict) -> dict:
     return row
 
 
+# >>> OPIS FUNKCJI: funkcja search_official_website_with_serper
+# Cel: znaleźć oficjalny URL firmy przez Serper, gdy lead nie ma dobrej strony. Parametry: company_name (str); address (str, obecnie nieużywany w zapytaniu); logger; cache (dict, MUTOWANY).
+# Zwraca: str — znormalizowany URL najlepszego z 5 pierwszych kandydatów (score_serper_candidate) albo "". Wynik (także pusty) trafia do cache["serper"][zapytanie] jako {url, score};
+# brak klucza API, limit dzienny, wyczerpane kredyty lub rezerwa discovery → "" bez zapytania. Efekty uboczne: zapytanie POST do Serper, licznik dzienny, console_step.
+# Błędy: wyjątki łapane — przy braku kredytów oznacza API jako wyczerpane, w innych przypadkach loguje warning i zwraca "".
 def search_official_website_with_serper(company_name: str, address: str, logger: logging.Logger, cache: dict) -> str:
     """
     Szuka oficjalnego www firmy przez Serper, gdy lead nie ma dobrego URL.
@@ -5672,6 +6280,101 @@ def row_within_region_km(row: dict) -> bool:
     return location_within_region_km(blob, lat=lat_f, lon=lon_f)
 
 
+# >>> OPIS FUNKCJI: funkcja discover_places_with_serper
+# Cel: discovery firm przez Serper (Places lub Web) dla frazy × województwo. Parametry: term (str); logger; cache (dict, MUTOWANY); apply_location_filter (keyword-only, bool=True) — filtr geo (PLZ/km);
+# use_places_endpoint (bool) — Places zamiast organic; serper_only (bool) — ostrzejszy filtr kandydata pending; funnel (dict|None) — liczniki lejka.
+# Zwraca: list[dict] — surowe wiersze (fraza, nazwa, company_name_raw/clean, adres, page_snippet, telefon, www, url…). Kolejność: cache wyników → klucz API / limity → request z retry →
+# odrzuty (nie-PL, filtr kandydata, geo, wykluczeni kontrahenci, duże firmy) → zapis do cache (także pusty wynik) i metryki funnel.
+# Efekty uboczne: zapytanie do Serper (zużycie kredytów, licznik dzienny), console_step. Błędy: wyjątki żądania łapane — brak kredytów oznacza API jako wyczerpane; zwraca [] zamiast propagować.
+def _filter_discovery_raw_rows(
+    term: str,
+    raw_rows: list[dict],
+    *,
+    apply_location_filter: bool,
+    serper_only: bool,
+    funnel: dict | None,
+) -> list[dict]:
+    """Wspólne filtry ICP/geo dla wierszy z Serper lub Google Maps."""
+    rows: list[dict] = []
+    seen: set[str] = set()
+    candidate_filter = (
+        is_serper_only_pending_candidate if serper_only else is_loose_serper_discovery_candidate
+    )
+    for item in raw_rows:
+        if funnel is not None:
+            funnel["raw_hits"] = funnel.get("raw_hits", 0) + 1
+        link = normalize_website(item.get("url") or item.get("www") or "")
+        if not link:
+            link = (item.get("url") or item.get("www") or item.get("maps_url") or "").strip()
+        if not link or link in seen:
+            continue
+        title = (
+            item.get("nazwa")
+            or item.get("company_name_raw")
+            or item.get("title")
+            or ""
+        ).strip()
+        snippet = (
+            item.get("page_snippet")
+            or item.get("adres")
+            or item.get("full_address")
+            or item.get("snippet")
+            or ""
+        ).strip()
+        # Maps URL (brak własnej WWW) — nie odrzucaj geo-hostem google.com
+        is_maps_link = "google." in link.lower() and "/maps" in link.lower()
+        if not is_maps_link and not is_poland_pl_candidate(link, title, snippet):
+            if funnel is not None:
+                funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
+            continue
+        if not candidate_filter(
+            url=link,
+            name=title,
+            text=f"{title} {snippet}",
+            search_term=term,
+        ):
+            if funnel is not None:
+                funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
+            continue
+        blob = " ".join([link, title, snippet])
+        if apply_location_filter and (
+            ENABLE_REGION_PLZ_FILTER or ENABLE_DISTANCE_FROM_REGION_KM
+        ):
+            if not location_within_region_km(blob):
+                if funnel is not None:
+                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
+                continue
+        company_clean = clean_company_name(title, link if not is_maps_link else "")
+        if is_excluded_kontrahent(name=company_clean, url=link, email="")[0]:
+            if funnel is not None:
+                funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
+            continue
+        if is_likely_large_company(company_clean, link, blob)[0]:
+            if funnel is not None:
+                funnel["filtered_large_serper"] = funnel.get(
+                    "filtered_large_serper", 0
+                ) + 1
+            continue
+        seen.add(link)
+        row = dict(item)
+        row.update(
+            {
+                "fraza": term,
+                "nazwa": company_clean or title,
+                "company_name_raw": title,
+                "company_name_clean": company_clean or title,
+                "kategoria": term,
+                "adres": row.get("adres") or snippet,
+                "full_address": row.get("full_address") or snippet,
+                "page_snippet": row.get("page_snippet") or f"{title} {snippet}".strip(),
+                "www": link,
+                "url": link,
+            }
+        )
+        rows.append(row)
+    return rows
+
+
 def discover_places_with_serper(
     term: str,
     logger: logging.Logger,
@@ -5683,21 +6386,66 @@ def discover_places_with_serper(
     funnel: dict | None = None,
 ) -> list[dict]:
     """
-    Discovery firm: Serper Places/Web dla termu × województwo → surowe wiersze.
+    Discovery firm: Google Maps (Selenium) albo Serper Places/Web → surowe wiersze.
     
-    Cache per query; zlicza budżet; filtruje ICP / geo gdy włączone.
+    Cache per query; filtruje ICP / geo gdy włączone.
     """
+    use_maps = bool(ENABLE_GOOGLE_MAPS_DISCOVERY)
     query = term.strip()
-    if not use_places_endpoint:
+    if use_maps:
+        # Local Pack: wywal FTL/LTL/ADR z frazy (nie pomagają w Maps).
+        query = re.sub(r"\b(FTL|LTL|ADR)\b", " ", query, flags=re.I)
+        query = " ".join(query.split())
+    elif not use_places_endpoint:
         query = f"{term} {SERPER_DISCOVERY_REGION_SUFFIX}".strip()
     if not query:
         return []
     cached_rows = get_cached_serper_discovery_rows(
-        cache, query, use_places_endpoint=use_places_endpoint
+        cache,
+        query,
+        use_places_endpoint=use_places_endpoint,
+        use_maps=use_maps,
     )
     if cached_rows is not None:
-        console_step(f"Serper Discovery Cache: {query} ({len(cached_rows)})")
+        src = "Maps" if use_maps else "Serper"
+        console_step(f"{src} Discovery Cache: {query} ({len(cached_rows)})")
         return [dict(r) for r in cached_rows]
+
+    if use_maps:
+        from google_maps_scraper import maps_hits_to_discovery_rows, search_google_maps
+
+        console_step(f"Google Maps: {query}")
+        if funnel is not None:
+            funnel["serper_queries"] = funnel.get("serper_queries", 0) + 1
+        try:
+            hits = search_google_maps(
+                query,
+                max_results=GOOGLE_MAPS_DISCOVERY_MAX_RESULTS,
+                logger=logger,
+            )
+        except Exception as e:
+            console_step(f"Google Maps Fehler: {e}")
+            logger.exception("Google Maps discovery failed for %s", query)
+            hits = []
+        raw_rows = maps_hits_to_discovery_rows(term, hits)
+        rows = _filter_discovery_raw_rows(
+            term,
+            raw_rows,
+            apply_location_filter=apply_location_filter,
+            serper_only=serper_only,
+            funnel=funnel,
+        )
+        store_serper_discovery_rows(
+            cache,
+            query,
+            rows,
+            use_places_endpoint=use_places_endpoint,
+            use_maps=True,
+        )
+        if funnel is not None and not rows:
+            funnel["api_zero_terms"] = funnel.get("api_zero_terms", 0) + 1
+        console_step(f"Google Maps Ergebnisse '{term}': {len(rows)}")
+        return rows
 
     api_key = get_serper_api_key()
     if not api_key:
@@ -5739,78 +6487,37 @@ def discover_places_with_serper(
         console_step(f"Serper Discovery Fehler: {e}")
         return []
 
-    rows = []
-    seen = set()
-    candidate_filter = (
-        is_serper_only_pending_candidate if serper_only else is_loose_serper_discovery_candidate
-    )
+    raw_rows: list[dict] = []
     buckets: tuple[str, ...] = ("places",) if use_places_endpoint else ("organic", "places")
     for bucket in buckets:
         for item in data.get(bucket, []) or []:
-            if funnel is not None:
-                funnel["raw_hits"] = funnel.get("raw_hits", 0) + 1
             link = normalize_website(item.get("link") or item.get("website") or "")
-            if not link or link in seen:
-                continue
-            if not is_poland_pl_candidate(
-                link, item.get("title", ""), item.get("snippet", "")
-            ):
-                if funnel is not None:
-                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
+            if not link:
                 continue
             title = (item.get("title") or "").strip()
             snippet = (item.get("snippet") or item.get("address") or "").strip()
-            if not candidate_filter(
-                url=link,
-                name=title,
-                text=f"{title} {snippet}",
-                search_term=term,
-            ):
-                if funnel is not None:
-                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
-                continue
-            blob = " ".join([link, title, snippet])
-            if apply_location_filter and (
-                ENABLE_REGION_PLZ_FILTER or ENABLE_DISTANCE_FROM_REGION_KM
-            ):
-                if not location_within_region_km(blob):
-                    if funnel is not None:
-                        funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
-                    continue
-            company_clean = clean_company_name(item.get("title", ""), link)
-            if is_excluded_kontrahent(name=company_clean, url=link, email="")[0]:
-                if funnel is not None:
-                    funnel["filtered_serper"] = funnel.get("filtered_serper", 0) + 1
-                continue
-            if is_likely_large_company(company_clean, link, blob)[0]:
-                if funnel is not None:
-                    funnel["filtered_large_serper"] = funnel.get(
-                        "filtered_large_serper", 0
-                    ) + 1
-                continue
-            seen.add(link)
-            rows.append(
+            raw_rows.append(
                 {
                     "fraza": term,
-                    "nazwa": company_clean,
-                    "company_name_raw": (item.get("title") or "").strip(),
-                    "company_name_clean": clean_company_name(item.get("title", ""), link),
-                    "ocena": "",
-                    "liczba_opinii": "",
-                    "kategoria": term,
+                    "nazwa": title,
+                    "company_name_raw": title,
                     "adres": snippet,
                     "full_address": snippet,
                     "page_snippet": f"{title} {snippet}".strip(),
-                    "status": "",
                     "telefon": item.get("phoneNumber") or item.get("phone") or "",
                     "www": link,
                     "url": link,
-                    "lat_center": "",
-                    "lon_center": "",
                 }
             )
+    rows = _filter_discovery_raw_rows(
+        term,
+        raw_rows,
+        apply_location_filter=apply_location_filter,
+        serper_only=serper_only,
+        funnel=funnel,
+    )
     store_serper_discovery_rows(
-        cache, query, rows, use_places_endpoint=use_places_endpoint
+        cache, query, rows, use_places_endpoint=use_places_endpoint, use_maps=False
     )
     if funnel is not None and not rows:
         funnel["api_zero_terms"] = funnel.get("api_zero_terms", 0) + 1
@@ -5818,6 +6525,8 @@ def discover_places_with_serper(
     return rows
 
 
+# >>> OPIS FUNKCJI: funkcja _is_impressum_url
+# Cel: rozpoznać URL strony Impressum (dane prawne firmy). Parametry: url (str). Zwraca: bool — True, gdy URL zawiera "impressum" lub "/imprint". Efekty uboczne/błędy: brak.
 def _is_impressum_url(url: str) -> bool:
     """
     True, gdy URL wygląda na impressum / dane-firmy / kontakt prawny.
@@ -5826,6 +6535,9 @@ def _is_impressum_url(url: str) -> bool:
     return "impressum" in low or "/imprint" in low
 
 
+# >>> OPIS FUNKCJI: funkcja guess_impressum_urls
+# Cel: wygenerować typowe ścieżki Impressum na tej samej domenie (źródło e-maila bywa tylko tam). Parametry: base_url (str). Zwraca: list[str] — pełne URL-e z IMPRESSUM_GUESS_PATHS,
+# bez duplikatów; [] przy braku/niepoprawnym URL. Efekty uboczne: brak (bez żądań sieciowych). Błędy: błąd parsowania łapany → [].
 def guess_impressum_urls(base_url: str) -> list[str]:
     """
     Heurystyka: typowe ścieżki Impressum na tej samej domenie (mail często tylko tam).
@@ -5850,11 +6562,16 @@ def guess_impressum_urls(base_url: str) -> list[str]:
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja sort_contact_urls_priority_pl
+# Cel: posortować podstrony kontaktowe wg przydatności. Parametry: urls (list[str]). Zwraca: list[str] — najpierw Impressum (0), potem kontakt/oferta/wycena (1), reszta (2), na końcu RODO/prywatność/cookies/regulamin (3);
+# w obrębie grupy krótsze URL-e pierwsze. Efekty uboczne/błędy: brak.
 def sort_contact_urls_priority_pl(urls: list[str]) -> list[str]:
     """
     DE: najpierw Impressum, potem Kontakt; na końcu RODO/Datenschutz.
     """
 
+    # >>> OPIS FUNKCJI: funkcja sort_contact_urls_priority_pl.key
+    # Cel: funkcja kluczowa sortowania (zagnieżdżona). Parametry: u (str). Zwraca: (grupa 0–3, długość, url lowercase). Efekty uboczne/błędy: brak.
     def key(u: str) -> tuple[int, int, str]:
         low = u.lower()
         if any(
@@ -5895,6 +6612,9 @@ def sort_contact_urls_priority_pl(urls: list[str]) -> list[str]:
     return sorted(urls, key=key)
 
 
+# >>> OPIS FUNKCJI: funkcja collect_impressum_urls
+# Cel: zebrać wszystkie URL-e Impressum — zgadnięte ścieżki oraz linki ze strony. Parametry: website (str); discovered (list[str]|None). Zwraca: list[str] bez duplikatów (zgadnięte najpierw);
+# z discovered tylko http(s) rozpoznane przez _is_impressum_url. Efekty uboczne/błędy: brak.
 def collect_impressum_urls(website: str, discovered: list[str] | None = None) -> list[str]:
     """
     Wszystkie URL Impressum: zgadnięte ścieżki + linki ze strony (bez limitu kontaktów).
@@ -5915,6 +6635,9 @@ def collect_impressum_urls(website: str, discovered: list[str] | None = None) ->
     return out
 
 
+# >>> OPIS FUNKCJI: funkcja merge_contact_subpage_urls
+# Cel: scalić zgadnięte URL-e Impressum z linkami odkrytymi na stronie, z priorytetem Impressum/Kontakt. Parametry: website (str); discovered (list[str]). Zwraca: list[str] — maksymalnie MAX_CONTACT_LINKS,
+# w kolejności Impressum → kontakt → reszta (po sort_contact_urls_priority_pl); tylko http(s), bez duplikatów. Efekty uboczne/błędy: brak.
 def merge_contact_subpage_urls(website: str, discovered: list[str]) -> list[str]:
     """
     Impressum (link + zgadnięte ścieżki) przed innymi podstronami.
@@ -5939,6 +6662,9 @@ def merge_contact_subpage_urls(website: str, discovered: list[str]) -> list[str]
     return ordered[:MAX_CONTACT_LINKS]
 
 
+# >>> OPIS FUNKCJI: funkcja collect_non_impressum_contact_urls
+# Cel: zebrać podstrony kontaktowe/referencyjne bez Impressum (osobny przebieg). Parametry: website (str); discovered (list[str]|None). Zwraca: list[str] — wynik merge_contact_subpage_urls bez Impressum,
+# maksymalnie MAX_CONTACT_LINKS. Efekty uboczne/błędy: brak.
 def collect_non_impressum_contact_urls(
     website: str, discovered: list[str] | None = None
 ) -> list[str]:
@@ -5949,6 +6675,9 @@ def collect_non_impressum_contact_urls(
     return [u for u in merged if not _is_impressum_url(u)][:MAX_CONTACT_LINKS]
 
 
+# >>> OPIS FUNKCJI: funkcja extract_html_text_with_media_hints
+# Cel: wydobyć tekst strony wraz z podpowiedziami z mediów (alt/title/src obrazów, figcaption). Parametry: soup (BeautifulSoup|None). Zwraca: str — połączone fragmenty; None/pusty soup → "".
+# Efekty uboczne/błędy: brak.
 def extract_html_text_with_media_hints(soup: BeautifulSoup) -> str:
     """
     Tekst strony + alt/title/figcaption/src obrazów (zdjęcia marketów).
@@ -5971,6 +6700,10 @@ def extract_html_text_with_media_hints(soup: BeautifulSoup) -> str:
     return " ".join(p for p in parts if p)
 
 
+# >>> OPIS FUNKCJI: funkcja parse_contacts_from_html
+# Cel: wyciągnąć kontakty z jednej podstrony: tekst → regex e-mail/telefon, mailto:/tel: z DOM, bramka limitów i filtr komercyjny (bez LLM). Parametry: base_url (str); html (str);
+# logger (keyword-only); cache (keyword-only). Zwraca: dict {emails, phones, company_name (najlepszy kandydat), contact_urls (linki wg RETAIL_CONTACT_LINK_KEYWORDS, scalone z Impressum), page_text}.
+# Efekty uboczne/błędy: brak operacji sieciowych; niepoprawny HTML tolerowany przez BeautifulSoup.
 def parse_contacts_from_html(
     base_url: str,
     html: str,
@@ -6033,6 +6766,9 @@ def parse_contacts_from_html(
     }
 
 
+# >>> OPIS FUNKCJI: funkcja parse_contacts_from_page
+# Cel: pobrać stronę i wyciągnąć z niej kontakty (wrapper fetch + parse). Parametry: url (str); logger; cache (dict|None). Zwraca: dict {emails, phones, contact_urls, page_text}; przy URL-u innym niż http(s)
+# lub braku HTML — puste listy. Efekty uboczne: żądanie sieciowe (_fetch_page_html), console_step, możliwy Playwright (cookie fallback). Błędy: łapane w _fetch_page_html.
 def parse_contacts_from_page(
     url: str, logger: logging.Logger, cache: dict | None = None
 ) -> dict:
@@ -6048,6 +6784,9 @@ def parse_contacts_from_page(
     return _parse_html_page_for_crawl(url, html, logger, cache)
 
 
+# >>> OPIS FUNKCJI: funkcja _truncate_page_snippet
+# Cel: skrócić snippet strony do limitu znaków (cache/Excel/Claude). Parametry: text (str); max_chars (int, domyślnie PAGE_SNIPPET_MAX_CHARS). Zwraca: str — tekst ze zwiniętymi białymi znakami,
+# ucięty do max_chars z "..." na końcu. Efekty uboczne/błędy: brak.
 def _truncate_page_snippet(text: str, max_chars: int = PAGE_SNIPPET_MAX_CHARS) -> str:
     """
     Skraca snippet strony do limitu znaków (cache / Excel / Claude).
@@ -6058,6 +6797,8 @@ def _truncate_page_snippet(text: str, max_chars: int = PAGE_SNIPPET_MAX_CHARS) -
     return t[: max_chars - 3] + "..."
 
 
+# >>> OPIS FUNKCJI: funkcja _parse_emails_found_field
+# Cel: rozbić pole emails_found (lista rozdzielona przecinkami) na adresy. Parametry: raw (str). Zwraca: list[str] — elementy zawierające "@". Efekty uboczne/błędy: brak.
 def _parse_emails_found_field(raw: str) -> list[str]:
     """
     Dzieli pole ``emails_found`` (CSV) na listę adresów.
@@ -6069,6 +6810,10 @@ def _parse_emails_found_field(raw: str) -> list[str]:
     ]
 
 
+# >>> OPIS FUNKCJI: funkcja log_email_pick_decision
+# Cel: zapisać w logu jedną linię z decyzją wyboru e-maila (wybrany adres, wynik, metoda, ranking kandydatów). Parametry: logger; place_url, company_name, website (keyword-only, str);
+# candidates (list[str]|None); target (str; pusty = brak wyboru); score (int); method (str); note (str). Zwraca: None.
+# Efekty uboczne: logger.info; przy wybranym adresie także console_step; ranking z rank_email_candidates (do 8 pozycji); przy braku wyboru loguje próg MIN_EMAIL_SCORE_FOR_SEND. Błędy: brak.
 def log_email_pick_decision(
     logger: logging.Logger,
     *,
@@ -6111,6 +6856,10 @@ def log_email_pick_decision(
         logger.info(msg)
 
 
+# >>> OPIS FUNKCJI: funkcja backfill_emails_in_cache
+# Cel: przeliczyć email_target z zapisanych emails_found wg aktualnych reguł (Punycode, filtr śmieci) i wyczyścić fałszywe trafienia. Parametry: cache (dict, MUTOWANY); logger.
+# Zwraca: dict statystyk {checked, filled, updated, cleaned_found, unchanged, still_empty}. Efekty uboczne: modyfikuje rekordy contacts (emails_found, email_target, email_target_score, metody wyboru),
+# loguje decyzje i podsumowanie; nie wykonuje żądań sieciowych. Błędy: rekordy niebędące dict pomijane.
 def backfill_emails_in_cache(cache: dict, logger: logging.Logger) -> dict:
     """
     Przelicza email_target z emails_found (nowe reguły Punycode / filtr śmieci).
@@ -6210,6 +6959,9 @@ def backfill_emails_in_cache(cache: dict, logger: logging.Logger) -> dict:
     return stats
 
 
+# >>> OPIS FUNKCJI: funkcja collect_urls_for_www_reverify
+# Cel: wskazać URL-e do ponownej weryfikacji strony. Parametry: cache (dict); all_rows (list|None); reverify_all (keyword-only, bool). Zwraca: list[str] bez duplikatów —
+# przy reverify_all wszystkie URL-e z contacts i wierszy; inaczej tylko rekordy pending_www_verify (contacts + niezweryfikowane wiersze). Efekty uboczne/błędy: brak.
 def collect_urls_for_www_reverify(
     cache: dict,
     all_rows: list | None = None,
@@ -6223,6 +6975,8 @@ def collect_urls_for_www_reverify(
     urls: list[str] = []
     seen: set[str] = set()
 
+    # >>> OPIS FUNKCJI: funkcja collect_urls_for_www_reverify._add
+    # Cel: dodać URL do wyniku bez duplikatów (funkcja pomocnicza). Parametry: url (str). Zwraca: None; puste i powtórzone URL-e są pomijane. Efekty uboczne: mutacja zewnętrznych list urls/seen.
     def _add(url: str) -> None:
         u = (url or "").strip()
         if u and u not in seen:
@@ -6252,6 +7006,10 @@ def collect_urls_for_www_reverify(
     return urls
 
 
+# >>> OPIS FUNKCJI: funkcja verify_pending_contacts
+# Cel: wykonać weryfikację www dla leadów pending (po Serper) albo całego cache (--reverify-all-contacts). Parametry: cache (dict, MUTOWANY); logger; all_rows (keyword-only, list|None — uzupełniana o brakujące wiersze);
+# reverify_all (keyword-only, bool). Zwraca: dict {pending, verified, rejected, errors, reverify_all}. Dla każdego URL wywołuje enrich_row_with_contacts(force_refresh=True)
+# (crawl, Claude verify, kontakty). Efekty uboczne: żądania HTTP, wywołania Claude, aktualizacja cache i wierszy, logi. Błędy: wyjątek pojedynczego URL jest łapany, liczony w errors i loguje warning.
 def verify_pending_contacts(
     cache: dict,
     logger: logging.Logger,
@@ -6319,6 +7077,10 @@ def verify_pending_contacts(
     return stats
 
 
+# >>> OPIS FUNKCJI: funkcja pick_email_with_impressum_priority
+# Cel: wybrać adres do zapytania ofertowego z pierwszeństwem źródła Impressum, potem pozostałe podstrony. Parametry: all_emails (list[str]); impressum_emails (list[str]); website (str).
+# Zwraca: (email, score, metoda) — metoda: "impressum", "impressum_rules", "rules", "website_inbox" lub "none" (wtedy email ""). Kolejność prób: scrape skrzynek z Impressum → reguły dla Impressum
+# → reguły dla wszystkich → scrape skrzynek dla wszystkich. Efekty uboczne/błędy: brak (czysta logika rankingowa).
 def pick_email_with_impressum_priority(
     all_emails: list[str],
     impressum_emails: list[str],
@@ -6349,6 +7111,10 @@ def pick_email_with_impressum_priority(
     return "", score if candidates else 0, "none"
 
 
+# >>> OPIS FUNKCJI: funkcja resolve_inquiry_email_target
+# Cel: ustalić końcowy adres docelowy kampanii dla firmy. Parametry: collected (dict — emails, impressum_emails, website, page_snippet); website, company_name (str); logger; cache (dict|None);
+# cache_key (keyword-only, str); retail_verified (keyword-only, bool); verification_text (keyword-only, str). Zwraca: (email_target, score, metoda); metoda jak w pick_email_with_impressum_priority
+# lub "blocked_not_store_builder" (adres odrzucony, bo niezweryfikowany kontakt nie przeszedł walidacji ICP is_valid_retail_store_builder_contact; wtedy email ""). Efekty uboczne: log decyzji (log_email_pick_decision). Błędy: brak własnej obsługi.
 def resolve_inquiry_email_target(
     collected: dict,
     website: str,
@@ -6409,6 +7175,10 @@ def resolve_inquiry_email_target(
     return target, score, method
 
 
+# >>> OPIS FUNKCJI: funkcja collect_contacts_from_website
+# Cel: zebrać kontakty z oficjalnej strony po weryfikacji (z cache crawla lub nowego crawla). Parametry: website (str); logger; cache (dict|None).
+# Zwraca: dict {emails, phones, company_name, website, source_urls, page_snippet, impressum_emails} (z merge_contacts_from_crawl) albo szkielet z pustymi listami, gdy brak URL-a.
+# Efekty uboczne: console_step; przy braku crawla w cache wykonuje crawl domeny (żądania HTTP, zapis do cache["website_crawl"]). Błędy: propagowane z crawlera.
 def collect_contacts_from_website(
     website: str, logger: logging.Logger, cache: dict | None = None
 ) -> dict:
@@ -6436,6 +7206,9 @@ def collect_contacts_from_website(
     return merge_contacts_from_crawl(crawl_result, website)
 
 
+# >>> OPIS FUNKCJI: funkcja _assemble_inquiry_email_body
+# Cel: wygenerować treść zapytania FAS bez Claude (fallback). Parametry: company_name (str); opening (str, ignorowany — zgodność API). Zwraca: str — build_fas_inquiry_fallback_pl(company_name).
+# Efekty uboczne/błędy: brak.
 def _assemble_inquiry_email_body(company_name: str, opening: str = "") -> str:
     """
     Fallback body FAS PL (bez Claude). ``opening`` ignorowane — kompatybilność API.
@@ -6444,6 +7217,11 @@ def _assemble_inquiry_email_body(company_name: str, opening: str = "") -> str:
     return build_fas_inquiry_fallback_pl(company_name)
 
 
+# >>> OPIS FUNKCJI: funkcja generate_email_content
+# Cel: przygotować temat i treść maila outreach FAS PL. Parametry: company_name (str); logger; cache (ignorowany); city_name (str, domyślnie CUSTOM_EMAIL_CITY); website (str);
+# page_snippet (str) — fragment strony (do 280 znaków trafia do kontekstu). Zwraca: (subject, body). Ścieżka główna: email_custom_template.inquiry_try_custom (Claude pisze mail wg wzorca FAS_INQUIRY_DRAFT_PL);
+# po wygenerowaniu wymusza obowiązkowe zdanie o stawce (FAS_MUST_KEEP_RATE_LINE) i podpis (www, nazwisko, telefon). Fallback: EMAIL_SUBJECT_TEMPLATE/FAS_EMAIL_SUBJECT_PL + build_fas_inquiry_fallback_pl.
+# Efekty uboczne: wywołanie Claude (zużycie limitów), console_step. Błędy: wyjątek generacji łapany → warning i fallback.
 def generate_email_content(
     company_name: str,
     logger: logging.Logger,
@@ -6502,6 +7280,12 @@ def generate_email_content(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja send_email_de_gu
+# Cel: wysłać mail outreach FAS PL przez SMTP z załącznikami PPTX (alias send_email_pl_fas; nazwa legacy). Parametry: to_email, subject, body (str); logger.
+# Zwraca: (ok: bool, info: str) — ("sent") przy sukcesie; (False, powód) przy: wyłączonym DISABLE_CONTRACTOR_EMAILS (domyślnie WŁĄCZONY blok wysyłki), braku MAIL_USER/MAIL_PASSWORD,
+# braku załączników PPTX albo wyjątku SMTP (tekst błędu). Etapy: sanityzacja treści → Cc (merge_fas_campaign_cc) i Bcc z env → budowa EmailMessage → _send_de_gu_via_smtp →
+# archiwizacja (archive_sent_email_message) → wpis do dziennika (email_journal.log_mail_sent, błąd dziennika ignorowany).
+# Efekty uboczne: realna wysyłka e-mail, zapis kopii/dziennika, logi; duże załączniki (>15 MB) tylko ostrzeżenie. Błędy: wszystkie wyjątki łapane i zwracane jako (False, str(e)).
 def send_email_de_gu(
     to_email: str,
     subject: str,
@@ -6636,6 +7420,10 @@ def send_email_de_gu(
 send_email_pl_fas = send_email_de_gu
 
 
+# >>> OPIS FUNKCJI: funkcja reenrich_contacts_for_mailing
+# Cel: ponownie zebrać kontakty ze stron www przed wysyłką maili. Parametry: all_rows (list[dict], MUTOWANA — aktualizowane/dopisywane wiersze); cache (dict); logger; refresh_all (keyword-only, bool) —
+# wymuś odświeżenie wszystkich (kasuje wpisy contacts). Zwraca: None. Pomija URL-e z istniejącym email_target, o ile nie refresh_all i nie DISCOVERY_IGNORE_CONTACT_CACHE.
+# Efekty uboczne: crawl i weryfikacja przez enrich_row_with_contacts (HTTP, Claude), modyfikacja cache i all_rows. Błędy: propagowane z enrich_row_with_contacts.
 def reenrich_contacts_for_mailing(
     all_rows: list[dict],
     cache: dict,
@@ -6677,6 +7465,14 @@ def reenrich_contacts_for_mailing(
             by_url[url] = enriched
 
 
+# >>> OPIS FUNKCJI: funkcja _process_email_jobs
+# Cel: obsłużyć całą kolejkę wysyłek B2B: limity, wykluczenia, generacja treści, SMTP i statusy. Parametry: all_rows (list[dict], MUTOWANA); cache (dict, MUTOWANY); logger;
+# dry_run_email (bool) — generuj treść bez wysyłki; force_resend (bool) — ignoruj „sent”/suppress; ignore_send_window (bool) — ignoruj okno godzinowe. Zwraca: None.
+# Przy DISABLE_CONTRACTOR_EMAILS i bez dry_run kończy od razu (NO-OP). Kolejność: zapis postępu → synchronizacja do contacts → build_email_jobs_from_cache_json → sortowanie po jakości →
+# limit dzienny; dla każdego joba statusy pominięcia (duplicate_skipped_, suppressed_role_based_, suppressed_not_store_builder_, suppressed_not_generalunternehmer_, suppressed_cached_,
+# deferred_send_window_, deferred_domain_limit_) albo generacja i wysyłka (send_email_pl_fas, dry_run_, sent, error:…, soft_fail_spam_). Po sukcesie: liczniki dzienne/domenowe, mark_email_sent,
+# persist_progress, losowa pauza (poza dry-run). Nadwyżka ponad limit dnia dostaje status deferred_. Efekty uboczne: wysyłka SMTP, zapisy cache/Excel, suppress przy twardych bounce'ach (mailbox unavailable / user unknown).
+# Błędy: błędy wysyłki zapisywane w statusie; wyjątki spoza send_email_pl_fas propagują się.
 def _process_email_jobs(
     all_rows: list[dict],
     cache: dict,
@@ -6833,6 +7629,12 @@ def _process_email_jobs(
     persist_progress(all_rows, cache, logger, reason="nach Mailversand")
 
 
+# >>> OPIS FUNKCJI: funkcja enrich_row_with_contacts
+# Cel: wzbogacić wiersz o stronę www i kontakty — pełna ścieżka dla jednego leada. Parametry: row (dict); cache (dict, MUTOWANY); logger; force_refresh (keyword-only, bool|None) — None = wg DISCOVERY_IGNORE_CONTACT_CACHE.
+# Zwraca: dict — zaktualizowany wiersz (ten sam lub nowy po normalizacji nazwy). Kroki: cache kontaktu (jeśli świeży) → ustalenie www (wiersz/cache/Serper wg FORCE_SERPER_LOOKUP) →
+# verify_company_on_website (przy REQUIRE_WEBSITE_RETAIL_VERIFICATION; odrzut = retail_verified False, email_status "skipped_no_retail_proof") → collect_contacts_from_website → reconcile_contact_sources →
+# resolve_inquiry_email_target → ewentualnie Claude contact extract (gdy brak maila, ENABLE_CLAUDE_CONTACT_EXTRACT) → blokada instytucji → compute_contact_quality_score → zapis w cache["contacts"][url].
+# Brak www: retail_verified=False, email_status "skipped_no_website". Efekty uboczne: żądania HTTP, wywołania Claude/Serper, zapis w cache. Błędy: propagowane z podfunkcji (bez własnego try/except).
 def enrich_row_with_contacts(
     row: dict,
     cache: dict,
@@ -7079,6 +7881,9 @@ def enrich_row_with_contacts(
     return row
 
 
+# >>> OPIS FUNKCJI: funkcja _discovery_target_reached
+# Cel: sprawdzić, czy osiągnięto cel discovery. Parametry: all_rows (list); total_new_rows (keyword-only, int); rotate_mode (bool); serper_only (bool=False).
+# Zwraca: bool — w trybie rotacji lub serper_only: nowe firmy w tym runie >= MIN_CONTACTS_TARGET; w pozostałych przypadkach łączna liczba wierszy >= MIN_CONTACTS_TARGET. Efekty uboczne/błędy: brak.
 def _discovery_target_reached(
     all_rows: list,
     *,
@@ -7095,6 +7900,74 @@ def _discovery_target_reached(
     return len(all_rows) >= MIN_CONTACTS_TARGET
 
 
+def _is_maps_url(url: str) -> bool:
+    low = (url or "").lower()
+    return "google." in low and "/maps" in low
+
+
+def _maps_phase_a_contact_key(row: dict) -> str:
+    """Klucz cache contacts: własna WWW, inaczej maps_url."""
+    www = normalize_website(
+        row.get("official_website") or row.get("www") or row.get("url") or ""
+    )
+    maps_url = (row.get("maps_url") or "").strip()
+    if www and not _is_maps_url(www):
+        return website_base_url(www) or www
+    if maps_url:
+        return maps_url
+    return www
+
+
+def _build_maps_phase_a_contact(
+    row: dict, *, discovery_wojewodztwo: str | None = None
+) -> dict:
+    """
+    Faza A: rekord wizytówki Maps → contacts JSON (bez Serper/crawl).
+    """
+    name = (
+        row.get("company_name_clean")
+        or row.get("nazwa")
+        or row.get("company_name_raw")
+        or ""
+    ).strip()
+    www = normalize_website(row.get("official_website") or "")
+    if not www:
+        raw_www = normalize_website(row.get("www") or row.get("url") or "")
+        if raw_www and not _is_maps_url(raw_www):
+            www = website_base_url(raw_www) or raw_www
+    maps_url = (row.get("maps_url") or "").strip()
+    address = (row.get("full_address") or row.get("adres") or "").strip()
+    phone = (row.get("telefon") or row.get("phones_found") or "").strip()
+    snippet = (
+        row.get("page_snippet") or f"{name} {address} {phone}".strip()
+    ).strip()
+    contact = {
+        "company_name": name,
+        "company_name_clean": name,
+        "company_name_raw": (row.get("company_name_raw") or name).strip(),
+        "official_website": www,
+        "maps_url": maps_url,
+        "full_address": address,
+        "telefon": phone,
+        "phones_found": phone,
+        "page_snippet": snippet,
+        "discovery_search_term": (row.get("fraza") or row.get("kategoria") or "").strip(),
+        "discovery_source": "google_maps",
+        "gap_status": GAP_STATUS_NEEDS_ENRICH,
+        "retail_verified": False,
+        "verification_reason": PENDING_WWW_VERIFY_REASON,
+        "email_target": "",
+        "email_status": MAPS_PHASE_A_EMAIL_STATUS,
+        "serper_title": name,
+        "serper_snippet": snippet,
+    }
+    set_discovery_wojewodztwo(contact, discovery_wojewodztwo or "")
+    return contact
+
+
+# >>> OPIS FUNKCJI: funkcja _process_serper_terms
+# Cel: przetworzyć listę fraz discovery (Maps Faza A albo Serper) — filtry i dopisanie wierszy/contacts.
+# Faza A (ENABLE_GOOGLE_MAPS_DISCOVERY): bez Serper/crawl/Claude — zapis wizytówki z gap_status=needs_enrich.
 def _process_serper_terms(
     terms: list[str],
     label: str,
@@ -7124,10 +7997,13 @@ def _process_serper_terms(
         if request_stop_on_runtime_limit(logger, console_step_fn=console_step):
             stop_requested = True
             break
-        if stop_requested or is_serper_api_exhausted(cache):
+        if stop_requested:
+            break
+        if not ENABLE_GOOGLE_MAPS_DISCOVERY and is_serper_api_exhausted(cache):
             stop_requested = True
             break
-        console_step(f"Serper ({label}): {term}")
+        src_label = "Maps" if ENABLE_GOOGLE_MAPS_DISCOVERY else "Serper"
+        console_step(f"{src_label} ({label}): {term}")
         rows = discover_places_with_serper(
             term,
             logger,
@@ -7137,13 +8013,83 @@ def _process_serper_terms(
             serper_only=serper_only,
             funnel=funnel,
         )
-        if is_serper_api_exhausted(cache):
+        if not ENABLE_GOOGLE_MAPS_DISCOVERY and is_serper_api_exhausted(cache):
             stop_requested = True
             break
         added = 0
         refreshed = 0
+        maps_phase_a = bool(ENABLE_GOOGLE_MAPS_DISCOVERY)
         for r in rows:
-            raw_url = (r.get("url") or "").strip()
+            if maps_phase_a:
+                r["discovery_source"] = "google_maps"
+                r["gap_status"] = GAP_STATUS_NEEDS_ENRICH
+                r["retail_verified"] = False
+                r["verification_reason"] = PENDING_WWW_VERIFY_REASON
+                r["email_target"] = ""
+                r["email_status"] = MAPS_PHASE_A_EMAIL_STATUS
+                contact_key = _maps_phase_a_contact_key(r)
+                if not contact_key:
+                    continue
+                www = normalize_website(r.get("official_website") or "")
+                if www and not _is_maps_url(www):
+                    url = website_base_url(www) or www
+                else:
+                    url = contact_key
+                r["url"] = url
+                r["www"] = url if (www and not _is_maps_url(www)) else (r.get("maps_url") or url)
+                r["official_website"] = www if www and not _is_maps_url(www) else ""
+                dom = get_registrable_domain(url) if not _is_maps_url(url) else ""
+                if discovery_wojewodztwo:
+                    set_discovery_wojewodztwo(r, discovery_wojewodztwo)
+                    if not (r.get("bundesland") or "").strip():
+                        r["bundesland"] = discovery_wojewodztwo
+                existing = by_url.get(url) or (by_domain.get(dom) if dom else None)
+                if (
+                    existing
+                    and not DISCOVERY_IGNORE_CONTACT_CACHE
+                    and (url in seen_global or contact_key in contacts_cache)
+                ):
+                    continue
+                if contact_key in contacts_cache and not DISCOVERY_IGNORE_CONTACT_CACHE:
+                    continue
+                if not is_row_eligible_for_excel_export(r):
+                    console_step(
+                        f"Pominięto (Maps Faza A, nie do JSON): {r.get('nazwa', '')}"
+                    )
+                    if funnel is not None:
+                        funnel["rejected_excel"] = funnel.get("rejected_excel", 0) + 1
+                    continue
+                contacts_cache[contact_key] = _build_maps_phase_a_contact(
+                    r, discovery_wojewodztwo=discovery_wojewodztwo
+                )
+                console_step(
+                    f"Maps Faza A → JSON: {r.get('nazwa', '')} "
+                    f"(gap={GAP_STATUS_NEEDS_ENRICH})"
+                )
+                seen_global.add(url)
+                seen_global.add(contact_key)
+                if dom:
+                    seen_global.add(dom)
+                if existing:
+                    existing.update(r)
+                    refreshed += 1
+                else:
+                    all_rows.append(r)
+                    by_url[url] = r
+                    if dom:
+                        by_domain[dom] = r
+                    added += 1
+                    total_new_rows += 1
+                    if funnel is not None:
+                        funnel["pending_saved"] = funnel.get("pending_saved", 0) + 1
+                if max_new_rows is not None and total_new_rows >= max_new_rows:
+                    stop_requested = True
+                persist_progress(
+                    all_rows, cache, logger, reason=f"maps +{total_new_rows}"
+                )
+                continue
+
+            raw_url = (r.get("url") or r.get("maps_url") or "").strip()
             if not raw_url:
                 continue
             dom = get_registrable_domain(raw_url)
@@ -7269,7 +8215,7 @@ def _process_serper_terms(
             if max_new_rows is not None and total_new_rows >= max_new_rows:
                 stop_requested = True
             persist_progress(all_rows, cache, logger, reason=f"serper +{total_new_rows}")
-        pending_added = added if serper_only else 0
+        pending_added = added if (serper_only or maps_phase_a) else 0
         _record_serper_term_stat(
             cache,
             term,
@@ -7298,6 +8244,15 @@ def _process_serper_terms(
     return total_new_rows, stop_requested
 
 
+# >>> OPIS FUNKCJI: funkcja run_scraper
+# Uzupełnienie opisu: główny przebieg runu. Parametry: jupyter_mode (bool|None); max_new_rows (int|None); enable_auto_email (bool|None, domyślnie ENABLE_AUTO_EMAIL; w rotacji bez jawnej flagi wyłączone;
+# przy DISABLE_CONTRACTOR_EMAILS wymuszone False poza dry-run); dry_run_email (bool); discovery_mode ("full" | "serper_only" | "emails_only"); force_resend (bool); ignore_send_window (bool);
+# rebuild_from_cache (bool) — odbuduj Excel z cache zamiast discovery; rotate_bundesland (bool) — rotacja jednego województwa na run (gu_bundesland_rotation); **_deprecated_kwargs — ignorowane z ostrzeżeniem.
+# Zwraca: None. Kolejność: konfiguracja i logger → kontrola klucza SERPER_API_KEY (RuntimeError bez niego, poza emails_only) → rotacja województwa → start zegara limitu czasu → load_cache → wczytanie wierszy (Excel/cache)
+# → kaskada discovery (primary → fallback → broad → landkreis → places → uzupełnienie Claude), każda kolejna tylko gdy cel nie osiągnięty i brak stop_requested → w serper_only kontrola progu DISCOVERY_MIN_PENDING_GHA_FAIL
+# → opcjonalna wysyłka maili (reenrich + _process_email_jobs) → blok finally: record_discovery_run_state (serper_only) i persist_progress → commit rotacji województwa, jeśli osiągnięto MIN_VERIFIED_CONTACTS_ROTATION.
+# Efekty uboczne: wszystkie opisane wyżej (API, pliki, SMTP, stan rotacji). Błędy: RuntimeError przy braku klucza Serper lub zbyt małej liczbie kandydatów pending (poza wyczerpanym API / limitem czasu); finally zawsze zapisuje postęp.
+# Uwaga: część komunikatów (np. „w całych Niemczech”) to pozostałość legacy z wersji DE — nie wpływa na logikę.
 def run_scraper(
     jupyter_mode: bool | None = None,
     max_new_rows: int | None = None,
@@ -7355,7 +8310,11 @@ def run_scraper(
             ", ".join(deprecated),
         )
     ensure_ssl_cert_env(logger)
-    if discovery_mode != "emails_only" and not get_serper_api_key():
+    if (
+        discovery_mode != "emails_only"
+        and not ENABLE_GOOGLE_MAPS_DISCOVERY
+        and not get_serper_api_key()
+    ):
         raise RuntimeError("Brak SERPER_API_KEY – moduł wymaga Serper API.")
 
     rotation_land: str | None = None
@@ -7417,7 +8376,13 @@ def run_scraper(
             cache,
             keep_search_caches=not DISCOVERY_IGNORE_CONTACT_CACHE,
         )
-        ensure_serper_budget_or_fail(cache)
+        if not ENABLE_GOOGLE_MAPS_DISCOVERY:
+            ensure_serper_budget_or_fail(cache)
+        else:
+            console_step(
+                "Discovery Faza A: Google Maps → JSON "
+                f"(gap_status={GAP_STATUS_NEEDS_ENRICH}, bez Serper/crawl)"
+            )
     if rebuild_from_cache:
         cache_rows = build_all_rows_from_cache(cache)
         existing_rows, _ = load_existing_output(OUTPUT_FILE, logger)
@@ -7480,89 +8445,105 @@ def run_scraper(
                 discovery_wojewodztwo=rotation_land,
                 funnel=funnel,
             )
-            total_new_rows, stop_requested = _process_serper_terms(
-                SERPER_DISCOVERY_TERMS,
-                "primary",
-                apply_distance_filter=_geo_filters_enabled(),
-                **serper_kw,
-            )
-            if not stop_requested and not _discovery_target_reached(
-                all_rows,
-                total_new_rows=total_new_rows,
-                rotate_mode=rotate_mode,
-                serper_only=serper_only,
-            ):
-                metric = (
-                    total_new_rows if (rotate_mode or serper_only) else len(all_rows)
+            if ENABLE_GOOGLE_MAPS_DISCOVERY:
+                # Maps Local Pack: krótkie frazy bez FTL/LTL (np. „firma spedycyjna Głogów”).
+                maps_terms = list(SERPER_DISCOVERY_MAPS_TERMS) or list(
+                    SERPER_DISCOVERY_PLACES_TERMS
                 )
                 console_step(
-                    f"Za mało kontaktów ({metric}). Fallback Serper bez filtra odległości."
+                    f"Maps Faza A: {len(maps_terms)} fraz bez FTL/LTL "
+                    f"(np. {maps_terms[0] if maps_terms else '—'})"
                 )
                 total_new_rows, stop_requested = _process_serper_terms(
-                    SERPER_DISCOVERY_FALLBACK_TERMS,
-                    "fallback",
+                    maps_terms,
+                    "maps",
                     apply_distance_filter=False,
                     **serper_kw,
                 )
-            if not stop_requested and not _discovery_target_reached(
-                all_rows,
-                total_new_rows=total_new_rows,
-                rotate_mode=rotate_mode,
-                serper_only=serper_only,
-            ):
-                metric = (
-                    total_new_rows if (rotate_mode or serper_only) else len(all_rows)
-                )
-                console_step(
-                    f"Za mało kontaktów ({metric}). Broad Serper — krótkie frazy."
-                )
+            else:
                 total_new_rows, stop_requested = _process_serper_terms(
-                    SERPER_DISCOVERY_BROAD_TERMS,
-                    "broad",
-                    apply_distance_filter=False,
+                    SERPER_DISCOVERY_TERMS,
+                    "primary",
+                    apply_distance_filter=_geo_filters_enabled(),
                     **serper_kw,
                 )
-            if not stop_requested and not _discovery_target_reached(
-                all_rows,
-                total_new_rows=total_new_rows,
-                rotate_mode=rotate_mode,
-                serper_only=serper_only,
-            ):
-                metric = (
-                    total_new_rows if (rotate_mode or serper_only) else len(all_rows)
-                )
-                console_step(
-                    f"Za mało kontaktów ({metric}). Landkreis Serper — frazy Kreis."
-                )
-                total_new_rows, stop_requested = _process_serper_terms(
-                    SERPER_DISCOVERY_LANDKREIS_TERMS,
-                    "landkreis",
-                    apply_distance_filter=False,
-                    **serper_kw,
-                )
-            if (
-                not stop_requested
-                and ENABLE_SERPER_PLACES_ENDPOINT
-                and not _discovery_target_reached(
+                if not stop_requested and not _discovery_target_reached(
                     all_rows,
                     total_new_rows=total_new_rows,
                     rotate_mode=rotate_mode,
                     serper_only=serper_only,
-                )
-            ):
-                metric = (
-                    total_new_rows if (rotate_mode or serper_only) else len(all_rows)
-                )
-                console_step(
-                    f"Za mało kontaktów ({metric}). Serper Places API."
-                )
-                total_new_rows, stop_requested = _process_serper_terms(
-                    SERPER_DISCOVERY_PLACES_TERMS,
-                    "places",
-                    apply_distance_filter=False,
-                    use_places_endpoint=True,
-                    **serper_kw,
-                )
+                ):
+                    metric = (
+                        total_new_rows if (rotate_mode or serper_only) else len(all_rows)
+                    )
+                    console_step(
+                        f"Za mało kontaktów ({metric}). Fallback Serper bez filtra odległości."
+                    )
+                    total_new_rows, stop_requested = _process_serper_terms(
+                        SERPER_DISCOVERY_FALLBACK_TERMS,
+                        "fallback",
+                        apply_distance_filter=False,
+                        **serper_kw,
+                    )
+                if not stop_requested and not _discovery_target_reached(
+                    all_rows,
+                    total_new_rows=total_new_rows,
+                    rotate_mode=rotate_mode,
+                    serper_only=serper_only,
+                ):
+                    metric = (
+                        total_new_rows if (rotate_mode or serper_only) else len(all_rows)
+                    )
+                    console_step(
+                        f"Za mało kontaktów ({metric}). Broad Serper — krótkie frazy."
+                    )
+                    total_new_rows, stop_requested = _process_serper_terms(
+                        SERPER_DISCOVERY_BROAD_TERMS,
+                        "broad",
+                        apply_distance_filter=False,
+                        **serper_kw,
+                    )
+                if not stop_requested and not _discovery_target_reached(
+                    all_rows,
+                    total_new_rows=total_new_rows,
+                    rotate_mode=rotate_mode,
+                    serper_only=serper_only,
+                ):
+                    metric = (
+                        total_new_rows if (rotate_mode or serper_only) else len(all_rows)
+                    )
+                    console_step(
+                        f"Za mało kontaktów ({metric}). Landkreis Serper — frazy Kreis."
+                    )
+                    total_new_rows, stop_requested = _process_serper_terms(
+                        SERPER_DISCOVERY_LANDKREIS_TERMS,
+                        "landkreis",
+                        apply_distance_filter=False,
+                        **serper_kw,
+                    )
+                if (
+                    not stop_requested
+                    and ENABLE_SERPER_PLACES_ENDPOINT
+                    and not _discovery_target_reached(
+                        all_rows,
+                        total_new_rows=total_new_rows,
+                        rotate_mode=rotate_mode,
+                        serper_only=serper_only,
+                    )
+                ):
+                    metric = (
+                        total_new_rows if (rotate_mode or serper_only) else len(all_rows)
+                    )
+                    console_step(
+                        f"Za mało kontaktów ({metric}). Serper Places API."
+                    )
+                    total_new_rows, stop_requested = _process_serper_terms(
+                        SERPER_DISCOVERY_PLACES_TERMS,
+                        "places",
+                        apply_distance_filter=False,
+                        use_places_endpoint=True,
+                        **serper_kw,
+                    )
             if (
                 not stop_requested
                 and ENABLE_CLAUDE_DISCOVERY_TERMS
@@ -7647,6 +8628,25 @@ def run_scraper(
                             "Sprawdź [LEjek] w logu."
                         )
 
+        # Opcjonalnie Faza B zaraz po Maps (domyślnie OFF → wieczorny cron).
+        if (
+            ENABLE_GOOGLE_MAPS_DISCOVERY
+            and ENABLE_GAP_FILL_AFTER_MAPS
+            and discovery_mode != "emails_only"
+            and not rebuild_from_cache
+        ):
+            from gap_fill_serper import run_gap_fill
+
+            console_step("Faza B: Serper gap-fill po Maps (--with-gap-fill / GAP_FILL_AFTER_MAPS=1)")
+            gap_stats = run_gap_fill(cache, logger)
+            console_step(
+                "Gap-fill po Maps: "
+                f"attempted={gap_stats.get('attempted', 0)} "
+                f"enriched={gap_stats.get('enriched', 0)} "
+                f"still_gap={gap_stats.get('still_gap', 0)}"
+            )
+            persist_progress(all_rows, cache, logger, reason="gap_fill_after_maps")
+
         if enable_auto_email:
             rows_with_email = sum(
                 1 for r in all_rows if (r.get("email_target") or "").strip()
@@ -7728,6 +8728,9 @@ def run_scraper(
     print(f"\nFertig. {len(all_rows)} Zeilen -> {OUTPUT_FILE}")
 
 
+# >>> OPIS FUNKCJI: funkcja run_in_jupyter
+# Cel: wygodne uruchomienie w Jupyter Lab (discovery tylko przez Serper). Parametry: enable_auto_email (bool|None, domyślnie ENABLE_AUTO_EMAIL); max_new_rows (int|None); dry_run_email (bool=True) — domyślnie bez realnej wysyłki;
+# **_deprecated_kwargs — przekazywane dalej (i zignorowane z ostrzeżeniem). Zwraca: wynik run_scraper (None). Efekty uboczne: jak run_scraper z jupyter_mode=True i discovery_mode="serper_only". Błędy: propagowane.
 def run_in_jupyter(
     enable_auto_email: bool | None = None,
     max_new_rows: int | None = None,
@@ -7752,6 +8755,10 @@ def run_in_jupyter(
     )
 
 
+# >>> OPIS FUNKCJI: funkcja _run_smoke_tests
+# Cel: szybki test dymny wewnętrznej logiki PL FAS (--test / --smoke) bez pełnych wywołań API. Parametry: brak. Zwraca: None.
+# Sprawdza asercjami m.in.: ustawienia Serper (pl/pl), normalizację URL i nazw firm, region/miasto, geo, stałe szablonu maila FAS (stawka, podpis, temat), załączniki PPTX, filtr ICP i wykrywanie e-maili.
+# Efekty uboczne: może pobrać/sprawdzić załącznik PPTX (ensure_fas_email_attachment), brak zapytań do Serper/Claude. Błędy: AssertionError przy niespełnionym założeniu (test nieudany).
 def _run_smoke_tests() -> None:
     """
     Szybkie asercje wewnętrzne PL FAS przy ``--test`` / ``--smoke`` — bez pełnego API.
@@ -8016,6 +9023,10 @@ def _run_smoke_tests() -> None:
     print("_run_smoke_tests: OK")
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: wejście CLI/GHA dla pojedynczego runu scrapera. Parametry: run_config_path (str|Path|None) — plik run_config/*.json. Zwraca: None.
+# Z konfiguracją: apply_run_config_file + apply_gu_run_config_extras (błąd czytania dodatkowych pól ignorowany) → run_scraper_launch_kwargs → run_scraper(jupyter_mode=…, **kwargs).
+# Efekty uboczne: modyfikuje stałe modułu (konfiguracja), uruchamia pełny run. Błędy: propagowane z run_scraper/konfiguracji. Uwaga: argparse nie jest używany — flagi CLI czyta blok if __name__ == "__main__" z sys.argv.
 def main(run_config_path: str | Path | None = None):
     """
     CLI entrypoint: argparse, smoke/test modes, ``run_scraper`` / Jupyter helpers.
@@ -8077,6 +9088,15 @@ if __name__ == "__main__":
             if SEND_WINDOW_DISABLED:
                 extra_kw["ignore_send_window"] = True
             print("[TRYB] Tylko wysyłka maili z cache (bez nowego wyszukiwania).")
+        if "--gap-fill-only" in sys.argv or "--gap-fill-serper" in sys.argv:
+            from gap_fill_serper import main as gap_fill_main
+
+            print("[TRYB] Faza B — Serper gap-fill only (luki w contacts JSON).")
+            raise SystemExit(gap_fill_main(sys.argv[1:]))
+        if "--with-gap-fill" in sys.argv:
+            os.environ["GAP_FILL_AFTER_MAPS"] = "1"
+            globals()["ENABLE_GAP_FILL_AFTER_MAPS"] = True
+            print("[TRYB] Po Maps odpali się Faza B (gap-fill Serper).")
         if "--backfill-emails-from-cache" in sys.argv:
             logger = setup_logging()
             cache = load_cache(logger)

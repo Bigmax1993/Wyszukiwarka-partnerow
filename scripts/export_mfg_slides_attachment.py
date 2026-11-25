@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu scripts/export_mfg_slides_attachment (komentarz; docstring poniżej opisuje shim).
+#   Rola: wyłącznie most zgodności — przy uruchomieniu jako skrypt wykonuje runpy.run_path na export_fas_email_attachment.py (run_name="__main__").
+#   Zależności: stdlib runpy, pathlib. Funkcji własnych brak; wejście i wyjście identyczne jak w export_fas_email_attachment.py.
+# ============================================================
 """
 Shim legacy: ``export_mfg_slides_attachment`` → ``export_fas_email_attachment``.
 

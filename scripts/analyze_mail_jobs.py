@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Moduł (skrypt CLI): scripts/analyze_mail_jobs — podgląd firm kwalifikujących się do wysyłki z aktualnego cache.
+#
+# CO ROBI: buduje listę „mail jobs” z cache (scraper.build_email_jobs_from_cache_json) i wypisuje ją oraz wszystkie kontakty z e-mailem wraz ze statusem i flagą weryfikacji.
+# ROLA W PIPELINE: diagnostyka przed etapem wysyłki B2B (nic nie wysyła i nie zapisuje).
+# ZALEŻNOŚCI: pl_fas_spedycja_scraper (jako scraper), stdlib argparse, logging, sys, pathlib. WEJŚCIE: opcja --force-resend. WYJŚCIE: wydruk na stdout, kod 0.
+# ============================================================
 """Podglad firm kwalifikujacych sie do wysylki z aktualnego cache."""
 from __future__ import annotations
 
@@ -14,7 +21,12 @@ if str(ROOT) not in sys.path:
 import pl_fas_spedycja_scraper as scraper  # noqa: E402
 
 
+# >>> OPIS FUNKCJI: funkcja main
+# Cel: wypisać podgląd kwalifikacji do wysyłki. Parametry: brak (argparse: --force-resend). Zwraca: int 0.
+# Efekty uboczne: odczyt cache, wydruk liczby contacts i jobów oraz listy kontaktów z e-mailem (status, rv=T/F dla retail_verified). Nie modyfikuje cache.
+# Błędy: wyjątki z odczytu cache propagują się.
 def main() -> int:
+    """CLI: wypisz joby mailowe z cache (podgląd kwalifikacji do wysyłki)."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--force-resend", action="store_true")
     args = parser.parse_args()

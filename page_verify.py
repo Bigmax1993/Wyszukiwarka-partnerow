@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu page_verify (komentarz; docstring poniżej opisuje cztery kroki werdyktu ICP).
+#   Rola w pipeline: logika werdyktu ICP niezależna od transportu API — twarde NO-GO bez LLM, budowa
+#   promptu, parsowanie JSON Claude i połączenie z regułami tekstowymi (pl_spedycja_filter).
+#   Zależności: campaign_keyword_profile.REJECT_PRIMARY_ROLES, claude_prompts.build_page_verify_prompt,
+#   pl_spedycja_filter (reguły ról/segmentów), stdlib json, re. Wołany głównie przez claude_page_verify.
+#   Wejście: tekst/kontekst strony i odpowiedź modelu. Wyjście: dict werdyktu (m.in. is_gu = rola spedytora,
+#   primary_role, powody odrzucenia). Nazwy pól JSON (is_gu, handelsketten) są dziedzictwem — nie zmieniać.
+# ============================================================
 """
 Weryfikacja strony www pod ICP PL spedycja (FTL/LTL/ADR).
 
@@ -41,21 +50,13 @@ from pl_spedycja_filter import (
     # Whitelist segmentów FTL/LTL/… (nazwa stałej legacy „RETAIL”)
     REQUIRED_RETAIL_CHAIN_KEYWORDS as REQUIRED_TRANSPORT_SEGMENT_KEYWORDS,
     detect_required_retail_chains as detect_required_transport_segments,
-    # Oferta / referencje tras (legacy „market project”)
-    has_market_project_evidence_on_website as has_transport_offer_evidence,
-    # Sygnał transportu: rola ∨ usługa spedycyjna (legacy „store shell / filialbau”)
-    has_store_shell_build_evidence as has_transport_signal,
     # Role spoza ICP (legacy „non_gu”)
     is_excluded_non_gu_role as is_excluded_non_forwarder_role,
-    # Rola spedytora / freight forwarder (legacy import: is_generalunternehmer)
-    is_forwarder_role,
     # Kurier / paczka (legacy „interior fitout”)
     is_interior_fitout_specialist as is_courier_reject,
     is_media_publisher_contact,
     # Giełda frachtów / big 3PL / portal pracy (legacy „retail store operator”)
     is_retail_store_operator_contact as is_freight_exchange_or_3pl,
-    # Kwalifikacja leadu = is_forwarder_role (legacy „qualifies_as_gu”)
-    qualifies_as_gu_for_campaign as qualifies_as_forwarder_for_campaign,
 )
 
 # Pierwszy blok ``{...}`` w odpowiedzi modelu (Claude czasem dokłada tekst obok JSON).
@@ -96,23 +97,24 @@ def hard_reject_page_context(
     page_text: str = "",
 ) -> tuple[bool, str]:
     """
-    Twarde NO-GO ICP — bez wołania Claude (tanie, deterministyczne).
+    Warstwa 1 — twarde NO-GO na śmieci (bez Claude, tanie, deterministyczne).
 
     =====================================================================
     PO CO
     =====================================================================
-    Odcina oczywiste non-lead'y zanim wydamy tokeny LLM albo zanim
-    zaakceptujemy werdykt Claude. Używane też jako pierwsza bramka
-    w ``apply_page_verdict`` (na blobie page+serper).
+    Odcina oczywisty junk zanim wydamy tokeny LLM. **Nie** ocenia
+    „dobra spedycja vs dobry transport” — to warstwa 2 (Claude).
+    Używane też jako pierwsza bramka w ``apply_page_verdict``.
 
     =====================================================================
     KOGO ODRZUCA (KOLEJNOŚĆ SPRAWDZEŃ)
     =====================================================================
-    1. Giełda frachtów / big 3PL / portal pracy
+    1. Giełda frachtów / big 3PL / portal pracy (domena)
        (``is_freight_exchange_or_3pl``) → ``gielda_3pl_portal``
     2. Media / wydawca / portal branżowy
        (``is_media_publisher_contact``) → ``medienportal``
-    3. Role wykluczone z ICP (producent, HR, urząd, tylko flota własna…)
+    3. Czysty śmieć roli (sama agencja pracy, urząd, OSK…) —
+       NIE firma transportowa/spedycyjna z zakładką „praca”
        (``is_excluded_non_forwarder_role``) → ``excluded_non_forwarder_role``
     4. Kurier / paczka bez twardej spedycji FTL
        (``is_courier_reject``) → zwykle ``kurier_paczka``
@@ -255,6 +257,10 @@ def parse_page_verify_response(text: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("Page verify: not a JSON object")
 
+    # >>> OPIS FUNKCJI: funkcja parse_page_verify_response._list
+    # Pomocnicza (zagnieżdżona): bezpiecznie pobiera listę stringów z pola JSON. Parametry: key (str) —
+    # nazwa pola w słowniku data. Zwraca: list[str] — elementy po strip(), bez pustych; [] gdy pole puste lub
+    # nie jest listą. Efekty uboczne/błędy: brak.
     def _list(key: str) -> list[str]:
         """Bezpieczne wyciągnięcie listy stringów z pola JSON."""
         val = data.get(key) or []
@@ -293,141 +299,45 @@ def apply_page_verdict(
     *,
     page_text: str,
     serper_blob: str = "",
-    # Domyślnie True = bezpieczniej dla wywołań bez run_config.
-    # Kampania PL zwykle przekazuje False (patrz docstring poniżej).
+    # API legacy scrapera — no-op (bramka pure-forwarder usunięta).
     require_forwarder_role: bool = True,
     require_generalunternehmer: bool | None = None,
     require_small_firm: bool = True,
 ) -> tuple[bool, str, list[str]]:
     """
-    Łączy JSON Claude z regułami tekstowymi → ostateczny werdykt ICP.
+    Po Claude zostają TYLKO tanie zabezpieczenia (Claude bywa omylny):
 
-    =====================================================================
-    PO CO
-    =====================================================================
-    Claude może się mylić; ta funkcja:
+      1. ``hard_reject`` śmieci (giełda / 3PL / kurier / media)
+      2. ``matched_negative`` / ``primary_role`` na czarnej liście
+      3. opcjonalnie ``is_small_firm`` (nie Raben / big 3PL)
 
-      - najpierw twarde NO-GO na tekście,
-      - potem negatywy / role z JSON,
-      - potem rola forwardera (``is_gu`` / ``is_forwarder_ok_from_llm`` + filtr),
-      - potem kontekst transportu + whitelist segmentów,
-      - na końcu sygnał branżowy i (opcjonalnie) mała firma.
+    ICP biznesowe = wyłącznie ``is_gu`` z Claude (bez dogrywki tekstem,
+    bez bramek segment/sygnał 6–8).
 
-    Wynik idzie do ``verification_reason`` / ``retail_chains`` w pipeline.
-
-    =====================================================================
-    DOMYŚLNE FLAGI vs KAMPANIA PL
-    =====================================================================
-    ``require_forwarder_role=True`` (domyślnie)
-        Bezpieczniejszy default biblioteki: bez jawnego False odrzuci
-        leady bez markera roli spedytora. Dobre dla testów / ad-hoc.
-
-    Kampania PL FAS zwykle przekazuje ``False`` z run_config::
-
-      run_config/pl_fas_spedycja.json → ``"require_generalunternehmer": false``
-      → scraper ``REQUIRE_FORWARDER_ROLE = False``
-      → ``claude_verify_company_page(require_forwarder_role=False)``
-      → ta funkcja: bramka 5 (twardy wymóg markera roli) **wyłączona**;
-        wystarczy sygnał ICP z filtra / Claude (segmenty FTL/LTL, …).
-
-    Alias: ``require_generalunternehmer`` (legacy) = to samo co
-    ``require_forwarder_role``.
-
-    =====================================================================
-    PRZEBIEG (KOLEJNOŚĆ BRAMEK)
-    =====================================================================
-    0. Alias legacy: ``require_generalunternehmer`` nadpisuje
-       ``require_forwarder_role`` (to samo znaczenie).
-    1. ``hard_reject_page_context`` na page+serper.
-    2. ``matched_negative_keywords`` z Claude → ``claude_negative:…``
-    3. ``primary_role`` na liście ``REJECT_PRIMARY_ROLES`` → ``claude_role:…``
-    4. Brak roli forwardera (``is_gu`` / is_forwarder_ok + filtr tekstowy)
-       → ``claude_brak_roli_spedycji``
-    5. Gdy ``require_forwarder_role`` (domyślnie True; PL run_config: False):
-       brak markera roli w tekście/JSON → ``brak_roli_forwardera``
-    6. Brak kontekstu transportu (``has_retail_context`` /
-       ``has_transport_offer_evidence``)
-       → ``claude_brak_segmentu_transport``
-    7. Brak segmentu z whitelist (Claude ∪ tekst)
-       → ``brak_segmentu_ftl_ltl``
-    8. Brak sygnału transportu (``has_transport_signal``)
-       → ``brak_sygnalu_transport``
-    9. Gdy ``require_small_firm`` i Claude mówi nie-mała
-       → ``claude_nie_mala_firma``
-    10. OK → ``(True, "claude:<reason>", chains)``
-
-    =====================================================================
-    ARGUMENTY
-    =====================================================================
-    ``llm``
-        Dict z ``parse_page_verify_response`` (lub ręczny fixture w testach).
-    ``page_text``
-        Tekst ze stron www (crawl).
-    ``serper_blob``
-        Opcjonalny tytuł+snippet Serper dołączany do bloba reguł.
-    ``require_forwarder_role``
-        Wymagaj roli spedytora / freight forwardera (preferowana nazwa PL).
-        Default ``True`` (bezpiecznie). Kampania PL: zwykle ``False`` z
-        ``run_config`` / ``REQUIRE_FORWARDER_ROLE``.
-    ``require_generalunternehmer``
-        Alias legacy tego samego; jeśli nie ``None``, nadpisuje
-        ``require_forwarder_role``.
-    ``require_small_firm``
-        Wymagaj ``is_small_firm=True`` z Claude (holdingi / big 3PL OUT).
-
-    =====================================================================
-    ZWRACA
-    =====================================================================
-    ``(ok, reason, chains)`` gdzie:
-
-      ``ok``      bool — True = lead przechodzi ICP verify
-      ``reason``  str  — kod PL albo ``claude:<skrócony powód>``
-      ``chains``  list[str] — segmenty (ftl/ltl/…) do Excela / cache;
-                  pusta przy wczesnym reject bez segmentów
+    ``require_forwarder_role`` / ``require_generalunternehmer``: no-op.
+    Zwraca ``(ok, reason, chains)`` — ``chains`` tylko do Excela/cache.
     """
-    # --- 0) Preferuj require_forwarder_role; alias legacy nadal działa ---
+    _ = require_forwarder_role
     if require_generalunternehmer is not None:
-        require_forwarder_role = require_generalunternehmer
+        _ = require_generalunternehmer
 
     blob = " ".join([page_text or "", serper_blob or ""]).lower()
 
-    # --- 1) Twarde NO-GO (giełda / media / kurier / role wykluczone) ---
+    # 1) hard_reject śmieci
     hard, hard_reason = hard_reject_page_context(page_text=blob)
     if hard:
         return False, hard_reason, []
 
-    # --- 2) Negatywne keywordy z Claude ---
+    # 2a) matched_negative
     neg = llm.get("matched_negative_keywords") or []
     if neg:
         return False, f"claude_negative:{neg[0]}", llm.get("matched_chains") or []
 
-    # --- 3) primary_role na czarnej liście profilu kampanii ---
+    # 2b) primary_role czarna lista
     role = (llm.get("primary_role") or "").strip()
     if role and role.lower() in _REJECT_ROLES_NORMALIZED:
         return False, f"claude_role:{role}", llm.get("matched_chains") or []
 
-    # --- 4) Rola forwardera ---
-    # is_forwarder_ok ≡ JSON ``is_gu`` (klucz legacy — nie zmieniać w Claude/Excel)
-    is_forwarder_ok = is_forwarder_ok_from_llm(llm)
-    forwarder_campaign_ok, _fwd_marker = qualifies_as_forwarder_for_campaign(blob)
-    if not is_forwarder_ok and not forwarder_campaign_ok:
-        return False, REASON_CLAUDE_BRAK_ROLI, llm.get("matched_chains") or []
-
-    # --- 5) Opcjonalna twarda bramka roli (run_config) ---
-    if require_forwarder_role:
-        role_ok, _ = is_forwarder_role(blob)
-        role_keywords = bool(llm.get("matched_gu_keywords"))
-        if not role_ok and not role_keywords and not forwarder_campaign_ok:
-            return False, REASON_BRAK_ROLI_FORWARDERA, llm.get("matched_chains") or []
-
-    # --- 6) Kontekst oferty drogowej (JSON has_retail_context = legacy) ---
-    has_transport_offer = bool(llm.get("has_retail_context")) or has_transport_offer_evidence(
-        blob
-    )
-    if not has_transport_offer:
-        return False, REASON_CLAUDE_BRAK_SEGMENTU, llm.get("matched_chains") or []
-
-    # --- 7) Whitelist segmentów: Claude ∩ required ∪ detekcja w tekście ---
     required_set = set(REQUIRED_TRANSPORT_SEGMENT_KEYWORDS)
     llm_chains = [
         c.lower()
@@ -436,17 +346,14 @@ def apply_page_verdict(
     ]
     blob_chains = detect_required_transport_segments(blob)
     chains = list(dict.fromkeys(llm_chains + blob_chains))
-    if not chains:
-        return False, REASON_BRAK_SEGMENTU_FTL_LTL, []
 
-    # --- 8) Sygnał transportu (rola ∨ usługa spedycyjna) ---
-    if not has_transport_signal(blob):
-        return False, REASON_BRAK_SYGNALU_TRANSPORT, chains
+    # Claude NIE → reject (bez ratowania regułami tekstowymi)
+    if not is_forwarder_ok_from_llm(llm):
+        return False, REASON_CLAUDE_BRAK_ROLI, chains
 
-    # --- 9) Mała firma (gdy flaga ON) ---
+    # 3) opcjonalnie mała firma
     if require_small_firm and not llm.get("is_small_firm"):
         return False, REASON_CLAUDE_NIE_MALA_FIRMA, chains
 
-    # --- 10) Accept ---
     reason = (llm.get("reason") or "claude_pl_spedycja").strip()
     return True, f"claude:{reason[:120]}", chains

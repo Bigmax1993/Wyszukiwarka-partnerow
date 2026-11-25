@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu pl_fas_contractor_exclusions (komentarz; docstring poniżej opisuje listy).
+#   Rola w pipeline: bramka higieniczna „nie zbieraj / nie eksportuj / nie mailuj” — firmy z listy
+#   wykluczeń (nazwy, domeny e-mail, fragmenty domen: własne FAS, wybrane PL, duzi gracze) nie wchodzą do wyników.
+#   Zależności: stdlib (re, urllib.parse). Shim legacy: de_contractor_exclusions.py.
+#   Wejście: nazwa firmy, e-mail, URL. Wyjście: bool (czy wykluczyć).
+# ============================================================
 """
 Bloklista kontrahentów — kampania PL FAS / spedycja.
 

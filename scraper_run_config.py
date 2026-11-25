@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+# >>> OPIS MODULU ========================================
+# Uzupełnienie opisu modułu scraper_run_config (komentarz; docstring poniżej opisuje przepływ).
+#   Rola w pipeline: pierwszy krok konfiguracji uruchomienia — plik run_config/*.json (np.
+#   pl_fas_spedycja.json, przekazywany przez --run-config) ustawia wspólne pola na module scrapera;
+#   pola geo / Claude / ICP stosuje później apply_gu_run_config_extras w pl_fas_spedycja_scraper.py.
+#   Zależności: tylko stdlib (json, pathlib, typing); sam nie importuje scrapera — modyfikuje przekazany
+#   obiekt modułu (wstrzykiwanie). Wejście: ścieżka JSON + base_dir. Wyjście: mutacja modułu
+#   (_RUN_CONFIG_DATA, _RUN_CONFIG_TYPE, stałe), słowniki kwargs dla run_scraper oraz raport debug.
+#   Błędy: nieistniejący plik / niepoprawny JSON propagują się wyjątkiem; JSON niebędący obiektem → ValueError.
+# ============================================================
 """
 Ładowanie plików ``run_config/*.json`` (CLI ``--run-config``) dla scrapera kampanii.
 
@@ -232,6 +242,13 @@ def debug_run_config(
     }
 
 
+# >>> OPIS FUNKCJI: funkcja _cli_debug
+# Cel: wejście CLI do diagnostyki run_config (python scraper_run_config.py [ścieżka.json] [--base-dir DIR]).
+# Parametry: argv (list[str]|None) — argumenty (None = sys.argv); domyślna ścieżka run_config/pl_fas_spedycja.json,
+#   domyślny base-dir = katalog tego pliku.
+# Zwraca: int — kod wyjścia (zawsze 0 po wypisaniu raportu).
+# Efekty uboczne: odczyt pliku JSON, wypisanie raportu debug_run_config jako JSON (ensure_ascii=False) na stdout.
+# Błędy: argparse kończy proces przy błędnych argumentach; wyjątki odczytu pliku propagują się (brak try/except).
 def _cli_debug(argv: list[str] | None = None) -> int:
     """
     CLI: ``python scraper_run_config.py [ścieżka.json]``.
