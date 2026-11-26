@@ -37,16 +37,17 @@ from typing import Any
 from pl_spedycja_keywords import BUNDESLAND_CONFIG, configure_campaign_bundeslaender
 
 # Kolejność rotacji 1 woj./cykl — start od Dolnośląskiego (jak pl_fas_spedycja.json).
+# Po Mazowieckim: Zachodniopomorskie → Lubuskie → Wielkopolskie.
 BUNDESLAND_ROTATION_ORDER: tuple[str, ...] = (
     "Dolnoslaskie",
     "Mazowieckie",
-    "Lodzkie",
+    "Zachodniopomorskie",
+    "Lubuskie",
     "Wielkopolskie",
+    "Lodzkie",
     "Slaskie",
     "Malopolskie",
     "Pomorskie",
-    "Zachodniopomorskie",
-    "Lubuskie",
     "Kujawsko-Pomorskie",
     "Warminsko-Mazurskie",
     "Podlaskie",
