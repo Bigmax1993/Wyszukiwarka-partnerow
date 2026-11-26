@@ -162,6 +162,8 @@ class TestClaudePromptsRowCleanup(unittest.TestCase):
         self.assertIn("Sp. z o.o.", p)
         self.assertIn("S.A.", p)
         self.assertIn("+48", p)
+        self.assertIn("WALIDACJA 1:1", p)
+        self.assertIn("05-11-2026", p)
         self.assertIn("Mazowieckie, Dolnoslaskie", p)
         self.assertIn("ftl", p.lower())
         self.assertIn("segmenty=", p)

@@ -29,7 +29,7 @@ Keywordy ICP: [`campaign_keyword_profile.py`](../campaign_keyword_profile.py) + 
 |---------|---------------|
 | `prioritize_page_text_for_verify` | skrócony crawl (priorytet PL FAS) |
 | `build_page_verify_prompt` | JSON werdykt ICP strony |
-| `build_row_cleanup_prompt` | JSON QA wiersza Excel |
+| `build_row_cleanup_prompt` | JSON QA wiersza Excel (telefon **1:1** pod `_excel_phone_ok`) |
 | `build_contact_extract_prompt` | JSON e-mail / telefon |
 | `build_discovery_terms_prompt` | linie fraz Serper (tekst) |
 | `build_custom_email_prompt_pl` | JSON subject/body (domyślny PL) |

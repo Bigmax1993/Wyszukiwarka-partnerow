@@ -530,8 +530,6 @@ to śmieci — NIGDY nie wymyślaj. Wątpliwość → "".
 
 ═══ Kolumny Excel (formatowanie) ═══
 • address → „ul. Nazwa 1, 00-001 Miasto" (Polska) lub "" — nie zmyślaj ulicy
-• phone → dokładnie JEDEN numer PL (+48 … lub 0…), bez faksu, bez „Tel./Fax",
-  bez dwóch numerów w jednej komórce
 • website → https://domenafirmowa.pl (root, bez podstrony, bez katalogu, bez PDF)
 • url → identyczny z bazowym www (https://domena.pl)
 • bundesland → DOKŁADNIE jedna wartość z listy województw: [{states}] — inaczej ""
@@ -541,10 +539,23 @@ to śmieci — NIGDY nie wymyślaj. Wątpliwość → "".
   — albo "" (to pole = Segmenty w Excelu; nie wpisuj sieci handlowych Aldi/Rewe)
 • email_nur_info: NIE wstawiaj do JSON — tylko do kontroli wiarygodności
 
+═══ phone — WALIDACJA 1:1 (identyczna z kodem Excela / gap-fill) ═══
+Zwróć DOKŁADNIE JEDEN numer, który MUSI przejść tę samą walidację co pipeline:
+• po usunięciu nie-cyfr: 9–15 cyfr łącznie
+• PL: 9 cyfr krajowo ALBO ≥11 cyfr z prefiksem 48 (lub 0048)
+• format wyjścia: „+48 XXX XXX XXX" albo „+48XXXXXXXXX" (jeden numer, bez przecinków)
+• NIE wolno: daty (np. 05-11-2026), NIP, IBAN, 0000…, 0123456789, numery z ≤2 różnymi cyframi,
+  faks, „Tel./Fax", dwa numery w jednej komórce, sklejki HTML
+• Wejście często ma listę kandydatów po przecinku / „kandydaci:" — wybierz JEDEN prawdziwy
+  telefon firmowy (preferuj +48). Jeśli żaden nie spełnia reguł → phone=""
+Kod odrzuci numer, który nie spełnia tych reguł — Twoja odpowiedź ma być 1:1 pod walidację.
+
 PRZYKŁADY NEGATYWNE
 Wejście name=„PDF ogłoszenie przetarg transport" → company_name_clean=""
 Wejście name=„InPost paczkomaty Warszawa" → company_name_clean=""
 Wejście phone=„Tel +48 22 111 22 33, Fax +48 22 444" → phone=„+48 22 111 22 33"
+Wejście phone=„05-11-2026, 0000081253, +48 327 935 935" → phone=„+48 327 935 935"
+Wejście phone=„0000525946, 0/1393229, +48222501247" → phone=„+48 222 501 247"
 
 EINGABE
 name={company}

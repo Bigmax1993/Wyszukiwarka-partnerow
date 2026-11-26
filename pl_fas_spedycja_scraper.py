@@ -1264,6 +1264,75 @@ def _excel_phone_ok(raw) -> bool:
     return True
 
 
+def _phone_candidate_tokens(raw) -> list[str]:
+    """Rozbij blob telefonów (lista / CSV / śmieci HTML) na kandydatów."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        text = str(raw).replace("%20", " ")
+        parts = [
+            p.strip()
+            for p in re.split(r"[,;\n|]+", text)
+            if p.strip()
+        ]
+        # dodatkowe kandydaty typu +48… / 0xx… z całego bloba
+        for m in re.finditer(
+            r"(?:\+?48|0048|0)\s*[\d\s\-/()]{7,18}\d",
+            text,
+        ):
+            parts.append(m.group(0).strip())
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        key = re.sub(r"\D", "", p)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def pick_best_pl_phone(raw) -> str:
+    """
+    Wybierz jeden numer PL przechodzący ``_excel_phone_ok`` z listy/bloba.
+
+    Crawl często klei daty/NIP/IBAN z prawdziwym +48 — bierzemy najlepszy
+    kandydat (preferencja +48), nie pierwszy segment przed przecinkiem.
+    """
+    best = ""
+    best_score = -1
+    for cand in _phone_candidate_tokens(raw):
+        if not _excel_phone_ok(cand):
+            continue
+        digits = re.sub(r"\D", "", cand)
+        score = 0
+        if digits.startswith("48") or digits.startswith("0048"):
+            score += 20
+        elif len(digits.lstrip("0")) == 9:
+            score += 10
+        if len(digits) in (9, 11, 12):
+            score += 5
+        # karć bardzo „gęste” zlepki
+        if len(digits) > 12:
+            score -= 5
+        if score > best_score:
+            best_score = score
+            best = cand
+    if not best:
+        return ""
+    return _normalize_href_phone(best) or normalize_phone_contact(best) or best
+
+
+def phone_for_validation(raw) -> str:
+    """Telefon pod walidację/Excel: pick_best, inaczej pierwszy segment."""
+    picked = pick_best_pl_phone(raw)
+    if picked:
+        return picked
+    return _excel_cell_str(raw).split(",", 1)[0].strip()
+
+
 def _kontakte_row_has_required_contacts(row: dict) -> bool:
     """Bramka Kontakte: e-mail i/lub telefon wg flag EXPORT_PIPELINE_ROWS_WITHOUT_*."""
     if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL and not _excel_email_ok(
@@ -2234,7 +2303,13 @@ def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
     row["nazwa"] = company
     row["adres"] = llm_result.get("address", row.get("adres", ""))
     row["full_address"] = row["adres"]
-    row["telefon"] = llm_result.get("phone", row.get("telefon", ""))
+    phone_raw = llm_result.get("phone", row.get("telefon", ""))
+    phone_clean = phone_for_validation(phone_raw)
+    if phone_clean and _excel_phone_ok(phone_clean):
+        row["telefon"] = phone_clean
+        row["phones_found"] = phone_clean
+    elif phone_raw:
+        row["telefon"] = str(phone_raw).strip()
     website = llm_result.get("website", row.get("official_website", ""))
     row["official_website"] = website
     row["www"] = normalize_website(website) or row.get("www", "")
@@ -2284,11 +2359,14 @@ def finalize_row_for_excel_tables(row: dict) -> dict:
         row["url"] = url
     row["adres"] = sanitize_special_text(row.get("adres") or row.get("full_address") or "")
     row["full_address"] = row["adres"]
-    phone = (row.get("telefon") or "").strip()
-    if "," in phone:
-        phone = phone.split(",", 1)[0].strip()
-    norm_phone = _normalize_href_phone(phone)
-    row["telefon"] = norm_phone or phone
+    phone_blob = row.get("telefon") or row.get("phones_found") or ""
+    phone = pick_best_pl_phone(phone_blob)
+    if not phone:
+        phone = (str(phone_blob).split(",", 1)[0] if phone_blob else "").strip()
+        phone = _normalize_href_phone(phone) or phone
+    row["telefon"] = phone
+    if phone and _excel_phone_ok(phone):
+        row["phones_found"] = phone
     row["retail_chains_found"] = format_handelsketten_for_excel(
         row.get("retail_chains_found") or ""
     )
@@ -2382,7 +2460,17 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         or f"{(row.get('nazwa') or '').strip()}|{(row.get('www') or '').strip()}"
     )
     address = sanitize_special_text(row.get("full_address") or row.get("adres") or "")
-    phone = sanitize_special_text(row.get("phones_found") or row.get("telefon") or "")
+    phone_raw_blob = row.get("phones_found") or row.get("telefon") or ""
+    phone_candidates = _phone_candidate_tokens(phone_raw_blob)
+    phone_pre = pick_best_pl_phone(phone_raw_blob)
+    # Claude dostaje krótką listę kandydatów (nie megablob dat/NIP) + preferowany numer
+    if phone_candidates:
+        phone_for_prompt = ", ".join(phone_candidates[:12])
+        if phone_pre and phone_pre not in phone_for_prompt:
+            phone_for_prompt = f"{phone_pre} | kandydaci: {phone_for_prompt}"
+    else:
+        phone_for_prompt = sanitize_special_text(str(phone_raw_blob))[:240]
+    phone = phone_pre or phone_for_prompt
     email = (row.get("email_target") or "").strip()
     website = sanitize_special_text(row.get("official_website") or row.get("www") or "")
     company = sanitize_special_text(
@@ -2403,10 +2491,13 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     row["company_name_clean"] = company
     row["nazwa"] = company
     row["adres"] = address
-    row["telefon"] = phone
+    row["telefon"] = phone_pre or sanitize_special_text(str(phone_raw_blob))[:80]
     row["official_website"] = website
 
     if not ENABLE_CLAUDE_ROW_CLEANUP:
+        if phone_pre:
+            row["telefon"] = phone_pre
+            row["phones_found"] = phone_pre
         row["bundesland"] = extract_bundesland(row)
         row = apply_regex_row_contact_cleanup(row)
         return finalize_row_for_excel_tables(row)
@@ -2415,7 +2506,9 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     from claude_row_cleanup import claude_cleanup_row_fields
 
     if not api_key:
-        fallback = row_cleanup_fallback(row, company, address, phone, email, website)
+        fallback = row_cleanup_fallback(
+            row, company, address, phone_pre or phone, email, website
+        )
         apply_row_enrichment_to_row(row, fallback)
         if cache_key:
             claude_cache[cache_key] = fallback
@@ -2426,7 +2519,7 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     prompt = build_claude_row_cleanup_prompt(
         company=company,
         address=address,
-        phone=phone,
+        phone=phone_for_prompt,
         email=email,
         website=website,
         states=states,
@@ -2435,7 +2528,9 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     )
     parsed = claude_cleanup_row_fields(prompt, logger, cache)
     if not parsed:
-        fallback = row_cleanup_fallback(row, company, address, phone, email, website)
+        fallback = row_cleanup_fallback(
+            row, company, address, phone_pre or phone, email, website
+        )
         apply_row_enrichment_to_row(row, fallback)
         if cache_key:
             claude_cache[cache_key] = fallback
@@ -2448,10 +2543,18 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         website=website,
         email=email,
     )
+    # Telefon 1:1 pod walidację: Claude → jeśli nie przechodzi, pick_best z surowego bloba
+    claude_phone = sanitize_special_text(parsed.get("phone", "") or "")
+    if claude_phone and _excel_phone_ok(claude_phone):
+        final_phone = pick_best_pl_phone(claude_phone) or claude_phone
+    else:
+        final_phone = phone_pre or pick_best_pl_phone(
+            f"{claude_phone}, {phone_raw_blob}"
+        )
     claude_result = {
         "company_name_clean": cleaned_name,
         "address": sanitize_special_text(parsed.get("address", address)) or address,
-        "phone": sanitize_special_text(parsed.get("phone", phone)) or phone,
+        "phone": final_phone,
         "website": sanitize_special_text(parsed.get("website", website)) or website,
         "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
         "handelsketten": format_handelsketten_for_excel(
@@ -2648,23 +2751,17 @@ def build_export_rows(rows, logger=None, cache=None):
             if not EXPORT_PIPELINE_ROWS_WITHOUT_EMAIL:
                 continue
             email = ""
-        phone_raw = (
-            row.get("telefon") or row.get("phones_found") or ""
-        )
-        if isinstance(phone_raw, (list, tuple, set)):
-            phone_raw = next(
-                (str(x).strip() for x in phone_raw if str(x).strip()),
-                "",
-            )
-        else:
-            phone_raw = str(phone_raw).split(",", 1)[0].strip()
+        phone_blob = row.get("telefon") or row.get("phones_found") or ""
+        phone_raw = phone_for_validation(phone_blob)
+        if phone_raw and _excel_phone_ok(phone_raw):
+            row["telefon"] = phone_raw
+            row["phones_found"] = phone_raw
         if not is_row_llm_cleanup_enabled():
             row["adres"] = sanitize_special_text(
                 row.get("full_address") or row.get("adres") or ""
             )
-            row["telefon"] = sanitize_special_text(
-                phone_raw or row.get("phones_found") or row.get("telefon") or ""
-            )
+            if not (row.get("telefon") or "").strip():
+                row["telefon"] = sanitize_special_text(phone_raw)
             row["bundesland"] = extract_bundesland(row)
             table_cols = row_to_excel_kontakte_columns(row, email)
         else:

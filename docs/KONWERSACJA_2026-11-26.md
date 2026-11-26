@@ -44,4 +44,14 @@ Poniedziałek dodatkowo: 06:30 Excel mail, 06:45 Drive.
 
 ---
 
-*Koniec notatki 2026-11-26 (~09:53 CET).*
+## 4. Telefon: Claude + pick_best 1:1 pod walidację
+
+**Problem:** gap-fill często znajdował mail, ale `still_gap` przez śmieciowy blob telefonów
+(daty/NIP/IBAN sklejone z prawdziwym +48). Walidacja brała **pierwszy** segment przed przecinkiem.
+
+**Fix:**
+- prompt cleanup: sekcja „phone — WALIDACJA 1:1” (= reguły `_excel_phone_ok`)
+- `pick_best_pl_phone` — wybór najlepszego +48 z bloba (fallback gdy Claude nie przejdzie)
+- sync `telefon`/`phones_found` do jednego czystego numeru przed Excel / oceną gap
+
+*Koniec notatki 2026-11-26.*

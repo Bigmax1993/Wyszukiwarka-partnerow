@@ -82,18 +82,21 @@ def has_email(info: dict) -> bool:
 
 def has_phone(info: dict) -> bool:
     phone = (info.get("telefon") or info.get("phones_found") or info.get("phone") or "")
-    if isinstance(phone, (list, tuple, set)):
-        phone = next((str(x).strip() for x in phone if str(x).strip()), "")
-    else:
-        phone = str(phone).split(",", 1)[0].strip()
     if not phone:
         return False
     try:
         import pl_fas_spedycja_scraper as s
 
+        picked = s.pick_best_pl_phone(phone)
+        if picked:
+            return True
+        if isinstance(phone, (list, tuple, set)):
+            phone = next((str(x).strip() for x in phone if str(x).strip()), "")
+        else:
+            phone = str(phone).split(",", 1)[0].strip()
         return bool(s._excel_phone_ok(phone))
     except Exception:
-        digits = re.sub(r"\D", "", phone)
+        digits = re.sub(r"\D", "", str(phone))
         return len(digits) >= 9
 
 
@@ -535,8 +538,15 @@ def merge_enrichment_into_contact(
         or ""
     )
     if phones:
-        out["phones_found"] = phones
-        out["telefon"] = phones
+        try:
+            import pl_fas_spedycja_scraper as s
+
+            picked = s.pick_best_pl_phone(phones)
+        except Exception:
+            picked = ""
+        clean = picked or phones
+        out["phones_found"] = clean
+        out["telefon"] = clean if picked else phones
     for k in (
         "retail_verified",
         "verification_reason",
