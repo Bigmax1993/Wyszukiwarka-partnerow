@@ -84,4 +84,69 @@ Pon: 06:30 Excel mail, 06:45 Drive.
 
 ---
 
-*Koniec notatki 2026-11-26 (~10:31 CET).*
+## 9. Rotacja województw (kolejne discovery)
+
+Po Mazowieckim kolejność: **Zachodniopomorskie → Lubuskie → Wielkopolskie**  
+(`gu_bundesland_rotation.py`, commit `92f307d`, deploy Contabo OK).
+
+Dotyczy **następnego** discovery — bieżący gap-fill bez zmian.  
+Dziś discovery szło jeszcze **BUNDESWEIT 16 woj.** (brak pliku stanu rotacji w `Wyniki/`).
+
+---
+
+## 10. Czas / throughput (szacunek z logów)
+
+**1 województwo łącznie (Maps + gap-fill Serper/www):**
+
+| Etap | Czas |
+|---|---|
+| Maps Faza A → JSON | ~45–90 min |
+| Pauza przed gap-fill | +1 h |
+| Gap-fill (~3–5 min/firma) | ~1,5–6 h (zależnie od kolejki / max) |
+
+Wall-clock: zwykle **~4–7 h** / woj.
+
+**Tydzień pon–pt (domknięte = mail+telefon):**  
+discovery może przejść ~5 woj., ale solidnie domknięte raczej **~1–2 woj./tydzień**  
+→ cała Polska **~2,5–4 mies.** (przy ~1–2/tydzień).
+
+Excel Kontakte **~11:30 CET:** nadal **36** (gap-fill z 10:52 max=80 jeszcze w toku).
+
+---
+
+## 11. Oczekiwania zasięgu vs rynek
+
+- Szacunek rynku „~120 tys. spedycji” / 50–100 tys. z tego pipeline’u: **nieosiągalne** (Maps Local Pack + miasta + cache + filtr mail/telefon).
+- Realny rząd wielkości: **setki – niskie tysiące** leadów z kontaktem; wystarczy pod outbound / pierwszą sprzedaż.
+- Pełne bazy REGON/PKD są płatne — stąd sens taniego lejka Maps/Serper mimo mniejszego zasięgu.
+
+---
+
+---
+
+## 12. Pełne geo: wszystkie miasta + powiaty
+
+**Decyzja:** dorzucone od razu (nie czekać na 2. pętlę).
+
+- Moduł `pl_geo_locations.py` (~**1007 miast**, ~**381 powiatów** / 16 woj.)
+- Regeneracja: `scripts/generate_pl_geo_locations.py` (+ snapshoty w `data/`)
+- `BUNDESLAND_CONFIG`: `cities` + `powiaty`
+- Maps: wszystkie miasta (5 fraz) + powiaty (2 frazy)
+- Serper landkreis: wszystkie powiaty
+- Cap fraz Serper: **8000**; limit discovery Contabo: **12 h** (`43200s`)
+
+Szacunek Maps 1 woj. (np. Mazowieckie ~539 fraz): często **>6–12 h** wall — resume / kolejny dzień dociąga resztę przy `--respect-cache`.
+
+---
+
+---
+
+## 13. Od jutra (2026-11-27): rotacja 1 woj. na Contabo
+
+- `run_discovery.sh` / resume: **`--rotate-bundesland`**
+- Stan: `next_index=2` → **Zachodniopomorskie** (po Mazowieckim, zgodnie z §9)
+- Pełne geo + limit 12 h już na serwerze
+
+---
+
+*Koniec notatki 2026-11-26 (~11:55 CET).*

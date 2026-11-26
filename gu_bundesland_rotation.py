@@ -131,7 +131,7 @@ def peek_next_bundesland(state: dict[str, Any] | None = None) -> str:
 # Parametry: module — moduł scrapera (konfigurowany przez configure_campaign_bundeslaender);
 #   wyniki_dir (Path); min_contacts (keyword-only, int, domyślnie 20) — cel kontaktów dla jednego regionu,
 #   ustawiany jako module.MIN_CONTACTS_TARGET, jeśli taki atrybut istnieje; max_discovery_terms
-#   (keyword-only, int, domyślnie 120) — limit fraz discovery.
+#   (keyword-only, int|None, domyślnie None → default_max_discovery_terms_for) — limit fraz.
 # Zwraca: krotkę (land: str, state: dict, state_path: Path) — do późniejszego commit_rotation_after_run.
 # Efekty uboczne: odczyt pliku stanu; mutacja konfiguracji modułu scrapera (lista regionów, termy,
 #   MIN_CONTACTS_TARGET). Błędy: te z load_rotation_state są wyciszone; błędy configure_* propagują się.
@@ -140,12 +140,13 @@ def apply_rotation_to_module(
     wyniki_dir: Path,
     *,
     min_contacts: int = DEFAULT_MIN_CONTACTS_SINGLE_LAND,
-    max_discovery_terms: int = 120,
+    max_discovery_terms: int | None = None,
 ) -> tuple[str, dict[str, Any], Path]:
     """Wybiera bieżący land (bez przesunięcia indeksu) i konfiguruje scraper."""
     state_path = rotation_state_path(wyniki_dir)
     state = load_rotation_state(state_path)
     land = peek_next_bundesland(state)
+    # None → default_max_discovery_terms_for([land]) (pełne miasta+powiaty).
     configure_campaign_bundeslaender(
         module, [land], max_discovery_terms=max_discovery_terms
     )

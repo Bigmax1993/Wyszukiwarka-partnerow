@@ -24,6 +24,8 @@ masowej zmiany importów — zmienia się treść PL, nie API modułu.
 """
 from __future__ import annotations
 
+from pl_geo_locations import PL_GEO_BY_LAND
+
 # Segmenty rotowane w szablonach (dawniej Aldi/Rewe/Netto).
 RETAIL_CHAINS_ROTATION = (
     "FTL",
@@ -300,194 +302,36 @@ TERM_TEMPLATES = (
 
 SIMPLE_TERM_TEMPLATES = CHAIN_SIMPLE_TERM_TEMPLATES
 
-BUNDESLAND_CONFIG: dict[str, dict] = {
-    "Mazowieckie": {
-        "short": "MZ",
-        "cities": (
-            "Warszawa",
-            "Radom",
-            "Płock",
-            "Siedlce",
-            "Pruszków",
-            "Piaseczno",
-            "Ostrołęka",
-            "Żyrardów",
-        ),
-    },
-    "Lodzkie": {
-        "short": "LD",
-        "cities": (
-            "Łódź",
-            "Piotrków Trybunalski",
-            "Pabianice",
-            "Tomaszów Mazowiecki",
-            "Bełchatów",
-            "Zgierz",
-            "Kutno",
-        ),
-    },
-    "Wielkopolskie": {
-        "short": "WP",
-        "cities": (
-            "Poznań",
-            "Kalisz",
-            "Konin",
-            "Piła",
-            "Ostrów Wielkopolski",
-            "Gniezno",
-            "Leszno",
-            "Swarzędz",
-        ),
-    },
-    "Dolnoslaskie": {
-        "short": "DS",
-        "cities": (
-            "Głogów",
-            "Wrocław",
-            "Wałbrzych",
-            "Legnica",
-            "Jelenia Góra",
-            "Lubin",
-            "Świdnica",
-            "Oleśnica",
-        ),
-    },
-    "Slaskie": {
-        "short": "SL",
-        "cities": (
-            "Katowice",
-            "Gliwice",
-            "Zabrze",
-            "Bytom",
-            "Ruda Śląska",
-            "Tychy",
-            "Dąbrowa Górnicza",
-            "Rybnik",
-            "Częstochowa",
-            "Sosnowiec",
-        ),
-    },
-    "Malopolskie": {
-        "short": "MP",
-        "cities": (
-            "Kraków",
-            "Tarnów",
-            "Nowy Sącz",
-            "Oświęcim",
-            "Chrzanów",
-            "Olkusz",
-            "Skawina",
-        ),
-    },
-    "Pomorskie": {
-        "short": "PM",
-        "cities": (
-            "Gdańsk",
-            "Gdynia",
-            "Sopot",
-            "Słupsk",
-            "Tczew",
-            "Starogard Gdański",
-            "Wejherowo",
-        ),
-    },
-    "Zachodniopomorskie": {
-        "short": "ZP",
-        "cities": (
-            "Szczecin",
-            "Koszalin",
-            "Stargard",
-            "Świnoujście",
-            "Kołobrzeg",
-            "Police",
-        ),
-    },
-    "Lubuskie": {
-        "short": "LB",
-        "cities": (
-            "Zielona Góra",
-            "Gorzów Wielkopolski",
-            "Nowa Sól",
-            "Żary",
-            "Żagań",
-        ),
-    },
-    "Kujawsko-Pomorskie": {
-        "short": "KP",
-        "cities": (
-            "Bydgoszcz",
-            "Toruń",
-            "Włocławek",
-            "Grudziądz",
-            "Inowrocław",
-            "Brodnica",
-        ),
-    },
-    "Warminsko-Mazurskie": {
-        "short": "WN",
-        "cities": (
-            "Olsztyn",
-            "Elbląg",
-            "Ełk",
-            "Ostróda",
-            "Iława",
-            "Giżycko",
-        ),
-    },
-    "Podlaskie": {
-        "short": "PD",
-        "cities": (
-            "Białystok",
-            "Suwałki",
-            "Łomża",
-            "Augustów",
-            "Bielsk Podlaski",
-        ),
-    },
-    "Lubelskie": {
-        "short": "LU",
-        "cities": (
-            "Lublin",
-            "Chełm",
-            "Zamość",
-            "Biała Podlaska",
-            "Puławy",
-            "Kraśnik",
-        ),
-    },
-    "Podkarpackie": {
-        "short": "PK",
-        "cities": (
-            "Rzeszów",
-            "Przemyśl",
-            "Stalowa Wola",
-            "Mielec",
-            "Krosno",
-            "Dębica",
-            "Jarosław",
-        ),
-    },
-    "Swietokrzyskie": {
-        "short": "SK",
-        "cities": (
-            "Kielce",
-            "Ostrowiec Świętokrzyski",
-            "Starachowice",
-            "Skarżysko-Kamienna",
-            "Sandomierz",
-        ),
-    },
-    "Opolskie": {
-        "short": "OP",
-        "cities": (
-            "Opole",
-            "Kędzierzyn-Koźle",
-            "Nysa",
-            "Brzeg",
-            "Kluczbork",
-        ),
-    },
+# Skróty TERYT-like (legacy short codes w frazach Serper).
+_LAND_SHORT: dict[str, str] = {
+    "Mazowieckie": "MZ",
+    "Lodzkie": "LD",
+    "Wielkopolskie": "WP",
+    "Dolnoslaskie": "DS",
+    "Slaskie": "SL",
+    "Malopolskie": "MP",
+    "Pomorskie": "PM",
+    "Zachodniopomorskie": "ZP",
+    "Lubuskie": "LB",
+    "Kujawsko-Pomorskie": "KP",
+    "Warminsko-Mazurskie": "WN",
+    "Podlaskie": "PD",
+    "Lubelskie": "LU",
+    "Podkarpackie": "PK",
+    "Swietokrzyskie": "SK",
+    "Opolskie": "OP",
 }
+
+# Pełne miasta + powiaty: pl_geo_locations.PL_GEO_BY_LAND (≈1000 miast, ≈380 powiatów).
+BUNDESLAND_CONFIG: dict[str, dict] = {
+    land: {
+        "short": _LAND_SHORT[land],
+        "cities": PL_GEO_BY_LAND[land]["cities"],
+        "powiaty": PL_GEO_BY_LAND[land]["powiaty"],
+    }
+    for land in _LAND_SHORT
+}
+assert set(BUNDESLAND_CONFIG) == set(PL_GEO_BY_LAND)
 
 DEFAULT_ACTIVE_BUNDESLAENDER = list(BUNDESLAND_CONFIG.keys())
 CAMPAIGN_ACTIVE_BUNDESLAENDER = list(DEFAULT_ACTIVE_BUNDESLAENDER)
@@ -502,14 +346,16 @@ def default_max_discovery_terms_for(active: list[str] | None = None) -> int:
     Po co: scraper i `configure_campaign_bundeslaender` muszą wiedzieć, ile
     wariantów wygenerować — za mało = słabe pokrycie geo, za dużo = koszt API.
 
-    Formuła: ``12 × liczba miast`` w wybranych województwach, obcięta do
-    zakresu 200…1000 (górny limit kampanii PL).
+    Formuła: ``12 × (miasta + powiaty)`` w wybranych województwach, obcięta do
+    zakresu 200…8000 (pełne geo PL — 1 woj. potrafi mieć 100+ miast).
     """
     lands = resolve_active_bundeslaender(active)
-    return max(
-        200,
-        min(1000, 12 * sum(len(BUNDESLAND_CONFIG[w]["cities"]) for w in lands)),
-    )
+    n = 0
+    for w in lands:
+        cfg = BUNDESLAND_CONFIG[w]
+        n += len(cfg.get("cities") or ())
+        n += len(cfg.get("powiaty") or ())
+    return max(200, min(8000, 12 * n))
 
 
 def _normalize_land_key(name: str) -> str:
@@ -707,55 +553,55 @@ def build_discovery_terms(
 
 def build_landkreis_discovery_terms(active: list[str] | None = None) -> list[str]:
     """
-    Fala discovery z geo „powiat / okolice” (dawniej landkreis w DE).
+    Fala discovery z geo „powiat” (dawniej landkreis w DE).
 
-    Po co: primary frazy często trafiają w duże miasta; ten zestaw szuka
-    biur w mniejszych ośrodkach wokół hubów (pierwsze 6 miast woj. +
-    fraza na całe województwo). Limit praktycznie otwarty (10k) — pełne
-    pokrycie geo, bez obcinania jak w fali 1.
+    Po co: primary/Maps trafiają miasta; tu idą **wszystkie powiaty** woj. +
+    okolice największych miast. Limit 20k — pełne pokrycie geo.
     """
     lands = resolve_active_bundeslaender(active)
     seen: set[str] = set()
     terms: list[str] = []
     chain_counter = [0]
     for land in lands:
-        short = BUNDESLAND_CONFIG[land]["short"]
-        for city in BUNDESLAND_CONFIG[land]["cities"][:6]:
+        cfg = BUNDESLAND_CONFIG[land]
+        short = cfg["short"]
+        for powiat in cfg.get("powiaty") or ():
             for tmpl in (
-                "spedycja {city} powiat {chain}",
-                "firma spedycyjna okolice {city} {chain}",
-                "transport FTL {city} {short} {chain}",
-                # Bez segmentu {chain} — lepsze pokrycie mniejszych miast (Serper).
-                "spedycja {city} powiat",
+                "spedycja powiat {powiat}",
+                "firma spedycyjna powiat {powiat}",
+                "spedytor powiat {powiat}",
+                "biuro spedycyjne powiat {powiat}",
+                "spedycja {powiat} {chain}",
+            ):
+                chain = _rotating_chain(chain_counter)
+                _append_unique_term(
+                    terms,
+                    seen,
+                    tmpl.format(powiat=powiat, chain=chain),
+                    max_terms=20_000,
+                )
+        for city in (cfg.get("cities") or ())[:12]:
+            for tmpl in (
                 "firma spedycyjna okolice {city}",
-                "spedycja drogowa {city}",
-                "biuro spedycyjne {city}",
+                "spedycja okolice {city} {chain}",
+                "transport FTL {city} {short}",
             ):
                 chain = _rotating_chain(chain_counter)
                 _append_unique_term(
                     terms,
                     seen,
                     tmpl.format(city=city, short=short, chain=chain),
-                    max_terms=10_000,
+                    max_terms=20_000,
                 )
         chain = _rotating_chain(chain_counter)
         _append_unique_term(
-            terms,
-            seen,
-            f"spedycja drogowa {land} {chain}",
-            max_terms=10_000,
+            terms, seen, f"spedycja drogowa {land} {chain}", max_terms=20_000
         )
         _append_unique_term(
-            terms,
-            seen,
-            f"spedycja drogowa {land}",
-            max_terms=10_000,
+            terms, seen, f"spedycja drogowa {land}", max_terms=20_000
         )
         _append_unique_term(
-            terms,
-            seen,
-            f"firma spedycyjna {land}",
-            max_terms=10_000,
+            terms, seen, f"firma spedycyjna {land}", max_terms=20_000
         )
     return terms
 
@@ -791,7 +637,16 @@ def build_maps_discovery_terms(active: list[str] | None = None) -> list[str]:
                 "firma transportowa {city}",
             ):
                 _append_unique_term(
-                    terms, seen, tmpl.format(city=city), max_terms=10_000
+                    terms, seen, tmpl.format(city=city), max_terms=20_000
+                )
+        # Powiaty: krótsze frazy Maps (Local Pack lubi „spedycja powiat X”).
+        for powiat in BUNDESLAND_CONFIG[land].get("powiaty") or ():
+            for tmpl in (
+                "spedycja powiat {powiat}",
+                "firma spedycyjna powiat {powiat}",
+            ):
+                _append_unique_term(
+                    terms, seen, tmpl.format(powiat=powiat), max_terms=20_000
                 )
         for tmpl in (
             "firma spedycyjna {land}",
@@ -799,7 +654,7 @@ def build_maps_discovery_terms(active: list[str] | None = None) -> list[str]:
             "biuro spedycyjne {land}",
         ):
             _append_unique_term(
-                terms, seen, tmpl.format(land=land), max_terms=10_000
+                terms, seen, tmpl.format(land=land), max_terms=20_000
             )
     return terms
 
@@ -810,14 +665,14 @@ def build_places_discovery_terms(active: list[str] | None = None) -> list[str]:
 
     Places lubi zwięzłe zapytania typu „spedycja {city}” —
     dłuższe szablony z fali 1 słabiej działają na lokalnym indeksie.
-    Bierze do 8 miast na województwo + jedną frazę na samo woj.
+    Bierze **wszystkie miasta** woj. + powiaty (skrócone szablony) + woj.
     Bez FTL/LTL w query (Local Pack ich nie potrzebuje).
     """
     lands = resolve_active_bundeslaender(active)
     seen: set[str] = set()
     terms: list[str] = []
     for land in lands:
-        for city in BUNDESLAND_CONFIG[land]["cities"][:8]:
+        for city in BUNDESLAND_CONFIG[land]["cities"]:
             for tmpl in (
                 "spedycja {city}",
                 "firma spedycyjna {city}",
@@ -826,19 +681,21 @@ def build_places_discovery_terms(active: list[str] | None = None) -> list[str]:
                 "firma transportowa {city}",
             ):
                 _append_unique_term(
-                    terms, seen, tmpl.format(city=city), max_terms=10_000
+                    terms, seen, tmpl.format(city=city), max_terms=20_000
                 )
+        for powiat in BUNDESLAND_CONFIG[land].get("powiaty") or ():
+            _append_unique_term(
+                terms, seen, f"spedycja powiat {powiat}", max_terms=20_000
+            )
+            _append_unique_term(
+                terms,
+                seen,
+                f"firma spedycyjna powiat {powiat}",
+                max_terms=20_000,
+            )
+        _append_unique_term(terms, seen, f"spedycja {land}", max_terms=20_000)
         _append_unique_term(
-            terms,
-            seen,
-            f"spedycja {land}",
-            max_terms=10_000,
-        )
-        _append_unique_term(
-            terms,
-            seen,
-            f"firma spedycyjna {land}",
-            max_terms=10_000,
+            terms, seen, f"firma spedycyjna {land}", max_terms=20_000
         )
     return terms
 

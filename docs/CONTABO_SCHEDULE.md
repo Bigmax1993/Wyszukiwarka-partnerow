@@ -14,13 +14,15 @@ Strefa serwera: Europe/Berlin (CET/CEST ≈ Warsaw).
 | **04:00** codziennie | Cache verify (+ mail START/OK/ALERT) | `run_cache_verify.sh` |
 | **06:30** poniedziałek | Excel → mail | `run_excel_report.sh mail` |
 | **06:45** poniedziałek | Excel → Google Drive (nadpisanie) | `run_excel_report.sh drive` |
-| **07:00** pon–pt | Discovery Maps/Serper (`--respect-cache`) | `run_discovery.sh <dzień>` |
+| **07:00** pon–pt | Discovery Maps/Serper — **1 woj./dzień** (`--rotate-bundesland` + `--respect-cache`, pełne miasta+powiaty) | `run_discovery.sh <dzień>` |
 | **+1 h po końcu discovery** | Gap-fill Serper (Faza B) | `schedule_gap_fill_after_discovery` → `run_gap_fill.sh` |
 | **06:00** niedziela | Backfill | `run_backfill.sh` |
 | **09:00** pon/wt | Send B2B (domyślnie NO-OP: `DISABLE_CONTRACTOR_EMAILS=1`) | `run_send.sh` |
 | ***/15** | Pipeline watchdog | `scripts/pipeline_watchdog.py` |
 
 **Wyłączone:** stały cron gap-fill o **20:00** (od 2026-11-26).
+
+**Rotacja (od 2026-11-27):** stan `Wyniki/gu_bundesland_rotation.json`; kolejność m.in. po Mazowieckim → Zachodniopomorskie → Lubuskie → Wielkopolskie. Limit discovery **12 h**.
 
 ---
 
@@ -40,7 +42,7 @@ Zmienne (opcjonalnie w `.env`):
 |---|---|---|
 | `GAP_FILL_DELAY_SECONDS` | `3600` | Opóźnienie po discovery |
 | `GAP_FILL_MAX` | `150` | Max kontaktów w jednej turze Fazy B |
-| `SCRAPER_MAX_RUNTIME_SECONDS` | discovery `21600` / gap-fill `7200` | Twardy limit czasu |
+| `SCRAPER_MAX_RUNTIME_SECONDS` | discovery `43200` (12 h) / gap-fill `7200` | Twardy limit czasu |
 | `GAP_FILL_AFTER_MAPS` | `0` | Nie łączyć Fazy B w tym samym procesie co Maps |
 
 ---

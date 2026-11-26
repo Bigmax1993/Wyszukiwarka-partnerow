@@ -87,10 +87,10 @@ class BundesweitRegression(unittest.TestCase):
     # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
     # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_bundesweit_has_many_discovery_terms(self):
-        # Kampania PL: cap discovery = 1000 (nie 2000 jak dawniej DE)
+        # Kampania PL: pełne geo → cap discovery = 8000
         self.assertGreaterEqual(len(scraper.SERPER_DISCOVERY_TERMS), 500)
         self.assertEqual(
-            default_max_discovery_terms_for(list(ALL_BUNDESLAENDER)), 1000
+            default_max_discovery_terms_for(list(ALL_BUNDESLAENDER)), 8000
         )
 
     # >>> OPIS FUNKCJI: funkcja BundesweitRegression.test_serper_only_target_uses_new_rows_not_total

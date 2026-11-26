@@ -553,6 +553,41 @@ def _build_short_name_geo_markers() -> tuple[str, ...]:
 _SHORT_NAME_GEO_MARKERS = _build_short_name_geo_markers()
 
 
+def _compile_geo_marker_pattern(marker: str) -> re.Pattern[str] | None:
+    """Zbuduj regex z granicami słów dla jednego markera geo (fraza multi-word OK)."""
+    m = (marker or "").strip().lower()
+    if not m:
+        return None
+    parts = [p for p in re.split(r"\s+", m) if p]
+    if not parts:
+        return None
+    body = r"\s+".join(re.escape(p) for p in parts)
+    return re.compile(rf"(?<!\w){body}(?!\w)")
+
+
+# Wstępnie skompilowane — pełna lista miast (~1000) bez re.compile na każdy kontakt.
+_SHORT_NAME_GEO_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    p
+    for p in (_compile_geo_marker_pattern(m) for m in _SHORT_NAME_GEO_MARKERS)
+    if p is not None
+)
+
+
+def _name_contains_geo_marker(low_name: str, marker: str | None = None) -> bool:
+    """
+    Geo-marker w nazwie firmy — tylko jako całe słowo/fraza, nie substring.
+
+    Po co: przy pełnej liście miast (~1000) krótkie nazwy typu ``Kowal`` nie mogą
+    odrzucać ``Spedytor Kowalski`` (``kowal`` ⊂ ``kowalski``).
+    Bez ``marker``: skanuje wszystkie wstępnie skompilowane wzorce.
+    """
+    if not low_name:
+        return False
+    if marker is not None:
+        pat = _compile_geo_marker_pattern(marker)
+        return bool(pat and pat.search(low_name))
+    return any(pat.search(low_name) for pat in _SHORT_NAME_GEO_PATTERNS)
+
 # >>> OPIS FUNKCJI: funkcja _normalize_host
 # Cel: wyłuskać sam host z URL-a albo z domeny adresu e-mail. Parametry: url_or_email (str|None).
 # Zwraca: str — lowercase, bez "www.", bez ścieżki; "" dla pustego/niepoprawnego wejścia.
@@ -692,10 +727,9 @@ def is_non_commercial_name(name: str) -> bool:
                 return False
         return True
     # Krótkie nazwy bez formy prawnej + geo PL (lub DE higiena) → miasto/portal
+    # Granice słów: „Kowal” ≠ substring w „Kowalski”.
     if not _COMMERCIAL_LEGAL_FORM.search(text):
-        if len(text.split()) <= 3 and any(
-            x in low for x in _SHORT_NAME_GEO_MARKERS
-        ):
+        if len(text.split()) <= 3 and _name_contains_geo_marker(low):
             return True
     return False
 

@@ -67,17 +67,20 @@ class TestPlSpedycjaKeywords:
         )
 
     # >>> OPIS FUNKCJI: funkcja TestPlSpedycjaKeywords.test_default_max_discovery_terms_capped
-    # Test: limit fraz rośnie z liczbą województw i jest ograniczony do 1000 dla całej Polski.
+    # Test: limit fraz rośnie z liczbą miast/powiatów; cała PL obcięta do 8000.
     # Parametry: self. Zwraca: None (wynik = przejście lub błąd testu).
     # Efekty uboczne: brak (czysta logika w pamięci). Błędy: AssertionError przy niespełnionej asercji.
     def test_default_max_discovery_terms_capped(self):
         from pl_spedycja_keywords import (
             ALL_BUNDESLAENDER,
+            BUNDESLAND_CONFIG,
             default_max_discovery_terms_for,
         )
 
+        assert len(BUNDESLAND_CONFIG["Mazowieckie"]["cities"]) >= 80
+        assert len(BUNDESLAND_CONFIG["Mazowieckie"]["powiaty"]) >= 30
         assert default_max_discovery_terms_for(["Mazowieckie"]) >= 200
-        assert default_max_discovery_terms_for(list(ALL_BUNDESLAENDER)) == 1000
+        assert default_max_discovery_terms_for(list(ALL_BUNDESLAENDER)) == 8000
 
     # >>> OPIS FUNKCJI: funkcja TestPlSpedycjaKeywords.test_lodzkie_discovery_terms
     # Test: frazy dla łódzkiego zawierają Łódź/Polska i słowo 'spedycja'.

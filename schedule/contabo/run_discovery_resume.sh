@@ -9,13 +9,14 @@ JOB="discovery/${DAY_LABEL}"
 LOG="$ROOT/logs/${DAY_LABEL}_discovery.log"
 # też dopisz do głównego logu środy, jeśli istnieje
 MAIN_LOG="$ROOT/logs/sroda_discovery.log"
-export SCRAPER_MAX_RUNTIME_SECONDS="${SCRAPER_MAX_RUNTIME_SECONDS:-21600}"
+export SCRAPER_MAX_RUNTIME_SECONDS="${SCRAPER_MAX_RUNTIME_SECONDS:-43200}"
 unset DISABLE_SEND_WINDOW SCRAPER_IGNORE_SEND_WINDOW || true
 
 pipeline_notify start "$JOB" --log "$LOG" \
-  --detail "Restart ICP + --respect-cache (pomija rekordy już w pl_spedycja_cache.json)."
+  --detail "Resume 1 woj. (--rotate-bundesland) + --respect-cache."
 {
-  echo "[$(date '+%F %T')] START discovery resume ($DAY_LABEL) --respect-cache"
+  echo "[$(date '+%F %T')] START discovery resume ($DAY_LABEL) --rotate-bundesland --respect-cache"
+  "$PY" -c "from pathlib import Path; from gu_bundesland_rotation import format_rotation_status; print(format_rotation_status(Path('Wyniki')))" || true
 } | tee -a "$LOG" >>"$MAIN_LOG"
 
 GAP_FILL_ARGS=()
@@ -30,6 +31,7 @@ set +e
   --serper-only-discovery \
   --no-auto-email \
   --respect-cache \
+  --rotate-bundesland \
   "${GAP_FILL_ARGS[@]}" >>"$LOG" 2>&1
 EC=$?
 set -e

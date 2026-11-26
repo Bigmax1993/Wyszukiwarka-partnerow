@@ -119,6 +119,8 @@ class TestCommercialContact:
         assert is_non_commercial_name("Leipzig Gewerbe")
         # Z formą prawną — nie ten tor (firma)
         assert not is_non_commercial_name("Trans Spedycja Sp. z o.o.")
+        # Pełna lista miast: „Kowal” nie może łapać „Kowalski” (substring)
+        assert not is_non_commercial_name("Spedytor Kowalski")
 
     # >>> OPIS FUNKCJI: funkcja TestCommercialContact.test_accepts_gmbh_with_own_domain
     # Test: GmbH z własną domeną jest akceptowana jako kontakt komercyjny.
