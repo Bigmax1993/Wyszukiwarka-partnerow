@@ -17,9 +17,55 @@ export SCRAPER_TIMEZONE="${SCRAPER_TIMEZONE:-Europe/Warsaw}"
 export PIPELINE_NOTIFY_TO="${PIPELINE_NOTIFY_TO:-${EXCEL_REPORT_TO:-svinchak1993@gmail.com}}"
 export GOOGLE_MAPS_DISCOVERY="${GOOGLE_MAPS_DISCOVERY:-1}"
 export GOOGLE_MAPS_HEADLESS="${GOOGLE_MAPS_HEADLESS:-1}"
-# Faza B: domyślnie wieczorny cron (run_gap_fill.sh), nie w tym samym jobie co Maps
+# Faza B: NIE w tym samym procesie co Maps — start z opóźnieniem po discovery
+# (schedule_gap_fill_after_discovery). Wieczorny cron 20:00 wyłączony.
 export GAP_FILL_AFTER_MAPS="${GAP_FILL_AFTER_MAPS:-0}"
-export GAP_FILL_MAX="${GAP_FILL_MAX:-40}"
+export GAP_FILL_MAX="${GAP_FILL_MAX:-80}"
+# Opóźnienie gap-fill po końcu discovery (sekundy). Domyślnie 1 h.
+export GAP_FILL_DELAY_SECONDS="${GAP_FILL_DELAY_SECONDS:-3600}"
+
+# >>> schedule_gap_fill_after_discovery
+# Po discovery: odczekaj GAP_FILL_DELAY_SECONDS, potem run_gap_fill.sh (flock).
+schedule_gap_fill_after_discovery() {
+  local delay_sec="${GAP_FILL_DELAY_SECONDS:-3600}"
+  local delay_log="$ROOT/logs/gap_fill_delayed.log"
+  local lock="$ROOT/logs/gap_fill_delayed.lock"
+  local when
+  when="$(date -d "+${delay_sec} seconds" '+%F %T' 2>/dev/null || date -v+"${delay_sec}S" '+%F %T' 2>/dev/null || echo "+${delay_sec}s")"
+  {
+    echo "[$(date '+%F %T')] SCHEDULE gap-fill za ${delay_sec}s (ok. ${when}), max=${GAP_FILL_MAX:-80}"
+  } | tee -a "$delay_log"
+  # Odwołaj poprzedni sleep-waiter tego samego typu (jeśli jeszcze czeka)
+  if [[ -f "$ROOT/logs/gap_fill_delayed.pid" ]]; then
+    old_pid="$(cat "$ROOT/logs/gap_fill_delayed.pid" 2>/dev/null || true)"
+    if [[ -n "${old_pid}" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      # zabij całą grupę waitera (sleep + bash)
+      kill "$old_pid" 2>/dev/null || true
+      echo "[$(date '+%F %T')] CANCEL poprzedni delayed gap-fill pid=${old_pid}" >>"$delay_log"
+    fi
+  fi
+  nohup bash -c "
+    sleep ${delay_sec}
+    cd '${ROOT}'
+    set -a
+    [ -f .env ] && . ./.env
+    set +a
+    export GAP_FILL_MAX='${GAP_FILL_MAX:-80}'
+    export SCRAPER_MAX_RUNTIME_SECONDS=\"\${SCRAPER_MAX_RUNTIME_SECONDS:-7200}\"
+    echo \"[\$(date '+%F %T')] START delayed gap-fill (po discovery)\" >>'${delay_log}'
+    if command -v flock >/dev/null 2>&1; then
+      flock -n '${lock}' -c './schedule/contabo/run_gap_fill.sh' >>'${delay_log}' 2>&1
+      ec=\$?
+    else
+      ./schedule/contabo/run_gap_fill.sh >>'${delay_log}' 2>&1
+      ec=\$?
+    fi
+    echo \"[\$(date '+%F %T')] END delayed gap-fill exit=\$ec\" >>'${delay_log}'
+    rm -f '${ROOT}/logs/gap_fill_delayed.pid'
+  " >>"$delay_log" 2>&1 &
+  echo $! >"$ROOT/logs/gap_fill_delayed.pid"
+  echo "[$(date '+%F %T')] delayed waiter pid=$(cat "$ROOT/logs/gap_fill_delayed.pid")" >>"$delay_log"
+}
 # Chromium pod Selenium (system lub Playwright)
 if [[ -z "${CHROME_BIN:-}" ]]; then
   for c in /usr/bin/google-chrome-stable /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do

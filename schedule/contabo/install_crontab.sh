@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Instaluje blok cron PL FAS na Contabo (Europe/Berlin ≈ Warsaw CET/CEST).
 # Plan: codziennie 04:00 cache verify | pon 06:30 Excel mail | pon 06:45 Drive
-# | pon–pt 07:00 discovery (--respect-cache) | 20:00 gap-fill
+# | pon–pt 07:00 discovery (--respect-cache) | gap-fill +1h po discovery (nie cron 20:00)
 # | nd 06:00 backfill | pon/wt 09:00 send + watchdog co 15 min.
 set -euo pipefail
 
@@ -14,7 +14,8 @@ chmod +x "$ROOT"/schedule/contabo/*.sh
 BLOCK=$(cat <<EOF
 $MARKER_BEGIN
 # PL FAS Contabo — cache verify 04:00 | Excel mail 06:30 / Drive 06:45
-# | discovery 07:00 (--respect-cache) | gap-fill 20:00 | backfill nd 06:00 | send pon/wt 09:00
+# | discovery 07:00 (--respect-cache) | gap-fill +1h po discovery (run_discovery.sh)
+# | backfill nd 06:00 | send pon/wt 09:00
 # Watchdog: co 15 min — ALERT gdy job running > limit
 # Strefa serwera: Europe/Berlin (CET/CEST = Warsaw)
 # Weryfikacja cache codziennie 04:00 (stempel + health JSON przed discovery)
@@ -27,8 +28,7 @@ $MARKER_BEGIN
 0 7 * * 3 cd $ROOT && ./schedule/contabo/run_discovery.sh sroda
 0 7 * * 4 cd $ROOT && ./schedule/contabo/run_discovery.sh czwartek
 0 7 * * 5 cd $ROOT && ./schedule/contabo/run_discovery.sh piatek
-# Faza B — Serper gap-fill wieczorem (po Maps discovery; osobny budżet/czas)
-0 20 * * 1-5 cd $ROOT && ./schedule/contabo/run_gap_fill.sh
+# Gap-fill: NIE cron 20:00 — schedule_gap_fill_after_discovery (+1h) w run_discovery.sh
 0 6 * * 0 cd $ROOT && ./schedule/contabo/run_backfill.sh
 0 9 * * 1 cd $ROOT && ./schedule/contabo/run_send.sh poniedzialek
 0 9 * * 2 cd $ROOT && ./schedule/contabo/run_send.sh wtorek

@@ -7,10 +7,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 JOB="gap-fill/serper"
 LOG="$ROOT/logs/gap_fill_serper.log"
 export SCRAPER_MAX_RUNTIME_SECONDS="${SCRAPER_MAX_RUNTIME_SECONDS:-7200}"
-export GAP_FILL_MAX="${GAP_FILL_MAX:-40}"
+# Po discovery (+1h): domyślnie więcej niż stary cron 40
+export GAP_FILL_MAX="${GAP_FILL_MAX:-80}"
 
 pipeline_notify start "$JOB" --log "$LOG" \
-  --detail "Faza B: Serper uzupełnia luki (email/www/telefon) w contacts JSON."
+  --detail "Faza B: Serper uzupełnia luki (email/www/telefon) w contacts JSON (max=${GAP_FILL_MAX}; start zwykle +1h po discovery)."
 echo "[$(date '+%F %T')] START gap-fill Serper (max=${GAP_FILL_MAX})" | tee -a "$LOG"
 
 set +e

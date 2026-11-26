@@ -40,9 +40,12 @@ set -e
 
 echo "[$(date '+%F %T')] END discovery ($DAY_LABEL) exit=$EC" >>"$LOG"
 if [[ "$EC" -eq 0 ]]; then
-  pipeline_notify ok "$JOB" --log "$LOG" --exit-code "$EC"
+  pipeline_notify ok "$JOB" --log "$LOG" --exit-code "$EC" \
+    --detail "Po OK: gap-fill Serper za ~$(( ${GAP_FILL_DELAY_SECONDS:-3600} / 60 )) min."
 else
   pipeline_notify alert "$JOB" --log "$LOG" --exit-code "$EC" \
     --detail "Discovery zakończone błędem (exit=$EC)."
 fi
+# Faza B z opóźnieniem (nie wieczorny cron) — także po częściowym OK/exit 0
+schedule_gap_fill_after_discovery
 exit "$EC"
