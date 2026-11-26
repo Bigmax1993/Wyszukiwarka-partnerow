@@ -490,82 +490,78 @@ def build_row_cleanup_prompt(
     """
     segments_whitelist = _REQUIRED_CHAINS
     return f"""ROLA
-Jesteś liderem QA danych przed eksportem do Excela. Twój output trafia 1:1
-do arkusza „Kontakte". Błędne wiersze = prawdziwe maile B2B do złych firm —
-bądź bezlitośnie precyzyjny.
+Jesteś liderem QA całego rekordu firmy przed eksportem do Excela Kontakte.
+Każde pole JSON musi przejść WALIDACJĘ 1:1 pipeline (ten sam kod odrzuci zły wynik).
+Błędny rekord = prawdziwy mail B2B do złej firmy — zero domysłów.
 
-GRUPA DOCELOWA (tylko te firmy mogą zachować nazwę)
-Małe/średnie biura spedycyjne w Polsce: organizacja transportu drogowego
-FTL/LTL, fracht, grupaż, ADR, chłodnia, linie Europa — nie kurier paczkowy,
-nie giełda Timocom/Trans.eu, nie portal, nie sama flota producenta.
-ŻADNYCH tytułów PDF. ŻADNYCH miast jako „nazwa firmy". ŻADNYCH ogłoszeń pracy.
+GRUPA DOCELOWA
+Małe/średnie biura spedycyjne PL: FTL/LTL, fracht, grupaż, ADR, chłodnia, Europa.
+NIE: kurier/paczkomat, Timocom/Trans.eu, portal/katalog, flota producenta, big 3PL.
 
 ZADANIE
-Wyczyść pola wejściowe pod Excel. Odpowiedz TYLKO obiektem JSON — bez Markdown.
+Wyczyść CAŁY rekord wejściowy. Odpowiedz TYLKO obiektem JSON — bez Markdown.
+Puste stringi dozwolone, gdy pole nie da się uczciwie ustalić z wejścia.
 
-SCHEMA (dokładnie te klucze; puste stringi dozwolone)
-{{"company_name_clean":"","address":"","phone":"","website":"","bundesland":"","handelsketten":"","url":""}}
+SCHEMA (dokładnie te klucze)
+{{"company_name_clean":"","address":"","phone":"","email":"","website":"","bundesland":"","handelsketten":"","url":""}}
 
-Uwaga mapowania Excel (NIE zmieniaj nazw kluczy JSON):
-• bundesland → kolumna „Województwo"
-• handelsketten → kolumna „Segmenty" (ftl, ltl, adr, …)
+Mapowanie Excel (NIE zmieniaj nazw kluczy JSON):
+• bundesland → „Województwo" | handelsketten → „Segmenty" | email → „E-mail"
 
-═══ company_name_clean — REGUŁY KILLER (najwyższy priorytet) ═══
-DOZWOLONE: oficjalna nazwa firmy + forma prawna w JEDNEJ linii.
-Forma prawna WYMAGANA (PL lub DE):
-  Sp. z o.o., Spółka z o.o., S.A., sp.j., sp.k., sp.p., sp. z o.o. sp.k.,
-  GmbH, UG, AG, GbR, e.K., KG, OHG, PartG, Co. KG, SE.
-OK: „Trans Spedycja Sp. z o.o.", „Euro Fracht S.A.", „Logistyka Nowak sp.j."
-NIE OK: „Spedycja Warszawa", „FTL Europa", „Transport", sam kurier / giełda
+═══ WALIDACJA 1:1 CAŁEGO REKORDU (obowiązkowa) ═══
 
-NATYCHMIAST company_name_clean = "" gdy:
-• PDF/dokument: [PDF], „strona X z Y", plan zagospodarowania, analiza
-• Software/IT: PDF-XChange, Adobe, Microsoft, Tracker, shop@pdf-*
-• Portale/katalogi: 11880, Panorama Firm, Wikipedia, pracuj.pl, Timocom, Trans.eu
-• Samo miasto/nagłówek: „Głogów", „Spedycja FTL", tytuł artykułu bez firmy
-• URL, e-mail, emoji, slogan marketingowy, dwukropek na końcu
+1) company_name_clean
+• jedna linia: oficjalna nazwa + forma prawna (Sp. z o.o. / S.A. / sp.j. / sp.k. / GmbH / AG…)
+• NATYCHMIAST "" gdy: PDF, portal/katalog, Timocom/Trans.eu, samo miasto, URL, e-mail,
+  ogłoszenie pracy, InPost/DPD/kurier, SEO-tytuł bez firmy
+• NIGDY nie wymyślaj nazwy — tylko z wejścia / kontekstu kontaktu
 
-Wyprowadzenie nazwy tylko z kontekstu danych firmy / kontaktu, gdy wejście
-to śmieci — NIGDY nie wymyślaj. Wątpliwość → "".
+2) address
+• format PL: „ul. Nazwa 1, 00-001 Miasto" albo ""
+• NIE: URL, e-mail, sam telefon, katalog, zmyślona ulica
 
-═══ Kolumny Excel (formatowanie) ═══
-• address → „ul. Nazwa 1, 00-001 Miasto" (Polska) lub "" — nie zmyślaj ulicy
-• website → https://domenafirmowa.pl (root, bez podstrony, bez katalogu, bez PDF)
-• url → identyczny z bazowym www (https://domena.pl)
-• bundesland → DOKŁADNIE jedna wartość z listy województw: [{states}] — inaczej ""
-  (to pole = Województwo w Excelu)
-• handelsketten → małe litery, po przecinku, TYLKO segmenty z whitelisty:
-  {segments_whitelist}
-  — albo "" (to pole = Segmenty w Excelu; nie wpisuj sieci handlowych Aldi/Rewe)
-• email_nur_info: NIE wstawiaj do JSON — tylko do kontroli wiarygodności
+3) phone
+• DOKŁADNIE JEDEN numer PL przechodzący walidację kodu:
+  po usunięciu nie-cyfr 9–15 cyfr; 9 cyfr krajowo ALBO ≥11 z prefiksem 48/0048
+• format: „+48 XXX XXX XXX" lub „+48XXXXXXXXX"
+• NIE: daty (05-11-2026, 17/03/1994), NIP, IBAN, 0000…, 0123456789,
+  ≤2 unikalne cyfry, faks, dwa numery, sklejki HTML
+• z listy kandydatów wybierz JEDEN prawdziwy; brak → ""
 
-═══ phone — WALIDACJA 1:1 (identyczna z kodem Excela / gap-fill) ═══
-Zwróć DOKŁADNIE JEDEN numer, który MUSI przejść tę samą walidację co pipeline:
-• po usunięciu nie-cyfr: 9–15 cyfr łącznie
-• PL: 9 cyfr krajowo ALBO ≥11 cyfr z prefiksem 48 (lub 0048)
-• format wyjścia: „+48 XXX XXX XXX" albo „+48XXXXXXXXX" (jeden numer, bez przecinków)
-• NIE wolno: daty (np. 05-11-2026), NIP, IBAN, 0000…, 0123456789, numery z ≤2 różnymi cyframi,
-  faks, „Tel./Fax", dwa numery w jednej komórce, sklejki HTML
-• Wejście często ma listę kandydatów po przecinku / „kandydaci:" — wybierz JEDEN prawdziwy
-  telefon firmowy (preferuj +48). Jeśli żaden nie spełnia reguł → phone=""
-Kod odrzuci numer, który nie spełnia tych reguł — Twoja odpowiedź ma być 1:1 pod walidację.
+4) email
+• DOKŁADNIE JEDEN firmowy adres z „@" (biuro/office/spedycja/kontakt…)
+• NIE: noreply, newsletter, domena portalu/katalogu, osobisty Gmail gdy jest domena firmy
+• preferuj domenę zgodną z website; brak sensownego → ""
 
-PRZYKŁADY NEGATYWNE
-Wejście name=„PDF ogłoszenie przetarg transport" → company_name_clean=""
-Wejście name=„InPost paczkomaty Warszawa" → company_name_clean=""
-Wejście phone=„Tel +48 22 111 22 33, Fax +48 22 444" → phone=„+48 22 111 22 33"
-Wejście phone=„05-11-2026, 0000081253, +48 327 935 935" → phone=„+48 327 935 935"
-Wejście phone=„0000525946, 0/1393229, +48222501247" → phone=„+48 222 501 247"
+5) website + url
+• website = kanoniczny root https://domenafirmowa.pl (bez /kontakt, bez PDF, bez katalogu)
+• url = ten sam base co website
+• NIE: maps.google, cylex, panorfirma, facebook, linkedin, olx, pracuj.pl
+
+6) bundesland (= Województwo)
+• DOKŁADNIE jedna wartość z listy: [{states}]
+• inaczej ""
+
+7) handelsketten (= Segmenty)
+• małe litery, po przecinku, TYLKO z whitelisty: {segments_whitelist}
+• inaczej ""
+
+PRZYKŁADY
+name=„PDF ogłoszenie…" → company_name_clean=""
+name=„InPost paczkomaty…" → company_name_clean=""
+phone=„05-11-2026, +48 327 935 935" → phone=„+48 327 935 935"
+email=„noreply@x.pl, biuro@firma.pl" → email=„biuro@firma.pl"
+website=„https://firma.pl/kontakt" → website=„https://firma.pl", url=„https://firma.pl"
 
 EINGABE
 name={company}
 address={address}
 phone={phone}
+email={email}
 website={website}
 url={url}
 handelsketten={handelsketten}
 segmenty={handelsketten}
-email_nur_info={email}
 """
 
 

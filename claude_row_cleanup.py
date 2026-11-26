@@ -68,10 +68,14 @@ def parse_claude_row_cleanup_response(text: str) -> dict:
     handelsketten = str(
         data.get("handelsketten") or data.get("segmenty") or data.get("Segmenty") or ""
     ).strip()
+    email = str(
+        data.get("email") or data.get("E-mail") or data.get("e-mail") or ""
+    ).strip()
     return {
         "company_name_clean": str(data.get("company_name_clean") or "").strip(),
         "address": str(data.get("address") or "").strip(),
         "phone": str(data.get("phone") or "").strip(),
+        "email": email,
         "website": str(data.get("website") or "").strip(),
         "bundesland": bundesland,
         "handelsketten": handelsketten,

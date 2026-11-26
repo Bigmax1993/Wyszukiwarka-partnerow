@@ -44,14 +44,13 @@ Poniedziałek dodatkowo: 06:30 Excel mail, 06:45 Drive.
 
 ---
 
-## 4. Telefon: Claude + pick_best 1:1 pod walidację
+## 4. Claude czyści CAŁY rekord 1:1 pod walidację
 
-**Problem:** gap-fill często znajdował mail, ale `still_gap` przez śmieciowy blob telefonów
-(daty/NIP/IBAN sklejone z prawdziwym +48). Walidacja brała **pierwszy** segment przed przecinkiem.
+**Problem:** gap-fill/Excel dostawały śmieci (telefony-daty, noreply, /kontakt w www, złe segmenty).
 
 **Fix:**
-- prompt cleanup: sekcja „phone — WALIDACJA 1:1” (= reguły `_excel_phone_ok`)
-- `pick_best_pl_phone` — wybór najlepszego +48 z bloba (fallback gdy Claude nie przejdzie)
-- sync `telefon`/`phones_found` do jednego czystego numeru przed Excel / oceną gap
+- prompt cleanup: „WALIDACJA 1:1 CAŁEGO REKORDU” (nazwa, adres, phone, **email**, www/url, województwo, segmenty)
+- `coerce_cleanup_result_1to1` — po Claude każde pole musi przejść te same reguły co kod; inaczej fallback/puste
+- `pick_best_pl_phone` + filtr junk mail; sync pól przed Excel
 
 *Koniec notatki 2026-11-26.*

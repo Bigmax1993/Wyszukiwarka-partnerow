@@ -2303,9 +2303,161 @@ def row_cleanup_fallback(
 # Cel: nanieść wynik cleanupu (LLM lub fallback) na wiersz pipeline. Parametry: row (dict, MUTOWANY w miejscu); llm_result (dict) — klucze company_name_clean, address, phone, website, bundesland,
 # handelsketten, url. Zwraca: None. Nadpisuje: company_name_clean, nazwa, adres, full_address, telefon, official_website, www (normalize_website), bundesland, retail_chains_found
 # (format_handelsketten_for_excel), url (website_base_url). E-mail NIE jest zmieniany (zostaje z pick_best kontaktów). Błędy: brak własnej obsługi; brakujące klucze → wartości z row.
+def _address_ok_for_excel(raw: str) -> bool:
+    """Adres PL-ready: nie URL, nie e-mail, nie sam telefon."""
+    s = sanitize_special_text(raw or "").strip()
+    if not s or len(s) < 5:
+        return False
+    low = s.lower()
+    if "@" in s or "http://" in low or "https://" in low or "www." in low:
+        return False
+    digits = re.sub(r"\D", "", s)
+    if digits and len(digits) >= 9 and len(re.sub(r"[\d\s+\-()/]", "", s)) < 3:
+        return False
+    return True
+
+
+def _segments_1to1(raw: str) -> str:
+    """Segmenty tylko z whitelist TRANSPORT_SEGMENT_MARKERS."""
+    try:
+        from campaign_keyword_profile import TRANSPORT_SEGMENT_MARKERS
+
+        allowed = {str(x).strip().lower() for x in TRANSPORT_SEGMENT_MARKERS if str(x).strip()}
+    except Exception:
+        allowed = set()
+    parts: list[str] = []
+    for item in re.split(r"[,;/|]+", raw or ""):
+        tag = item.strip().lower()
+        if not tag:
+            continue
+        if allowed and tag not in allowed:
+            continue
+        if tag not in parts:
+            parts.append(tag)
+    return ", ".join(parts)
+
+
+def _email_candidates_from_row(row: dict, email_hint: str = "") -> list[str]:
+    out: list[str] = []
+    for raw in (
+        email_hint,
+        row.get("email_target") or "",
+        row.get("emails_found") or "",
+    ):
+        if isinstance(raw, (list, tuple, set)):
+            vals = [str(x).strip() for x in raw if str(x).strip()]
+        else:
+            vals = [p.strip() for p in re.split(r"[,;]+", str(raw or "")) if p.strip()]
+        for v in vals:
+            if "@" in v and v.lower() not in {x.lower() for x in out}:
+                out.append(v)
+    return out
+
+
+def coerce_cleanup_result_1to1(
+    parsed: dict,
+    *,
+    row: dict,
+    company_raw: str,
+    address_raw: str,
+    phone_raw: str,
+    email_raw: str,
+    website_raw: str,
+    segments_raw: str = "",
+) -> dict:
+    """
+    Dopasuj wynik Claude do reguł kodu 1:1 (Excel / gap-fill).
+
+    Pole, które nie przechodzi walidacji, zastępujemy fallbackiem z surowych
+    danych albo pustym stringiem — nigdy nie przepuszczamy śmieci „bo Claude tak chciał”.
+    """
+    website_in = (
+        website_base_url(parsed.get("website") or "")
+        or website_base_url(website_raw)
+        or normalize_website(parsed.get("website") or website_raw)
+        or ""
+    )
+    if website_in and (
+        _is_maps_url(website_in)
+        or is_non_commercial_website(website_in)
+    ):
+        website_in = website_base_url(website_raw) or normalize_website(website_raw) or ""
+        if website_in and (
+            _is_maps_url(website_in) or is_non_commercial_website(website_in)
+        ):
+            website_in = ""
+    url_in = website_base_url(parsed.get("url") or website_in or "") or website_in
+
+    def _email_passes(cand: str) -> bool:
+        if not cand or "@" not in cand or not _excel_email_ok(cand):
+            return False
+        if is_non_commercial_email(cand) or is_junk_scraped_email(cand):
+            return False
+        local = cand.split("@", 1)[0].lower()
+        if local.startswith("noreply") or local in {"no-reply", "donotreply", "mailer-daemon"}:
+            return False
+        return True
+
+    email_claude = (parsed.get("email") or "").strip()
+    email_fallbacks = _email_candidates_from_row(row, email_raw)
+    email_final = ""
+    for cand in [email_claude, *email_fallbacks]:
+        if _email_passes(cand):
+            email_final = cand
+            break
+    if not email_final and email_fallbacks:
+        picked, _ = pick_best_email_for_inquiry(email_fallbacks, website_in or "")
+        if picked and _email_passes(picked):
+            email_final = picked
+
+    phone_claude = sanitize_special_text(parsed.get("phone") or "")
+    if phone_claude and _excel_phone_ok(phone_claude):
+        phone_final = pick_best_pl_phone(phone_claude) or phone_claude
+    else:
+        phone_final = pick_best_pl_phone(
+            f"{phone_claude}, {phone_raw}, {row.get('phones_found') or ''}"
+        )
+
+    cleaned_name = finalize_company_name_for_export(
+        parsed.get("company_name_clean", ""),
+        fallback_raw=company_raw,
+        website=website_in,
+        email=email_final or email_raw,
+    )
+
+    address_claude = sanitize_special_text(parsed.get("address") or "")
+    if _address_ok_for_excel(address_claude):
+        address_final = address_claude
+    elif _address_ok_for_excel(address_raw):
+        address_final = sanitize_special_text(address_raw)
+    else:
+        address_final = ""
+
+    land = sanitize_special_text(parsed.get("bundesland") or "")
+    if land not in PL_WOJEWODZTWA:
+        land = extract_bundesland(row) or ""
+        if land not in PL_WOJEWODZTWA:
+            land = ""
+
+    segments = _segments_1to1(
+        parsed.get("handelsketten") or segments_raw or row.get("retail_chains_found") or ""
+    )
+
+    return {
+        "company_name_clean": cleaned_name,
+        "address": address_final,
+        "phone": phone_final,
+        "email": email_final,
+        "website": website_in,
+        "bundesland": land,
+        "handelsketten": segments,
+        "url": url_in,
+    }
+
+
 def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
     """
-    LLM czyści nazwę/adres/telefon — e-mail zostaje z pick_best kontaktów.
+    Nanieś wynik cleanupu 1:1 na wiersz (nazwa/adres/telefon/email/www/region/segmenty).
     """
     company = llm_result.get("company_name_clean") or row.get("nazwa") or ""
     row["company_name_clean"] = company
@@ -2319,16 +2471,35 @@ def apply_row_enrichment_to_row(row: dict, llm_result: dict) -> None:
         row["phones_found"] = phone_clean
     elif phone_raw:
         row["telefon"] = str(phone_raw).strip()
+    email_clean = (llm_result.get("email") or "").strip()
+    if email_clean and _excel_email_ok(email_clean) and not is_non_commercial_email(
+        email_clean
+    ):
+        row["email_target"] = email_clean
+        found = row.get("emails_found")
+        if isinstance(found, str) and found.strip():
+            if email_clean.lower() not in found.lower():
+                row["emails_found"] = f"{email_clean}, {found}"
+        elif isinstance(found, list):
+            if email_clean not in found:
+                row["emails_found"] = [email_clean, *found]
+        else:
+            row["emails_found"] = email_clean
     website = llm_result.get("website", row.get("official_website", ""))
-    row["official_website"] = website
-    row["www"] = normalize_website(website) or row.get("www", "")
+    website = normalize_website(website) or ""
+    if website and not _is_maps_url(website) and not is_non_commercial_website(website):
+        row["official_website"] = website
+        row["www"] = website
     row["bundesland"] = llm_result.get("bundesland", row.get("bundesland", ""))
-    if llm_result.get("handelsketten"):
+    if llm_result.get("handelsketten") is not None:
         row["retail_chains_found"] = format_handelsketten_for_excel(
-            llm_result.get("handelsketten")
+            llm_result.get("handelsketten") or ""
         )
+        row["retail_chains_found"] = _segments_1to1(row["retail_chains_found"])
     if llm_result.get("url"):
         row["url"] = website_base_url(llm_result.get("url")) or row.get("url", "")
+    elif website:
+        row["url"] = website_base_url(website) or row.get("url", "")
 
 
 # >>> OPIS FUNKCJI: funkcja format_handelsketten_for_excel
@@ -2480,20 +2651,41 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
     else:
         phone_for_prompt = sanitize_special_text(str(phone_raw_blob))[:240]
     phone = phone_pre or phone_for_prompt
+    email_candidates = _email_candidates_from_row(row)
     email = (row.get("email_target") or "").strip()
+    if not email and email_candidates:
+        email = email_candidates[0]
+    email_for_prompt = ", ".join(email_candidates[:8]) if email_candidates else email
     website = sanitize_special_text(row.get("official_website") or row.get("www") or "")
     company = sanitize_special_text(
         row.get("company_name_clean") or row.get("nazwa") or row.get("company_name_raw") or ""
     )
+    segments_raw = (row.get("retail_chains_found") or "").strip()
+
+    def _apply_coerced(parsed_like: dict) -> dict:
+        coerced = coerce_cleanup_result_1to1(
+            parsed_like,
+            row=row,
+            company_raw=company,
+            address_raw=address,
+            phone_raw=str(phone_raw_blob),
+            email_raw=email_for_prompt or email,
+            website_raw=website,
+            segments_raw=segments_raw,
+        )
+        apply_row_enrichment_to_row(row, coerced)
+        return coerced
+
     if cache_key and cache_key in claude_cache:
-        apply_row_enrichment_to_row(row, claude_cache[cache_key])
+        coerced = _apply_coerced(claude_cache[cache_key])
+        claude_cache[cache_key] = coerced
         row = apply_regex_row_contact_cleanup(row)
         return finalize_row_for_excel_tables(row)
     if cache_key and cache_key in (cache.get("gemini_row_enrichment") or {}):
         legacy = (cache.get("gemini_row_enrichment") or {}).get(cache_key)
         if isinstance(legacy, dict):
-            claude_cache[cache_key] = dict(legacy)
-            apply_row_enrichment_to_row(row, claude_cache[cache_key])
+            coerced = _apply_coerced(legacy)
+            claude_cache[cache_key] = coerced
         row = apply_regex_row_contact_cleanup(row)
         return finalize_row_for_excel_tables(row)
 
@@ -2529,10 +2721,10 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         company=company,
         address=address,
         phone=phone_for_prompt,
-        email=email,
+        email=email_for_prompt or email,
         website=website,
         states=states,
-        handelsketten=(row.get("retail_chains_found") or "").strip(),
+        handelsketten=segments_raw,
         url=(row.get("url") or website or "").strip(),
     )
     parsed = claude_cleanup_row_fields(prompt, logger, cache)
@@ -2540,40 +2732,14 @@ def enrich_row_with_claude_cleanup(row: dict, logger: logging.Logger, cache: dic
         fallback = row_cleanup_fallback(
             row, company, address, phone_pre or phone, email, website
         )
-        apply_row_enrichment_to_row(row, fallback)
+        coerced = _apply_coerced(fallback)
         if cache_key:
-            claude_cache[cache_key] = fallback
+            claude_cache[cache_key] = coerced
         row = apply_regex_row_contact_cleanup(row)
         return finalize_row_for_excel_tables(row)
 
-    cleaned_name = finalize_company_name_for_export(
-        parsed.get("company_name_clean", ""),
-        fallback_raw=company,
-        website=website,
-        email=email,
-    )
-    # Telefon 1:1 pod walidację: Claude → jeśli nie przechodzi, pick_best z surowego bloba
-    claude_phone = sanitize_special_text(parsed.get("phone", "") or "")
-    if claude_phone and _excel_phone_ok(claude_phone):
-        final_phone = pick_best_pl_phone(claude_phone) or claude_phone
-    else:
-        final_phone = phone_pre or pick_best_pl_phone(
-            f"{claude_phone}, {phone_raw_blob}"
-        )
-    claude_result = {
-        "company_name_clean": cleaned_name,
-        "address": sanitize_special_text(parsed.get("address", address)) or address,
-        "phone": final_phone,
-        "website": sanitize_special_text(parsed.get("website", website)) or website,
-        "bundesland": sanitize_special_text(parsed.get("bundesland", "")),
-        "handelsketten": format_handelsketten_for_excel(
-            parsed.get("handelsketten") or row.get("retail_chains_found") or ""
-        ),
-        "url": sanitize_special_text(parsed.get("url", row.get("url") or website)),
-    }
-    if claude_result["bundesland"] not in PL_WOJEWODZTWA:
-        claude_result["bundesland"] = extract_bundesland(row)
-    apply_row_enrichment_to_row(row, claude_result)
+    # Cały rekord 1:1 pod walidację kodu (Claude → coerce → Excel/gap)
+    claude_result = _apply_coerced(parsed)
     if cache_key:
         claude_cache[cache_key] = claude_result
     row = apply_regex_row_contact_cleanup(row)
