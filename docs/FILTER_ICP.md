@@ -13,6 +13,9 @@ Profil słów: [`campaign_keyword_profile.py`](../campaign_keyword_profile.py)
 | | Media / redakcja / portal branżowy |
 | | Urząd, oferty pracy, przeprowadzki, autokary |
 
+**Domeny giełd z kropką** (np. `trans.eu`): match po hoście (`_url_has_domain_marker`) —
+`antrans.eu` **nie** jest odrzucane jako Trans.eu.
+
 ## Przepływ
 
 **Warstwa 1 (reguły = tylko śmieci):** `reject_reason` / `hard_reject_page_context` —

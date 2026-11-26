@@ -47,9 +47,12 @@ Zmienne (opcjonalnie w `.env`):
 
 ## Polityka Excel vs JSON
 
-- **Kontakte (Excel):** tylko firmy z **e-mailem i telefonem** (≥9 cyfr PL).
+- **Kontakte (Excel):** tylko firmy z **e-mailem i telefonem** (walidacja PL — patrz [`CONTACT_VALIDATION.md`](CONTACT_VALIDATION.md)).
+- Przed zapisem Excel: **Claude cleanup całego rekordu** + `coerce_cleanup_result_1to1` (`ENABLE_CLAUDE_ROW_CLEANUP=1`).
 - **JSON cache:** wizytówki Maps (`needs_enrich` / `still_gap`) mogą być bez maila.
 - Skrajna ostateczność po gap-fill: rekord zostaje w JSON, **nie** w Excelu.
+
+Deploy: `python scripts/deploy_contabo.py` (zachowuje `Wyniki/` / logi).
 
 ---
 
@@ -63,4 +66,5 @@ crontab -l | sed -n '/BEGIN wyszukiwarka-partnerow/,/END wyszukiwarka-partnerow/
 
 ---
 
-*Aktualizacja: 2026-11-26 — gap-fill +1 h po discovery, bez cron 20:00.*
+*Aktualizacja: 2026-11-26 — gap-fill +1 h; cleanup 1:1; deploy `cd4ae76`.*
+

@@ -52,7 +52,22 @@ Nazwy pól **nie zmieniać** (parser scrapera):
 | `is_small_firm` | nie globalny 3PL |
 | `primary_role` | np. `Spedytor` |
 
-Parser cleanup akceptuje też aliasy PL: `wojewodztwo` / `segmenty`.
+Parser cleanup akceptuje też aliasy PL: `wojewodztwo` / `segmenty` / `email`.
+
+## Cleanup 1:1 (cały rekord)
+
+Po odpowiedzi Claude scraper woła `coerce_cleanup_result_1to1`:
+
+| Pole | Post-check |
+|------|------------|
+| `phone` | `_excel_phone_ok` / `pick_best_pl_phone` |
+| `email` | `@` + nie junk/noreply + commercial |
+| `website` / `url` | `website_base_url`, nie Maps/katalog |
+| `bundesland` | tylko `PL_WOJEWODZTWA` |
+| `handelsketten` | whitelist segmentów transportu |
+| `company_name_clean` | `finalize_company_name_for_export` |
+
+Szczegóły: [`CONTACT_VALIDATION.md`](CONTACT_VALIDATION.md).
 
 ## Excel (Kontakte)
 
