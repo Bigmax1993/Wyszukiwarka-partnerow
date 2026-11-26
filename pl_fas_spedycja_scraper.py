@@ -3349,19 +3349,49 @@ def row_from_cache_contact(place_url: str, info: dict) -> dict | None:
         (info.get("verification_reason") or "").strip() == PENDING_WWW_VERIFY_REASON
         and not info.get("retail_verified")
     )
+    # Kanoniczne www (bez /kontakt) — ICP i Excel
+    www_raw = info.get("official_website") or place_url or ""
+    www_base = website_base_url(www_raw) or normalize_website(www_raw) or ""
+    if www_base and not _is_maps_url(www_base):
+        row_probe["www"] = www_base
+        row_probe["official_website"] = www_base
+        if not str(place_url).startswith("http"):
+            row_probe["url"] = www_base
+    phone = pick_best_pl_phone(
+        info.get("phones_found") or info.get("telefon") or ""
+    ) or ""
+    if not phone:
+        raw_phone = (info.get("phones_found") or info.get("telefon") or "")
+        if isinstance(raw_phone, (list, tuple, set)):
+            phone = next((str(x).strip() for x in raw_phone if str(x).strip()), "")
+        else:
+            phone = str(raw_phone).split(",", 1)[0].strip()
+    if email and "@" in email:
+        row_probe["email_target"] = email
+    # Pełny kontakt + sygnał spedycji: nie gub wiersza przez zbyt ostre ICP
+    if (
+        email
+        and "@" in email
+        and phone
+        and _excel_phone_ok(phone)
+        and www_base
+        and not _is_maps_url(www_base)
+        and (info.get("is_gu") or info.get("gap_status") == GAP_STATUS_ENRICHED)
+    ):
+        if not (row_probe.get("retail_chains_found") or "").strip():
+            row_probe["retail_chains_found"] = "ftl"
+        if not row_probe.get("page_snippet"):
+            row_probe["page_snippet"] = "spedycja FTL LTL transport"
     if not pending_www and not is_row_eligible_for_excel_export(row_probe):
         return None
-    phone = (info.get("phones_found") or "").strip()
-    if "," in phone:
-        phone = phone.split(",", 1)[0].strip()
     return normalize_row_company_name(
         {
             **row_probe,
             "company_name_raw": info.get("company_name_raw") or name,
             "full_address": info.get("full_address") or "",
-            "adres": info.get("full_address") or "",
+            "adres": info.get("full_address") or info.get("adres") or "",
             "telefon": phone,
-            "phones_found": info.get("phones_found") or phone,
+            "phones_found": phone or (info.get("phones_found") or ""),
             "bundesland": info.get("bundesland") or get_discovery_wojewodztwo(info) or "",
             "discovery_wojewodztwo": get_discovery_wojewodztwo(info),
             "email_status": (info.get("email_status") or "").strip(),

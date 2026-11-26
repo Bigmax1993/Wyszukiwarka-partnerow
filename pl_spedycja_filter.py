@@ -411,6 +411,37 @@ def _has_any(low: str, markers: tuple[str, ...]) -> bool:
     return any(m in low for m in markers)
 
 
+def _url_host(url: str) -> str:
+    """Host z URL (bez www.), lowercase."""
+    from urllib.parse import urlparse
+
+    host = (urlparse(url or "").netloc or "").lower().split("@")[-1]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _url_has_domain_marker(url: str, markers: tuple[str, ...]) -> bool:
+    """
+    Markery domenowe z kropką (``trans.eu``) = exact host / subdomena
+    (``antrans.eu`` NIE pasuje). Bez kropki = substring w hoście/URL.
+    """
+    url_low = (url or "").lower()
+    host = _url_host(url)
+    for raw in markers:
+        m = (raw or "").strip().lower().rstrip("/")
+        if not m:
+            continue
+        if "." in m.strip("."):
+            m = m.strip(".")
+            if host == m or host.endswith("." + m):
+                return True
+            continue
+        if m in host or m in url_low:
+            return True
+    return False
+
+
 def _has_transport_company_signal(low: str) -> bool:
     """
     Warstwa 1: czy blob wygląda na firmę transportową/spedycyjną (nie na śmieć).
@@ -481,8 +512,7 @@ def _is_exchange_or_big3pl_reject(url: str, low: str) -> bool:
         równolegle rola lub usługa spedycji (i URL nie jest „twardy”),
       - ≥2 frazy ze stron kariery/giełdy/paczki bez SERVICE → True.
     """
-    url_low = (url or "").lower()
-    if _has_any(url_low, _HARD_REJECT_DOMAIN_MARKERS):
+    if _url_has_domain_marker(url, _HARD_REJECT_DOMAIN_MARKERS):
         return True
     if _has_any(low, EXCHANGE_OR_BIG3PL_DOMAIN_MARKERS):
         if not (
@@ -490,7 +520,7 @@ def _is_exchange_or_big3pl_reject(url: str, low: str) -> bool:
             or _has_any(low, FORWARDER_ROLE_MARKERS)
         ):
             return True
-        if _has_any(url_low, _HARD_REJECT_DOMAIN_MARKERS):
+        if _url_has_domain_marker(url, _HARD_REJECT_DOMAIN_MARKERS):
             return True
     if sum(1 for m in EXCHANGE_OR_JOBS_PAGE_MARKERS if m in low) >= 2:
         if not _has_any(low, TRANSPORT_SERVICE_MARKERS):
