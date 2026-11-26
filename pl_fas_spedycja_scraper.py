@@ -1242,6 +1242,11 @@ def _excel_email_ok(raw) -> bool:
 def _excel_phone_ok(raw) -> bool:
     """True, gdy telefon PL-ready (≥9 cyfr) i nie wygląda na śmieć."""
     first = _excel_cell_str(raw).split(",", 1)[0].strip()
+    # Daty / fragmenty typu 17/03/1994, 00-14-0918/20 — nie telefony
+    if re.search(r"\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}", first):
+        return False
+    if re.search(r"(?:19|20)\d{2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{1,2}", first):
+        return False
     norm = normalize_phone_contact(first)
     if not norm:
         return False
@@ -1261,6 +1266,10 @@ def _excel_phone_ok(raw) -> bool:
         return False
     if digits.startswith("0000"):
         return False
+    # Rok 19xx/20xx w krótkim ciągu cyfr (częsty śmieć z crawla)
+    if len(digits) <= 11 and re.search(r"(?:19|20)\d{2}", digits):
+        if not (digits.startswith("48") and len(digits) >= 11):
+            return False
     return True
 
 

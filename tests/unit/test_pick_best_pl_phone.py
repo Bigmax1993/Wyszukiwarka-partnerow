@@ -35,6 +35,12 @@ def test_has_phone_gap_fill_uses_pick_best():
     assert gap.contact_has_gap(info) is False
 
 
+def test_excel_phone_ok_rejects_dates():
+    assert scraper._excel_phone_ok("017/03/1994-1") is False
+    assert scraper._excel_phone_ok("00-14-0918/20-00") is False
+    assert scraper._excel_phone_ok("+48 571 870 933") is True
+
+
 def test_build_export_rows_picks_buried_phone():
     rows = scraper.build_export_rows(
         [
