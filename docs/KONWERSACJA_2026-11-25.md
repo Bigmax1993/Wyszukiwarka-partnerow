@@ -87,20 +87,23 @@ Testy filtra: `tests/unit/test_commercial_contact_filter.py` (15 passed, w tym g
 
 ---
 
-## 7. Aktualny cron Contabo (PL FAS)
+## 7. Cron Contabo (PL FAS) — stan na 25.11
 
 ```
 04:00 codziennie     cache verify (+ mail)
 06:30 poniedziałek   Excel → mail
 06:45 poniedziałek   Excel → Google Drive
 07:00 pon–pt         discovery (--respect-cache)
-20:00 pon–pt         gap-fill Serper
+20:00 pon–pt         gap-fill Serper   ← na 25.11 jeszcze aktywne
 06:00 niedziela      backfill
 09:00 pon/wt         send B2B (DISABLE_CONTRACTOR_EMAILS=1)
 */15                 pipeline watchdog
 ```
 
 Host: `109.199.122.178` · katalog: `/opt/bots/Wyszukiwarka-partnerow`.
+
+> **Aktualizacja 26.11.2026:** cron 20:00 **wyłączony**; gap-fill startuje **+1 h po discovery**.  
+> Aktualny opis: `docs/CONTABO_SCHEDULE.md` oraz `docs/KONWERSACJA_2026-11-26.md`.
 
 ---
 
