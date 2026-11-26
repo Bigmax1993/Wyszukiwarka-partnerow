@@ -29,9 +29,13 @@ _FAS_SNIPPET = (
 def _pipeline_row(url: str, name: str, email: str, chain: str) -> dict:
     return {
         "url": url,
+        "www": url,
+        "official_website": url,
         "nazwa": name,
         "company_name_clean": name,
         "email_target": email,
+        "telefon": "+48 71 123 45 67",
+        "phones_found": "+48 71 123 45 67",
         "retail_verified": True,
         "is_gu": True,
         "is_small_firm": True,
@@ -72,14 +76,18 @@ class TestExcelPipelineIntegration:
                 )
             ]
             logger = scraper.setup_logging()
-            scraper.save_excel(rows_existing, xlsx, logger, cache={})
-            assert xlsx.is_file()
-            scraper.save_excel(rows_existing + rows_new, xlsx, logger, cache={})
+            # Bez live Claude — test sprawdza append, nie API cleanup
+            with patch.object(scraper, "ENABLE_CLAUDE_ROW_CLEANUP", False):
+                scraper.save_excel(rows_existing, xlsx, logger, cache={})
+                assert xlsx.is_file()
+                scraper.save_excel(rows_existing + rows_new, xlsx, logger, cache={})
 
             import pandas as pd
 
             with pd.ExcelFile(xlsx) as book:
                 df = pd.read_excel(book, sheet_name="Kontakte")
+            assert not df.empty
+            assert "URL" in df.columns
             urls = {
                 str(u).strip()
                 for u in df["URL"].fillna("").tolist()
@@ -91,6 +99,10 @@ class TestExcelPipelineIntegration:
             assert "Segmenty" in df.columns or "Spedycja" in df.columns
             del df
             gc.collect()
+            try:
+                xlsx.unlink(missing_ok=True)
+            except PermissionError:
+                pass
 
     # >>> OPIS FUNKCJI: funkcja TestExcelPipelineIntegration.test_send_excel_gmail_dry_run
     # Test: send_excel_report w trybie dry-run zwraca (True, 'dry_run') bez wysyłania maila.

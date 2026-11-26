@@ -103,7 +103,7 @@ class ClaudePageTextTest(unittest.TestCase):
         self.assertIn("SERPER-KONTEXT", p)
         self.assertIn("AUTOMATISCHE DOWODY", p)
         self.assertIn("FTL", p)
-        self.assertIn("spedycyjnych", p)
+        self.assertIn("biuro spedycyjne", p)
         self.assertEqual(PAGE_VERIFY_MAX_CHARS, 18000)
 
     # >>> OPIS FUNKCJI: funkcja ClaudePageTextTest.test_context_header
