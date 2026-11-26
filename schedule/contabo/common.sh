@@ -20,7 +20,7 @@ export GOOGLE_MAPS_HEADLESS="${GOOGLE_MAPS_HEADLESS:-1}"
 # Faza B: NIE w tym samym procesie co Maps — start z opóźnieniem po discovery
 # (schedule_gap_fill_after_discovery). Wieczorny cron 20:00 wyłączony.
 export GAP_FILL_AFTER_MAPS="${GAP_FILL_AFTER_MAPS:-0}"
-export GAP_FILL_MAX="${GAP_FILL_MAX:-80}"
+export GAP_FILL_MAX="${GAP_FILL_MAX:-150}"
 # Opóźnienie gap-fill po końcu discovery (sekundy). Domyślnie 1 h.
 export GAP_FILL_DELAY_SECONDS="${GAP_FILL_DELAY_SECONDS:-3600}"
 
@@ -33,7 +33,7 @@ schedule_gap_fill_after_discovery() {
   local when
   when="$(date -d "+${delay_sec} seconds" '+%F %T' 2>/dev/null || date -v+"${delay_sec}S" '+%F %T' 2>/dev/null || echo "+${delay_sec}s")"
   {
-    echo "[$(date '+%F %T')] SCHEDULE gap-fill za ${delay_sec}s (ok. ${when}), max=${GAP_FILL_MAX:-80}"
+    echo "[$(date '+%F %T')] SCHEDULE gap-fill za ${delay_sec}s (ok. ${when}), max=${GAP_FILL_MAX:-150}"
   } | tee -a "$delay_log"
   # Odwołaj poprzedni sleep-waiter tego samego typu (jeśli jeszcze czeka)
   if [[ -f "$ROOT/logs/gap_fill_delayed.pid" ]]; then
@@ -50,7 +50,7 @@ schedule_gap_fill_after_discovery() {
     set -a
     [ -f .env ] && . ./.env
     set +a
-    export GAP_FILL_MAX='${GAP_FILL_MAX:-80}'
+    export GAP_FILL_MAX='${GAP_FILL_MAX:-150}'
     export SCRAPER_MAX_RUNTIME_SECONDS=\"\${SCRAPER_MAX_RUNTIME_SECONDS:-7200}\"
     echo \"[\$(date '+%F %T')] START delayed gap-fill (po discovery)\" >>'${delay_log}'
     if command -v flock >/dev/null 2>&1; then

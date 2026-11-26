@@ -16,8 +16,8 @@ Notatka z sesji (Contabo / discovery / gap-fill / Claude 1:1 / Excel).
 
 **Decyzja:** po `END discovery` automatycznie gap-fill z opóźnieniem **1 h**; cron **20:00 wyłączony**.
 
-- `schedule_gap_fill_after_discovery` (`GAP_FILL_DELAY_SECONDS=3600`, `GAP_FILL_MAX=80`)
-- Catch-up dziś: **~10:52:25** CET
+- `schedule_gap_fill_after_discovery` (`GAP_FILL_DELAY_SECONDS=3600`, `GAP_FILL_MAX=150`)
+- Catch-up dziś: **~10:52:25** CET (tura startowała z max=80; limit podbity do **150** ~11:03)
 
 Dok.: [`CONTABO_SCHEDULE.md`](CONTABO_SCHEDULE.md). Commit: `ef3b58b`.
 
@@ -76,7 +76,7 @@ Po cleanup / pick_best / odblokowaniu ICP:
 ```
 04:00     cache verify
 07:00     discovery (--respect-cache)
-~+1 h     gap-fill Serper (max 80)
+~+1 h     gap-fill Serper (max 150)
 20:00     (brak)
 ```
 

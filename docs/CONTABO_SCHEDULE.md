@@ -39,7 +39,7 @@ Zmienne (opcjonalnie w `.env`):
 | Zmienna | Domyślnie | Opis |
 |---|---|---|
 | `GAP_FILL_DELAY_SECONDS` | `3600` | Opóźnienie po discovery |
-| `GAP_FILL_MAX` | `80` | Max kontaktów w jednej turze Fazy B |
+| `GAP_FILL_MAX` | `150` | Max kontaktów w jednej turze Fazy B |
 | `SCRAPER_MAX_RUNTIME_SECONDS` | discovery `21600` / gap-fill `7200` | Twardy limit czasu |
 | `GAP_FILL_AFTER_MAPS` | `0` | Nie łączyć Fazy B w tym samym procesie co Maps |
 
